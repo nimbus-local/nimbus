@@ -1,0 +1,73 @@
+services:
+  nimbus:
+    # image: nimbus-local/nimbus:latest
+    # Or build locally:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: nimbus
+    ports:
+      - "4566:4566" # Main edge port — drop-in replacement for LocalStack
+    environment:
+      NIMBUS_LOG_LEVEL: ${NIMBUS_LOG_LEVEL:-info}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      SERVICES: ${SERVICES:-s3,sqs,dynamodb}
+      # Points to the DynamoDB Local sidecar below
+      NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+    volumes:
+      - nimbus_data:/var/lib/nimbus
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    networks:
+      - nimbus-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_nimbus/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Official AWS DynamoDB Local — perfect parity, maintained by AWS
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: nimbus-dynamodb-local
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
+    ports:
+      - "8000:8000" # Expose directly for DynamoDB admin tools
+    volumes:
+      - dynamodb_data:/data
+    networks:
+      - nimbus-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: init container to pre-create buckets and queues
+  # nimbus-init:
+  #   image: nimbus-local/nimbus:latest
+  #   container_name: nimbus-init
+  #   depends_on:
+  #     nimbus:
+  #       condition: service_healthy
+  #   networks:
+  #     - nimbus-network
+  #   entrypoint: >
+  #     /bin/sh -c "
+  #       nimbuslocal s3 mb s3://my-bucket --region us-east-1;
+  #       nimbuslocal sqs create-queue --queue-name my-queue;
+  #       echo 'Nimbus resources initialized.';
+  #     "
+
+volumes:
+  nimbus_data:
+    driver: local
+  dynamodb_data:
+    driver: local
+
+networks:
+  nimbus-network:
+    driver: bridge

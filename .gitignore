@@ -1,0 +1,39 @@
+# Binaries
+nimbus
+nimbuslocal
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Test coverage output
+*.out
+coverage.html
+
+# Go build cache
+/vendor/
+
+# Local data directory (created when running outside Docker)
+.nimbus/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.tar
+
+# OS
+Thumbs.db

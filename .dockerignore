@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# GitHub
+.github
+
+# Tests (not needed in the image)
+**/*_test.go
+
+# Local data
+.nimbus/
+
+# Documentation
+README.md
+LICENSE
+CONTRIBUTING.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Docker files themselves
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile
+docker/
+
+# Built binaries (we build inside Docker)
+nimbus
+nimbuslocal
