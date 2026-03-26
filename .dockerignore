@@ -34,6 +34,6 @@ docker-compose.*.yml
 Dockerfile
 docker/
 
-# Built binaries (we build inside Docker)
-nimbus
-nimbuslocal
+# Binaries (root-level compiled output only, not the cmd/ source directories)
+/nimbus
+/nimbuslocal
