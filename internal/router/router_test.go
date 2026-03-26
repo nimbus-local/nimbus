@@ -10,12 +10,12 @@ import (
 
 // mockService records whether it was called, for testing dispatch
 type mockService struct {
-	name    string
-	detect  func(r *http.Request) bool
-	called  bool
+	name   string
+	detect func(r *http.Request) bool
+	called bool
 }
 
-func (m *mockService) Name() string { return m.name }
+func (m *mockService) Name() string                { return m.name }
 func (m *mockService) Detect(r *http.Request) bool { return m.detect(r) }
 func (m *mockService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.called = true

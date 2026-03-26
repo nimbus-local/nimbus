@@ -15,12 +15,12 @@ import (
 
 // objectMeta is stored as a sidecar JSON file alongside each object
 type objectMeta struct {
-	Key          string            `json:"key"`
-	ContentType  string            `json:"content_type"`
-	ContentLength int64            `json:"content_length"`
-	ETag         string            `json:"etag"`
-	LastModified time.Time         `json:"last_modified"`
-	UserMetadata map[string]string `json:"user_metadata,omitempty"`
+	Key           string            `json:"key"`
+	ContentType   string            `json:"content_type"`
+	ContentLength int64             `json:"content_length"`
+	ETag          string            `json:"etag"`
+	LastModified  time.Time         `json:"last_modified"`
+	UserMetadata  map[string]string `json:"user_metadata,omitempty"`
 }
 
 func (s *Service) objectPath(bucket, key string) string {
