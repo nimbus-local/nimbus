@@ -27,23 +27,23 @@ type Service struct {
 }
 
 type queue struct {
-	name            string
-	url             string
-	arn             string
-	attributes      map[string]string
-	messages        []*message
+	name              string
+	url               string
+	arn               string
+	attributes        map[string]string
+	messages          []*message
 	inflightByReceipt map[string]*inFlight
-	mu              sync.Mutex
+	mu                sync.Mutex
 }
 
 type message struct {
-	id          string
-	body        string
-	md5         string
-	attributes  map[string]string
+	id           string
+	body         string
+	md5          string
+	attributes   map[string]string
 	receiveCount int
-	sentAt      time.Time
-	visibleAt   time.Time
+	sentAt       time.Time
+	visibleAt    time.Time
 }
 
 type inFlight struct {
@@ -203,8 +203,8 @@ func (s *Service) createQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type result struct {
-		XMLName  xml.Name `xml:"CreateQueueResponse"`
-		Result   struct {
+		XMLName xml.Name `xml:"CreateQueueResponse"`
+		Result  struct {
 			QueueUrl string `xml:"QueueUrl"`
 		} `xml:"CreateQueueResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
