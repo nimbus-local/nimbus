@@ -76,7 +76,7 @@ jobs:
             ## Docker
 
             ```bash
-            docker pull ghcr.io/nimbus-local/nimbus:${{ github.ref_name }}
+            docker pull ghcr.io/nimbus-local/nimbus:${{ steps.meta.outputs.version }}
             ```
 
             ## docker-compose.yml
