@@ -12,6 +12,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/router"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
+	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
 	"github.com/nimbus-local/nimbus/internal/services/sqs"
 )
 
@@ -48,6 +49,7 @@ func main() {
 
 	// Register services — order matters: more specific detectors first
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
+	r.Register(secretsmanager.New(cfg.DefaultRegion))
 	r.Register(sqs.New(cfg.DefaultRegion))
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
