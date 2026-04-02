@@ -48,11 +48,13 @@ volumes:
 
 ## Services
 
-| Service   | Status | Notes |
-|-----------|--------|-------|
-| S3        | ✅ Core | PutObject, GetObject, DeleteObject, ListObjectsV2, HeadObject, CreateBucket, DeleteBucket, multipart uploads, presigned URLs |
-| SQS       | ✅ Core | CreateQueue, SendMessage, ReceiveMessage, DeleteMessage, PurgeQueue, visibility timeout, DLQ config |
-| DynamoDB  | ✅ Full | Proxied to [DynamoDB Local](https://hub.docker.com/r/amazon/dynamodb-local) (official AWS image) — full parity |
+| Service         | Status  | Notes |
+|-----------------|---------|-------|
+| S3              | ✅ Core | PutObject, GetObject, DeleteObject, ListObjectsV2, HeadObject, CreateBucket, DeleteBucket, multipart uploads, presigned URLs |
+| SQS             | ✅ Core | CreateQueue, SendMessage, ReceiveMessage, DeleteMessage, PurgeQueue, visibility timeout, DLQ config |
+| DynamoDB        | ✅ Full | Proxied to [DynamoDB Local](https://hub.docker.com/r/amazon/dynamodb-local) (official AWS image) — full parity |
+| Secrets Manager | ✅ Core | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DeleteSecret, RestoreSecret, ListSecrets, DescribeSecret |
+| SNS             | 🚧 In Progress | |
 
 More services coming. Contributions welcome.
 
@@ -169,23 +171,26 @@ GET /_localstack/health   (alias for LocalStack compatibility)
 Nimbus is a single Go binary. All AWS service traffic enters on port `4566`. The edge router inspects each request and dispatches to the appropriate service handler:
 
 - **DynamoDB** — detected by `X-Amz-Target: DynamoDB_*` header, proxied to DynamoDB Local
+- **Secrets Manager** — detected by `X-Amz-Target: secretsmanager.*` header
 - **SQS** — detected by `Action` param or `X-Amz-Target: AmazonSQS.*`
+- **SNS** — detected by `X-Amz-Target: SNS.*` header *(in progress)*
 - **S3** — catch-all; handles path-style and virtual-hosted-style URLs
 
 Each service is a self-contained package implementing a simple `Service` interface. Adding a new service means implementing the interface and registering it — nothing else changes.
-
 ```
 internal/
-  router/          # Edge router — detects and dispatches
+  router/               # Edge router — detects and dispatches
   services/
-    s3/            # S3 implementation (filesystem-backed)
-    sqs/           # SQS implementation (in-memory)
-    dynamodb/      # DynamoDB proxy to DynamoDB Local
-  auth/            # Credential extraction (accepts anything)
-  config/          # Environment-based configuration
+    s3/                 # S3 implementation (filesystem-backed)
+    sqs/                # SQS implementation (in-memory)
+    dynamodb/           # DynamoDB proxy to DynamoDB Local
+    secretsmanager/     # Secrets Manager implementation (in-memory)
+  auth/                 # Credential extraction (accepts anything)
+  config/               # Environment-based configuration
+  uid/                  # UUID generation (stdlib only, no external deps)
 cmd/
-  nimbus/          # Server entrypoint
-  nimbuslocal/     # AWS CLI wrapper
+  nimbus/               # Server entrypoint
+  nimbuslocal/          # AWS CLI wrapper
 ```
 
 ---
