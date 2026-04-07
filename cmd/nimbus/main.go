@@ -13,6 +13,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
+	"github.com/nimbus-local/nimbus/internal/services/ses"
 	"github.com/nimbus-local/nimbus/internal/services/sqs"
 	"github.com/nimbus-local/nimbus/internal/services/ssm"
 )
@@ -50,15 +51,30 @@ func main() {
 
 	// Register services — order matters: more specific detectors first
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
+	sesSvc := ses.New(cfg.DefaultRegion)
+	r.Register(sesSvc)
 	r.Register(secretsmanager.New(cfg.DefaultRegion))
 	r.Register(ssm.New(cfg.DefaultRegion))
 	r.Register(sqs.New(cfg.DefaultRegion))
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
-	// Health endpoint (used by Docker HEALTHCHECK)
+	// Standard endpoints
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_nimbus/health", r.HealthHandler)
 	mux.HandleFunc("/_localstack/health", r.HealthHandler) // LocalStack-compatible alias
+
+	// SES inspection endpoints — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/ses/messages", func(w http.ResponseWriter, req *http.Request) {
+		switch req.Method {
+		case http.MethodGet:
+			sesSvc.MessagesHandler(w, req)
+		case http.MethodDelete:
+			sesSvc.ClearMessagesHandler(w, req)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	mux.Handle("/", r)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
