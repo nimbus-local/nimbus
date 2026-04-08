@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/nimbus-local/nimbus/internal/jsonhttp"
 )
 
 const (
@@ -39,8 +41,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && path == "/functions":
 		s.createFunction(w, r)
+	case r.Method == http.MethodGet && path == "/functions":
+		s.listFunctions(w, r)
 	default:
-		jsonError(w, http.StatusNotFound, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusNotFound, "ResourceNotFoundException",
 			"Unknown operation for path: "+r.URL.Path)
 	}
 }
