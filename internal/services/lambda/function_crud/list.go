@@ -1,4 +1,4 @@
-package lambda
+package function_crud
 
 import (
 	"net/http"
@@ -9,12 +9,12 @@ import (
 )
 
 type listFunctionsResponse struct {
-	Functions  []*functionConfig `json:"Functions"`
+	Functions  []*FunctionConfig `json:"Functions"`
 	NextMarker string            `json:"NextMarker,omitempty"`
 }
 
 // GET /2015-03-31/functions
-func (s *Service) listFunctions(w http.ResponseWriter, r *http.Request) {
+func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	maxItems := 50
@@ -28,11 +28,15 @@ func (s *Service) listFunctions(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Collect and sort by name for stable, predictable pagination.
-	fns := make([]*functionConfig, 0, len(s.functions))
-	for _, fn := range s.functions {
-		fns = append(fns, fn)
+	// Collect $LATEST entries only (skip published version snapshots keyed as "name:N").
+	fns := make([]*FunctionConfig, 0, len(s.functions))
+	for key, fn := range s.functions {
+		if fn.Version == "$LATEST" || key == fn.FunctionName {
+			fns = append(fns, fn)
+		}
 	}
+
+	// Sort by name for stable, predictable pagination.
 	sort.Slice(fns, func(i, j int) bool {
 		return fns[i].FunctionName < fns[j].FunctionName
 	})

@@ -1,4 +1,4 @@
-package lambda
+package function_crud
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 )
 
 // FunctionCode specifies the deployment artifact for a new function.
-// Only used on CreateFunction — update operations use a separate UpdateFunctionCode API.
+// Only used on CreateFunction — updates use a separate UpdateFunctionCode API.
 type FunctionCode struct {
 	ImageUri        string `json:"ImageUri,omitempty"`
 	S3Bucket        string `json:"S3Bucket,omitempty"`
@@ -51,14 +51,14 @@ type CreateFunctionRequest struct {
 }
 
 // POST /2015-03-31/functions
-func (s *Service) createFunction(w http.ResponseWriter, r *http.Request) {
+func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	req, ok := jsonhttp.DecodeAndValidate[CreateFunctionRequest](w, r)
 	if !ok {
 		return
 	}
 
 	req.applyDefaults()
-	arn := s.functionARN(req.FunctionName)
+	arn := s.arn(req.FunctionName)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,8 +93,8 @@ func (req *CreateFunctionRequest) applyDefaults() {
 	}
 }
 
-func newFunctionConfig(req CreateFunctionRequest, arn string) *functionConfig {
-	return &functionConfig{
+func newFunctionConfig(req CreateFunctionRequest, arn string) *FunctionConfig {
+	return &FunctionConfig{
 		Architectures:     req.Architectures,
 		CodeSha256:        "", // would be computed from ZipFile / S3 object in a real impl
 		CodeSize:          int64(len(req.Code.ZipFile)),
@@ -121,6 +121,6 @@ func newFunctionConfig(req CreateFunctionRequest, arn string) *functionConfig {
 		TracingConfig:     req.TracingConfig,
 		Version:           "$LATEST",
 		VpcConfig:         req.VpcConfig,
-		tags:              req.Tags,
+		Tags:              req.Tags,
 	}
 }

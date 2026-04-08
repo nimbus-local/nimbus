@@ -1,7 +1,7 @@
-package lambda
+package function_crud
 
-// Shared types used across multiple Lambda API operations.
-// Types that belong exclusively to one operation live in that operation's file.
+// Shared types used across multiple function CRUD operations.
+// Types exclusive to a single operation live in that operation's file.
 
 type DeadLetterConfig struct {
 	TargetArn string `json:"TargetArn,omitempty"`
@@ -47,9 +47,9 @@ type VpcConfig struct {
 	SubnetIds               []string `json:"SubnetIds,omitempty"`
 }
 
-// functionConfig is the in-memory representation of a Lambda function.
+// FunctionConfig is the in-memory representation of a Lambda function.
 // It is also the response shape for CreateFunction, GetFunction, and ListFunctions.
-type functionConfig struct {
+type FunctionConfig struct {
 	Architectures     []string           `json:"Architectures"`
 	CodeSha256        string             `json:"CodeSha256"`
 	CodeSize          int64              `json:"CodeSize"`
@@ -77,5 +77,5 @@ type functionConfig struct {
 	Version           string             `json:"Version"`
 	VpcConfig         *VpcConfig         `json:"VpcConfig,omitempty"`
 
-	tags map[string]string
+	Tags map[string]string `json:"-"` // stored internally, exposed via ListTags
 }
