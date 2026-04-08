@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nimbus-local/nimbus/internal/jsonhttp"
 	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
@@ -86,7 +87,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "RestoreSecret":
 		s.restoreSecret(w, r)
 	default:
-		s.jsonError(w, http.StatusBadRequest, "InvalidAction",
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", operation))
 	}
 }
@@ -107,12 +108,12 @@ func (s *Service) createSecret(w http.ResponseWriter, r *http.Request) {
 		SecretString *string `json:"SecretString"`
 		SecretBinary []byte  `json:"SecretBinary"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	if req.Name == "" {
-		s.jsonError(w, http.StatusBadRequest, "InvalidParameterException",
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
 			"You must provide a name for the secret.")
 		return
 	}
@@ -121,7 +122,7 @@ func (s *Service) createSecret(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	if existing, ok := s.secrets[req.Name]; ok && existing.deletedAt == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceExistsException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceExistsException",
 			fmt.Sprintf("A secret with the name %s already exists.", req.Name))
 		return
 	}
@@ -145,7 +146,7 @@ func (s *Service) createSecret(w http.ResponseWriter, r *http.Request) {
 
 	s.secrets[req.Name] = sec
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":       sec.arn,
 		"Name":      sec.name,
 		"VersionId": versionID,
@@ -157,25 +158,25 @@ func (s *Service) getSecretValue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SecretId string `json:"SecretId"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
 
 	if sec.deletedAt != nil {
-		s.jsonError(w, http.StatusBadRequest, "InvalidRequestException",
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidRequestException",
 			fmt.Sprintf("You can't perform this operation on secret %s because it was marked for deletion.", req.SecretId))
 		return
 	}
 
 	if sec.value == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret value.")
 		return
 	}
@@ -194,7 +195,7 @@ func (s *Service) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		resp["SecretBinary"] = sec.value.secretBinary
 	}
 
-	s.jsonResponse(w, http.StatusOK, resp)
+	jsonhttp.Write(w, http.StatusOK, resp)
 }
 
 // PutSecretValue — stores a new value for an existing secret
@@ -204,19 +205,19 @@ func (s *Service) putSecretValue(w http.ResponseWriter, r *http.Request) {
 		SecretString *string `json:"SecretString"`
 		SecretBinary []byte  `json:"SecretBinary"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
 
 	if sec.deletedAt != nil {
-		s.jsonError(w, http.StatusBadRequest, "InvalidRequestException",
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidRequestException",
 			"You can't perform this operation on a secret that is scheduled for deletion.")
 		return
 	}
@@ -232,7 +233,7 @@ func (s *Service) putSecretValue(w http.ResponseWriter, r *http.Request) {
 	sec.versionID = versionID
 	sec.updatedAt = time.Now().UTC()
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":       sec.arn,
 		"Name":      sec.name,
 		"VersionId": versionID,
@@ -247,13 +248,13 @@ func (s *Service) updateSecret(w http.ResponseWriter, r *http.Request) {
 		SecretString *string `json:"SecretString"`
 		SecretBinary []byte  `json:"SecretBinary"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
@@ -277,7 +278,7 @@ func (s *Service) updateSecret(w http.ResponseWriter, r *http.Request) {
 
 	sec.updatedAt = time.Now().UTC()
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":       sec.arn,
 		"Name":      sec.name,
 		"VersionId": versionID,
@@ -293,13 +294,13 @@ func (s *Service) deleteSecret(w http.ResponseWriter, r *http.Request) {
 		ForceDeleteWithoutRecovery bool   `json:"ForceDeleteWithoutRecovery"`
 		RecoveryWindowInDays       *int   `json:"RecoveryWindowInDays"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
@@ -311,7 +312,7 @@ func (s *Service) deleteSecret(w http.ResponseWriter, r *http.Request) {
 
 	if req.ForceDeleteWithoutRecovery {
 		delete(s.secrets, sec.name)
-		s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 			"ARN":          sec.arn,
 			"Name":         sec.name,
 			"DeletionDate": now.Unix(),
@@ -327,7 +328,7 @@ func (s *Service) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	deletionDate := now.Add(time.Duration(days) * 24 * time.Hour)
 	sec.deletedAt = &deletionDate
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":          sec.arn,
 		"Name":         sec.name,
 		"DeletionDate": deletionDate.Unix(),
@@ -339,13 +340,13 @@ func (s *Service) restoreSecret(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SecretId string `json:"SecretId"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
@@ -355,7 +356,7 @@ func (s *Service) restoreSecret(w http.ResponseWriter, r *http.Request) {
 
 	sec.deletedAt = nil
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":  sec.arn,
 		"Name": sec.name,
 	})
@@ -389,7 +390,7 @@ func (s *Service) listSecrets(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, entry)
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"SecretList": entries,
 	})
 }
@@ -399,13 +400,13 @@ func (s *Service) describeSecret(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SecretId string `json:"SecretId"`
 	}
-	if !s.decode(w, r, &req) {
+	if !decode(w, r, &req) {
 		return
 	}
 
 	sec := s.findSecret(req.SecretId)
 	if sec == nil {
-		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
 		return
 	}
@@ -422,7 +423,7 @@ func (s *Service) describeSecret(w http.ResponseWriter, r *http.Request) {
 		resp["DeletedDate"] = sec.deletedAt.Unix()
 	}
 
-	s.jsonResponse(w, http.StatusOK, resp)
+	jsonhttp.Write(w, http.StatusOK, resp)
 }
 
 // --- Helpers ---
@@ -447,27 +448,11 @@ func (s *Service) findSecret(nameOrARN string) *secret {
 	return nil
 }
 
-func (s *Service) decode(w http.ResponseWriter, r *http.Request, v interface{}) bool {
+func decode(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		s.jsonError(w, http.StatusBadRequest, "InvalidRequestException",
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidRequestException",
 			fmt.Sprintf("Could not parse request body: %s", err.Error()))
 		return false
 	}
 	return true
-}
-
-func (s *Service) jsonResponse(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func (s *Service) jsonError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-	w.Header().Set("x-amzn-ErrorType", code)
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
-		"__type":  code,
-		"message": message,
-	})
 }
