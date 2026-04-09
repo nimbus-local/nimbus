@@ -11,7 +11,7 @@ import (
 type Service struct {
 	mu             sync.RWMutex
 	functions      map[string]*FunctionConfig // keyed by name, or "name:version" for published snapshots
-	versionCounter map[string]int            // latest published version number per function
+	versionCounter map[string]int             // latest published version number per function
 	region         string
 	account        string
 }

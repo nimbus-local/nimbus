@@ -13,8 +13,8 @@ type FunctionChecker interface {
 // Service manages in-memory URL configs and event-invoke configs for Lambda functions.
 type Service struct {
 	mu            sync.RWMutex
-	urlConfigs    map[string]*FunctionUrlConfig  // key = "functionName" or "functionName:qualifier"
-	invokeConfigs map[string]*EventInvokeConfig  // key = "functionName" or "functionName:qualifier"
+	urlConfigs    map[string]*FunctionUrlConfig // key = "functionName" or "functionName:qualifier"
+	invokeConfigs map[string]*EventInvokeConfig // key = "functionName" or "functionName:qualifier"
 	region        string
 	account       string
 	checker       FunctionChecker

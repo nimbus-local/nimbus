@@ -38,10 +38,10 @@ func (s *Service) PutProvisioned(w http.ResponseWriter, r *http.Request, functio
 	cfg := &ProvisionedConcurrencyConfig{
 		AllocatedProvisionedConcurrentExecutions: req.ProvisionedConcurrentExecutions,
 		AvailableProvisionedConcurrentExecutions: req.ProvisionedConcurrentExecutions,
-		FunctionArn: fmt.Sprintf("arn:aws:lambda:us-east-1:000000000000:function:%s:%s", functionName, qualifier),
-		LastModified: time.Now().UTC().Format(time.RFC3339),
+		FunctionArn:                              fmt.Sprintf("arn:aws:lambda:us-east-1:000000000000:function:%s:%s", functionName, qualifier),
+		LastModified:                             time.Now().UTC().Format(time.RFC3339),
 		RequestedProvisionedConcurrentExecutions: req.ProvisionedConcurrentExecutions,
-		Status: "READY",
+		Status:                                   "READY",
 	}
 
 	s.mu.Lock()

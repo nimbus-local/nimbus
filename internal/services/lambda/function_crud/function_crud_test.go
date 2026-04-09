@@ -282,13 +282,13 @@ func TestCreate_Conflict(t *testing.T) {
 func TestCreate_WithOptionalFields(t *testing.T) {
 	svc := newTestService()
 	body := map[string]any{
-		"FunctionName": "rich-func",
-		"Role":         "arn:aws:iam::000000000000:role/test-role",
-		"Handler":      "main.handler",
-		"Runtime":      "python3.11",
-		"Description":  "A test function",
-		"MemorySize":   512,
-		"Timeout":      30,
+		"FunctionName":  "rich-func",
+		"Role":          "arn:aws:iam::000000000000:role/test-role",
+		"Handler":       "main.handler",
+		"Runtime":       "python3.11",
+		"Description":   "A test function",
+		"MemorySize":    512,
+		"Timeout":       30,
 		"Architectures": []string{"arm64"},
 		"Environment": map[string]any{
 			"Variables": map[string]string{"KEY": "VALUE"},

@@ -208,7 +208,7 @@ func TestListLayers_OneLayer(t *testing.T) {
 	}
 	var resp struct {
 		Layers []struct {
-			LayerName             string            `json:"LayerName"`
+			LayerName             string              `json:"LayerName"`
 			LatestMatchingVersion layers.LayerVersion `json:"LatestMatchingVersion"`
 		} `json:"Layers"`
 	}
@@ -230,7 +230,7 @@ func TestListLayers_TwoLayersShowsHighestVersionEach(t *testing.T) {
 	w := doListLayers(t, svc, "")
 	var resp struct {
 		Layers []struct {
-			LayerName             string            `json:"LayerName"`
+			LayerName             string              `json:"LayerName"`
 			LatestMatchingVersion layers.LayerVersion `json:"LatestMatchingVersion"`
 		} `json:"Layers"`
 	}
