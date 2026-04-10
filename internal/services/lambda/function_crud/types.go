@@ -12,12 +12,12 @@ type Environment struct {
 }
 
 type EphemeralStorage struct {
-	Size int `json:"Size,omitempty" validate:"omitempty,min=512,max=10240"`
+	Size int `json:"Size,omitempty"`
 }
 
 type FileSystemConfig struct {
-	Arn            string `json:"Arn"            validate:"required"`
-	LocalMountPath string `json:"LocalMountPath" validate:"required"`
+	Arn            string `json:"Arn"`
+	LocalMountPath string `json:"LocalMountPath"`
 }
 
 type ImageConfig struct {
@@ -38,7 +38,7 @@ type SnapStart struct {
 }
 
 type TracingConfig struct {
-	Mode string `json:"Mode,omitempty" validate:"omitempty,oneof=Active PassThrough"`
+	Mode string `json:"Mode,omitempty"` // "Active" | "PassThrough"
 }
 
 type VpcConfig struct {

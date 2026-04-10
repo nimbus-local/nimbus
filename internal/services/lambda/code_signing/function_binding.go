@@ -1,6 +1,7 @@
 package code_signing
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -8,7 +9,14 @@ import (
 )
 
 type putFunctionConfigRequest struct {
-	CodeSigningConfigArn string `json:"CodeSigningConfigArn" validate:"required"`
+	CodeSigningConfigArn string `json:"CodeSigningConfigArn"`
+}
+
+func (r *putFunctionConfigRequest) Validate() error {
+	if r.CodeSigningConfigArn == "" {
+		return errors.New("CodeSigningConfigArn is required")
+	}
+	return nil
 }
 
 type functionConfigResponse struct {
@@ -18,7 +26,7 @@ type functionConfigResponse struct {
 
 // PUT /2015-03-31/functions/{FunctionName}/code-signing-config
 func (s *Service) PutFunctionConfig(w http.ResponseWriter, r *http.Request, functionName string) {
-	req, ok := jsonhttp.DecodeAndValidate[putFunctionConfigRequest](w, r)
+	req, ok := jsonhttp.Decode[putFunctionConfigRequest](w, r)
 	if !ok {
 		return
 	}

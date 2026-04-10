@@ -1,6 +1,7 @@
 package function_crud
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 type updateFunctionCodeRequest struct {
-	Architectures   []string `json:"Architectures,omitempty" validate:"omitempty,dive,oneof=x86_64 arm64"`
+	Architectures   []string `json:"Architectures,omitempty"`
 	DryRun          bool     `json:"DryRun,omitempty"`
 	ImageUri        string   `json:"ImageUri,omitempty"`
 	Publish         bool     `json:"Publish,omitempty"`
@@ -20,9 +21,18 @@ type updateFunctionCodeRequest struct {
 	ZipFile         []byte   `json:"ZipFile,omitempty"`
 }
 
+func (r *updateFunctionCodeRequest) Validate() error {
+	for _, arch := range r.Architectures {
+		if arch != "x86_64" && arch != "arm64" {
+			return errors.New("Architectures must be x86_64 or arm64")
+		}
+	}
+	return nil
+}
+
 // PUT /2015-03-31/functions/{FunctionName}/code
 func (s *Service) UpdateCode(w http.ResponseWriter, r *http.Request, name string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateFunctionCodeRequest](w, r)
+	req, ok := jsonhttp.Decode[updateFunctionCodeRequest](w, r)
 	if !ok {
 		return
 	}
@@ -62,26 +72,36 @@ type updateFunctionConfigurationRequest struct {
 	DeadLetterConfig  *DeadLetterConfig  `json:"DeadLetterConfig,omitempty"`
 	Description       string             `json:"Description,omitempty"`
 	Environment       *Environment       `json:"Environment,omitempty"`
-	EphemeralStorage  *EphemeralStorage  `json:"EphemeralStorage,omitempty"  validate:"omitempty"`
-	FileSystemConfigs []FileSystemConfig `json:"FileSystemConfigs,omitempty" validate:"omitempty,dive"`
+	EphemeralStorage  *EphemeralStorage  `json:"EphemeralStorage,omitempty"`
+	FileSystemConfigs []FileSystemConfig `json:"FileSystemConfigs,omitempty"`
 	Handler           string             `json:"Handler,omitempty"`
 	ImageConfig       *ImageConfig       `json:"ImageConfig,omitempty"`
 	KMSKeyArn         string             `json:"KMSKeyArn,omitempty"`
 	Layers            []string           `json:"Layers,omitempty"`
 	LoggingConfig     *LoggingConfig     `json:"LoggingConfig,omitempty"`
-	MemorySize        int                `json:"MemorySize,omitempty"        validate:"omitempty,min=128,max=10240"`
+	MemorySize        int                `json:"MemorySize,omitempty"`
 	RevisionId        string             `json:"RevisionId,omitempty"`
 	Role              string             `json:"Role,omitempty"`
 	Runtime           string             `json:"Runtime,omitempty"`
 	SnapStart         *SnapStart         `json:"SnapStart,omitempty"`
-	Timeout           int                `json:"Timeout,omitempty"           validate:"omitempty,min=1,max=900"`
-	TracingConfig     *TracingConfig     `json:"TracingConfig,omitempty"     validate:"omitempty"`
+	Timeout           int                `json:"Timeout,omitempty"`
+	TracingConfig     *TracingConfig     `json:"TracingConfig,omitempty"`
 	VpcConfig         *VpcConfig         `json:"VpcConfig,omitempty"`
+}
+
+func (r *updateFunctionConfigurationRequest) Validate() error {
+	if r.MemorySize != 0 && (r.MemorySize < 128 || r.MemorySize > 10240) {
+		return errors.New("MemorySize must be between 128 and 10240")
+	}
+	if r.Timeout != 0 && (r.Timeout < 1 || r.Timeout > 900) {
+		return errors.New("Timeout must be between 1 and 900")
+	}
+	return nil
 }
 
 // PUT /2015-03-31/functions/{FunctionName}/configuration
 func (s *Service) UpdateConfiguration(w http.ResponseWriter, r *http.Request, name string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateFunctionConfigurationRequest](w, r)
+	req, ok := jsonhttp.Decode[updateFunctionConfigurationRequest](w, r)
 	if !ok {
 		return
 	}

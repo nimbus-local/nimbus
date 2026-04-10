@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -8,7 +9,17 @@ import (
 )
 
 type putRecursionConfigRequest struct {
-	RecursiveLoop string `json:"RecursiveLoop" validate:"required,oneof=Allow Terminate"`
+	RecursiveLoop string `json:"RecursiveLoop"`
+}
+
+func (r *putRecursionConfigRequest) Validate() error {
+	if r.RecursiveLoop == "" {
+		return errors.New("RecursiveLoop is required")
+	}
+	if r.RecursiveLoop != "Allow" && r.RecursiveLoop != "Terminate" {
+		return errors.New("RecursiveLoop must be Allow or Terminate")
+	}
+	return nil
 }
 
 type recursionConfigResponse struct {
@@ -24,7 +35,7 @@ func (s *Service) PutRecursionConfig(w http.ResponseWriter, r *http.Request, fun
 		return
 	}
 
-	req, ok := jsonhttp.DecodeAndValidate[putRecursionConfigRequest](w, r)
+	req, ok := jsonhttp.Decode[putRecursionConfigRequest](w, r)
 	if !ok {
 		return
 	}

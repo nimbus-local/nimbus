@@ -1,6 +1,7 @@
 package concurrency
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -12,7 +13,14 @@ import (
 )
 
 type putProvisionedRequest struct {
-	ProvisionedConcurrentExecutions int `json:"ProvisionedConcurrentExecutions" validate:"required,min=1"`
+	ProvisionedConcurrentExecutions int `json:"ProvisionedConcurrentExecutions"`
+}
+
+func (r *putProvisionedRequest) Validate() error {
+	if r.ProvisionedConcurrentExecutions < 1 {
+		return errors.New("ProvisionedConcurrentExecutions must be >= 1")
+	}
+	return nil
 }
 
 // PutProvisioned implements PutProvisionedConcurrencyConfig.
@@ -30,7 +38,7 @@ func (s *Service) PutProvisioned(w http.ResponseWriter, r *http.Request, functio
 		return
 	}
 
-	req, ok := jsonhttp.DecodeAndValidate[putProvisionedRequest](w, r)
+	req, ok := jsonhttp.Decode[putProvisionedRequest](w, r)
 	if !ok {
 		return
 	}
@@ -121,7 +129,6 @@ func (s *Service) ListProvisioned(w http.ResponseWriter, r *http.Request, functi
 		}
 	}
 
-	// Collect keys for this function and sort for stability.
 	prefix := functionName + ":"
 	s.mu.RLock()
 	var keys []string
@@ -134,7 +141,6 @@ func (s *Service) ListProvisioned(w http.ResponseWriter, r *http.Request, functi
 
 	sort.Strings(keys)
 
-	// Apply marker (skip entries up to and including marker).
 	if marker != "" {
 		for i, k := range keys {
 			if k == marker {

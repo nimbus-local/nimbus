@@ -1,6 +1,7 @@
 package concurrency
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -8,7 +9,14 @@ import (
 )
 
 type putConcurrencyRequest struct {
-	ReservedConcurrentExecutions int `json:"ReservedConcurrentExecutions" validate:"min=0"`
+	ReservedConcurrentExecutions int `json:"ReservedConcurrentExecutions"`
+}
+
+func (r *putConcurrencyRequest) Validate() error {
+	if r.ReservedConcurrentExecutions < 0 {
+		return errors.New("ReservedConcurrentExecutions must be >= 0")
+	}
+	return nil
 }
 
 // Put implements PutFunctionConcurrency.
@@ -20,7 +28,7 @@ func (s *Service) Put(w http.ResponseWriter, r *http.Request, functionName strin
 		return
 	}
 
-	req, ok := jsonhttp.DecodeAndValidate[putConcurrencyRequest](w, r)
+	req, ok := jsonhttp.Decode[putConcurrencyRequest](w, r)
 	if !ok {
 		return
 	}

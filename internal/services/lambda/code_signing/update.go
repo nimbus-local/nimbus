@@ -16,7 +16,7 @@ type updateConfigRequest struct {
 
 // PUT /2015-03-31/code-signing-configs/{CodeSigningConfigArn}
 func (s *Service) UpdateConfig(w http.ResponseWriter, r *http.Request, arn string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateConfigRequest](w, r)
+	req, ok := jsonhttp.Decode[updateConfigRequest](w, r)
 	if !ok {
 		return
 	}

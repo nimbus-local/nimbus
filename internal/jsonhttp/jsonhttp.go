@@ -5,15 +5,14 @@ package jsonhttp
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
-	"strings"
-
-	"github.com/go-playground/validator/v10"
 )
 
-var validate = validator.New()
+// Contract is implemented by request structs that know how to validate themselves.
+// Decode automatically calls Validate() if the decoded type satisfies this interface.
+type Contract interface {
+	Validate() error
+}
 
 // Write encodes v as JSON with the AWS JSON content type.
 func Write(w http.ResponseWriter, status int, v any) {
@@ -33,33 +32,21 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-// DecodeAndValidate decodes the JSON request body into T and runs validation.
+// Decode decodes the JSON request body into T.
+// If T implements Contract, Validate() is called automatically.
 // Returns (value, true) on success, writes an error response and returns (zero, false) on failure.
-func DecodeAndValidate[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+func Decode[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
 		Error(w, http.StatusBadRequest, "InvalidParameterValueException",
 			"invalid request body: "+err.Error())
 		return v, false
 	}
-	if err := validate.Struct(v); err != nil {
-		var ve validator.ValidationErrors
-		if errors.As(err, &ve) {
-			Error(w, http.StatusBadRequest, "InvalidParameterValueException",
-				ValidationMessage(ve))
+	if c, ok := any(&v).(Contract); ok {
+		if err := c.Validate(); err != nil {
+			Error(w, http.StatusBadRequest, "InvalidParameterValueException", err.Error())
 			return v, false
 		}
-		Error(w, http.StatusBadRequest, "InvalidParameterValueException", err.Error())
-		return v, false
 	}
 	return v, true
-}
-
-// ValidationMessage turns ValidationErrors into a single readable string.
-func ValidationMessage(ve validator.ValidationErrors) string {
-	msgs := make([]string, 0, len(ve))
-	for _, fe := range ve {
-		msgs = append(msgs, fmt.Sprintf("%s: failed '%s' validation", fe.Field(), fe.Tag()))
-	}
-	return strings.Join(msgs, "; ")
 }

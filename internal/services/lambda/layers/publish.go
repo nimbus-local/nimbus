@@ -1,6 +1,7 @@
 package layers
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -8,16 +9,25 @@ import (
 )
 
 type publishRequest struct {
-	CompatibleArchitectures []string                 `json:"CompatibleArchitectures,omitempty" validate:"omitempty,dive,oneof=x86_64 arm64"`
+	CompatibleArchitectures []string                 `json:"CompatibleArchitectures,omitempty"`
 	CompatibleRuntimes      []string                 `json:"CompatibleRuntimes,omitempty"`
 	Content                 LayerVersionContentInput `json:"Content"`
 	Description             string                   `json:"Description,omitempty"`
 	LicenseInfo             string                   `json:"LicenseInfo,omitempty"`
 }
 
+func (r *publishRequest) Validate() error {
+	for _, arch := range r.CompatibleArchitectures {
+		if arch != "x86_64" && arch != "arm64" {
+			return errors.New("CompatibleArchitectures must be x86_64 or arm64")
+		}
+	}
+	return nil
+}
+
 // POST /2015-03-31/layers/{LayerName}/versions
 func (s *Service) Publish(w http.ResponseWriter, r *http.Request, layerName string) {
-	req, ok := jsonhttp.DecodeAndValidate[publishRequest](w, r)
+	req, ok := jsonhttp.Decode[publishRequest](w, r)
 	if !ok {
 		return
 	}

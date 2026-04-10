@@ -22,7 +22,7 @@ type updateRequest struct {
 
 // PUT /2015-03-31/event-source-mappings/{UUID}
 func (s *Service) Update(w http.ResponseWriter, r *http.Request, uuid string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateRequest](w, r)
+	req, ok := jsonhttp.Decode[updateRequest](w, r)
 	if !ok {
 		return
 	}

@@ -1,6 +1,7 @@
 package aliases
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,14 +10,24 @@ import (
 
 type createAliasRequest struct {
 	Description     string                     `json:"Description,omitempty"`
-	FunctionVersion string                     `json:"FunctionVersion" validate:"required"`
-	Name            string                     `json:"Name"            validate:"required"`
+	FunctionVersion string                     `json:"FunctionVersion"`
+	Name            string                     `json:"Name"`
 	RoutingConfig   *AliasRoutingConfiguration `json:"RoutingConfig,omitempty"`
+}
+
+func (r *createAliasRequest) Validate() error {
+	if r.Name == "" {
+		return errors.New("Name is required")
+	}
+	if r.FunctionVersion == "" {
+		return errors.New("FunctionVersion is required")
+	}
+	return nil
 }
 
 // POST /2015-03-31/functions/{FunctionName}/aliases
 func (s *Service) Create(w http.ResponseWriter, r *http.Request, functionName string) {
-	req, ok := jsonhttp.DecodeAndValidate[createAliasRequest](w, r)
+	req, ok := jsonhttp.Decode[createAliasRequest](w, r)
 	if !ok {
 		return
 	}

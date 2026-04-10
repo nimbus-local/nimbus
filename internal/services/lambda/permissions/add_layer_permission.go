@@ -2,6 +2,7 @@ package permissions
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,15 +10,28 @@ import (
 )
 
 type addLayerVersionPermissionRequest struct {
-	StatementId    string `json:"StatementId"    validate:"required"`
-	Action         string `json:"Action"         validate:"required"`
-	Principal      string `json:"Principal"      validate:"required"`
+	StatementId    string `json:"StatementId"`
+	Action         string `json:"Action"`
+	Principal      string `json:"Principal"`
 	OrganizationId string `json:"OrganizationId,omitempty"`
+}
+
+func (r *addLayerVersionPermissionRequest) Validate() error {
+	if r.StatementId == "" {
+		return errors.New("StatementId is required")
+	}
+	if r.Action == "" {
+		return errors.New("Action is required")
+	}
+	if r.Principal == "" {
+		return errors.New("Principal is required")
+	}
+	return nil
 }
 
 // POST /2018-10-31/layers/{LayerName}/versions/{VersionNumber}/policy
 func (s *Service) AddLayerVersionPermission(w http.ResponseWriter, r *http.Request, layerName string, versionNumber int) {
-	req, ok := jsonhttp.DecodeAndValidate[addLayerVersionPermissionRequest](w, r)
+	req, ok := jsonhttp.Decode[addLayerVersionPermissionRequest](w, r)
 	if !ok {
 		return
 	}

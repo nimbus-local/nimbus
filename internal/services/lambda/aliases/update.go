@@ -16,7 +16,7 @@ type updateAliasRequest struct {
 
 // PUT /2015-03-31/functions/{FunctionName}/aliases/{Name}
 func (s *Service) Update(w http.ResponseWriter, r *http.Request, functionName, aliasName string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateAliasRequest](w, r)
+	req, ok := jsonhttp.Decode[updateAliasRequest](w, r)
 	if !ok {
 		return
 	}

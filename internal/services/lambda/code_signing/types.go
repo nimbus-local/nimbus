@@ -1,11 +1,11 @@
 package code_signing
 
 type AllowedPublishers struct {
-	SigningProfileVersionArns []string `json:"SigningProfileVersionArns" validate:"required,min=1"`
+	SigningProfileVersionArns []string `json:"SigningProfileVersionArns"`
 }
 
 type CodeSigningPolicies struct {
-	UntrustedArtifactOnDeployment string `json:"UntrustedArtifactOnDeployment,omitempty" validate:"omitempty,oneof=Warn Enforce"`
+	UntrustedArtifactOnDeployment string `json:"UntrustedArtifactOnDeployment,omitempty"` // "Warn" | "Enforce"
 }
 
 type CodeSigningConfig struct {

@@ -1,6 +1,7 @@
 package url_config
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,13 +10,20 @@ import (
 )
 
 type updateUrlRequest struct {
-	AuthType string `json:"AuthType,omitempty" validate:"omitempty,oneof=AWS_IAM NONE"`
+	AuthType string `json:"AuthType,omitempty"`
 	Cors     *Cors  `json:"Cors,omitempty"`
+}
+
+func (r *updateUrlRequest) Validate() error {
+	if r.AuthType != "" && r.AuthType != "AWS_IAM" && r.AuthType != "NONE" {
+		return errors.New("AuthType must be AWS_IAM or NONE")
+	}
+	return nil
 }
 
 // PUT /2015-03-31/functions/{FunctionName}/url
 func (s *Service) UpdateUrl(w http.ResponseWriter, r *http.Request, functionName string) {
-	req, ok := jsonhttp.DecodeAndValidate[updateUrlRequest](w, r)
+	req, ok := jsonhttp.Decode[updateUrlRequest](w, r)
 	if !ok {
 		return
 	}

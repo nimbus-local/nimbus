@@ -1,6 +1,7 @@
 package url_config
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,13 +11,23 @@ import (
 )
 
 type createUrlRequest struct {
-	AuthType string `json:"AuthType" validate:"required,oneof=AWS_IAM NONE"`
+	AuthType string `json:"AuthType"`
 	Cors     *Cors  `json:"Cors,omitempty"`
+}
+
+func (r *createUrlRequest) Validate() error {
+	if r.AuthType == "" {
+		return errors.New("AuthType is required")
+	}
+	if r.AuthType != "AWS_IAM" && r.AuthType != "NONE" {
+		return errors.New("AuthType must be AWS_IAM or NONE")
+	}
+	return nil
 }
 
 // POST /2015-03-31/functions/{FunctionName}/url
 func (s *Service) CreateUrl(w http.ResponseWriter, r *http.Request, functionName string) {
-	req, ok := jsonhttp.DecodeAndValidate[createUrlRequest](w, r)
+	req, ok := jsonhttp.Decode[createUrlRequest](w, r)
 	if !ok {
 		return
 	}

@@ -1,6 +1,7 @@
 package function_crud
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -19,40 +20,67 @@ type FunctionCode struct {
 }
 
 type CreateFunctionRequest struct {
-	// Required
-	Code         FunctionCode `json:"Code"`
-	FunctionName string       `json:"FunctionName" validate:"required"`
-	Role         string       `json:"Role"         validate:"required"`
-
-	// Required unless PackageType=Image
-	Handler string `json:"Handler,omitempty" validate:"required_unless=PackageType Image"`
-	Runtime string `json:"Runtime,omitempty" validate:"required_unless=PackageType Image"`
-
-	// Optional
-	Architectures        []string           `json:"Architectures,omitempty"     validate:"omitempty,dive,oneof=x86_64 arm64"`
+	Code                 FunctionCode       `json:"Code"`
+	FunctionName         string             `json:"FunctionName"`
+	Role                 string             `json:"Role"`
+	Handler              string             `json:"Handler,omitempty"`
+	Runtime              string             `json:"Runtime,omitempty"`
+	Architectures        []string           `json:"Architectures,omitempty"`
 	CodeSigningConfigArn string             `json:"CodeSigningConfigArn,omitempty"`
 	DeadLetterConfig     *DeadLetterConfig  `json:"DeadLetterConfig,omitempty"`
 	Description          string             `json:"Description,omitempty"`
 	Environment          *Environment       `json:"Environment,omitempty"`
-	EphemeralStorage     *EphemeralStorage  `json:"EphemeralStorage,omitempty"  validate:"omitempty"`
-	FileSystemConfigs    []FileSystemConfig `json:"FileSystemConfigs,omitempty" validate:"omitempty,dive"`
+	EphemeralStorage     *EphemeralStorage  `json:"EphemeralStorage,omitempty"`
+	FileSystemConfigs    []FileSystemConfig `json:"FileSystemConfigs,omitempty"`
 	ImageConfig          *ImageConfig       `json:"ImageConfig,omitempty"`
 	KMSKeyArn            string             `json:"KMSKeyArn,omitempty"`
 	Layers               []string           `json:"Layers,omitempty"`
 	LoggingConfig        *LoggingConfig     `json:"LoggingConfig,omitempty"`
-	MemorySize           int                `json:"MemorySize,omitempty"        validate:"omitempty,min=128,max=10240"`
-	PackageType          string             `json:"PackageType,omitempty"       validate:"omitempty,oneof=Zip Image"`
+	MemorySize           int                `json:"MemorySize,omitempty"`
+	PackageType          string             `json:"PackageType,omitempty"`
 	Publish              bool               `json:"Publish,omitempty"`
 	SnapStart            *SnapStart         `json:"SnapStart,omitempty"`
 	Tags                 map[string]string  `json:"Tags,omitempty"`
-	Timeout              int                `json:"Timeout,omitempty"           validate:"omitempty,min=1,max=900"`
-	TracingConfig        *TracingConfig     `json:"TracingConfig,omitempty"     validate:"omitempty"`
+	Timeout              int                `json:"Timeout,omitempty"`
+	TracingConfig        *TracingConfig     `json:"TracingConfig,omitempty"`
 	VpcConfig            *VpcConfig         `json:"VpcConfig,omitempty"`
+}
+
+func (r *CreateFunctionRequest) Validate() error {
+	if r.FunctionName == "" {
+		return errors.New("FunctionName is required")
+	}
+	if r.Role == "" {
+		return errors.New("Role is required")
+	}
+	if r.PackageType != "Image" {
+		if r.Handler == "" {
+			return errors.New("Handler is required for Zip package type")
+		}
+		if r.Runtime == "" {
+			return errors.New("Runtime is required for Zip package type")
+		}
+	}
+	if r.PackageType != "" && r.PackageType != "Zip" && r.PackageType != "Image" {
+		return errors.New("PackageType must be Zip or Image")
+	}
+	for _, arch := range r.Architectures {
+		if arch != "x86_64" && arch != "arm64" {
+			return errors.New("Architectures must be x86_64 or arm64")
+		}
+	}
+	if r.MemorySize != 0 && (r.MemorySize < 128 || r.MemorySize > 10240) {
+		return errors.New("MemorySize must be between 128 and 10240")
+	}
+	if r.Timeout != 0 && (r.Timeout < 1 || r.Timeout > 900) {
+		return errors.New("Timeout must be between 1 and 900")
+	}
+	return nil
 }
 
 // POST /2015-03-31/functions
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
-	req, ok := jsonhttp.DecodeAndValidate[CreateFunctionRequest](w, r)
+	req, ok := jsonhttp.Decode[CreateFunctionRequest](w, r)
 	if !ok {
 		return
 	}
@@ -96,7 +124,7 @@ func (req *CreateFunctionRequest) applyDefaults() {
 func newFunctionConfig(req CreateFunctionRequest, arn string) *FunctionConfig {
 	return &FunctionConfig{
 		Architectures:     req.Architectures,
-		CodeSha256:        "", // would be computed from ZipFile / S3 object in a real impl
+		CodeSha256:        "",
 		CodeSize:          int64(len(req.Code.ZipFile)),
 		DeadLetterConfig:  req.DeadLetterConfig,
 		Description:       req.Description,

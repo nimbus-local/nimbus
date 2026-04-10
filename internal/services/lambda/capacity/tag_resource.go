@@ -13,7 +13,7 @@ type tagResourceRequest struct {
 
 // POST /2015-03-31/tags/{ARN}
 func (s *Service) TagResource(w http.ResponseWriter, r *http.Request, resourceArn string) {
-	req, ok := jsonhttp.DecodeAndValidate[tagResourceRequest](w, r)
+	req, ok := jsonhttp.Decode[tagResourceRequest](w, r)
 	if !ok {
 		return
 	}

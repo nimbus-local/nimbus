@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -12,8 +13,18 @@ func functionArn(name string) string {
 }
 
 type putRuntimeConfigRequest struct {
-	UpdateRuntimeOn   string `json:"UpdateRuntimeOn"   validate:"required,oneof=Auto FunctionUpdate Manual"`
+	UpdateRuntimeOn   string `json:"UpdateRuntimeOn"`
 	RuntimeVersionArn string `json:"RuntimeVersionArn,omitempty"`
+}
+
+func (r *putRuntimeConfigRequest) Validate() error {
+	if r.UpdateRuntimeOn == "" {
+		return errors.New("UpdateRuntimeOn is required")
+	}
+	if r.UpdateRuntimeOn != "Auto" && r.UpdateRuntimeOn != "FunctionUpdate" && r.UpdateRuntimeOn != "Manual" {
+		return errors.New("UpdateRuntimeOn must be Auto, FunctionUpdate, or Manual")
+	}
+	return nil
 }
 
 // GetRuntimeConfig handles GET /2015-03-31/functions/{FunctionName}/runtime-management-config.
@@ -46,7 +57,7 @@ func (s *Service) PutRuntimeConfig(w http.ResponseWriter, r *http.Request, funct
 		return
 	}
 
-	req, ok := jsonhttp.DecodeAndValidate[putRuntimeConfigRequest](w, r)
+	req, ok := jsonhttp.Decode[putRuntimeConfigRequest](w, r)
 	if !ok {
 		return
 	}

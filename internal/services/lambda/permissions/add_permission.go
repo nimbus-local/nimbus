@@ -2,6 +2,7 @@ package permissions
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,9 +10,9 @@ import (
 )
 
 type addPermissionRequest struct {
-	Action              string `json:"Action"           validate:"required"`
-	Principal           string `json:"Principal"        validate:"required"`
-	StatementId         string `json:"StatementId"      validate:"required"`
+	Action              string `json:"Action"`
+	Principal           string `json:"Principal"`
+	StatementId         string `json:"StatementId"`
 	EventSourceToken    string `json:"EventSourceToken,omitempty"`
 	FunctionUrlAuthType string `json:"FunctionUrlAuthType,omitempty"`
 	PrincipalOrgID      string `json:"PrincipalOrgID,omitempty"`
@@ -21,9 +22,22 @@ type addPermissionRequest struct {
 	Qualifier           string `json:"-"` // populated from query param, not body
 }
 
+func (r *addPermissionRequest) Validate() error {
+	if r.Action == "" {
+		return errors.New("Action is required")
+	}
+	if r.Principal == "" {
+		return errors.New("Principal is required")
+	}
+	if r.StatementId == "" {
+		return errors.New("StatementId is required")
+	}
+	return nil
+}
+
 // POST /2015-03-31/functions/{FunctionName}/policy
 func (s *Service) AddPermission(w http.ResponseWriter, r *http.Request, functionName string) {
-	req, ok := jsonhttp.DecodeAndValidate[addPermissionRequest](w, r)
+	req, ok := jsonhttp.Decode[addPermissionRequest](w, r)
 	if !ok {
 		return
 	}
