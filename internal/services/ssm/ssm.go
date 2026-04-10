@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nimbus-local/nimbus/internal/jsonhttp"
 	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
@@ -166,7 +167,7 @@ func (s *Service) putParameter(w http.ResponseWriter, r *http.Request) {
 
 	s.parameters[req.Name] = p
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Version": version,
 	})
 }
@@ -197,7 +198,7 @@ func (s *Service) getParameter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Parameter": parameterResponse(p),
 	})
 }
@@ -226,7 +227,7 @@ func (s *Service) getParameters(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Parameters":        found,
 		"InvalidParameters": invalid,
 	})
@@ -274,7 +275,7 @@ func (s *Service) getParametersByPath(w http.ResponseWriter, r *http.Request) {
 		results = append(results, parameterResponse(p))
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Parameters": results,
 	})
 }
@@ -298,7 +299,7 @@ func (s *Service) deleteParameter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	delete(s.parameters, req.Name)
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{})
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
 }
 
 // DeleteParameters — deletes multiple parameters, returns which were deleted and which were invalid
@@ -325,7 +326,7 @@ func (s *Service) deleteParameters(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"DeletedParameters": deleted,
 		"InvalidParameters": invalid,
 	})
@@ -363,7 +364,7 @@ func (s *Service) describeParameters(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Parameters": results,
 	})
 }
