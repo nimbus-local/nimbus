@@ -56,6 +56,7 @@ volumes:
 | Secrets Manager     | ✅ Core        | `secretsmanager.*` target              | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DeleteSecret, ListSecrets, DescribeSecret, RestoreSecret |
 | SSM Parameter Store | ✅ Core        | `AmazonSSM.*` target                   | PutParameter, GetParameter, GetParameters, GetParametersByPath, DeleteParameter, DeleteParameters, DescribeParameters — String, StringList, SecureString, path hierarchy, versioning |
 | SES                 | ✅ Core        | `AmazonSimpleEmailService.*` target or `/v2/email/` path | SendEmail (v1+v2), SendRawEmail, VerifyEmailIdentity, ListIdentities, DeleteIdentity, GetSendQuota — emails captured in memory, never sent |
+| Lambda              | ✅ Core        | `/2015-03-31/` path prefix             | Functions (CRUD, versions, publish), invocations, aliases, permissions, event source mappings, concurrency, layers, code signing, function URLs, event invoke config, runtime & recursion settings, tags |
 | SNS                 | 🚧 In Progress | `SNS.*` target                         | |
 
 ---
@@ -120,6 +121,8 @@ nimbuslocal dynamodb list-tables
 nimbuslocal secretsmanager create-secret --name /myapp/db-password --secret-string "secret"
 nimbuslocal ssm put-parameter --name /myapp/db-host --value localhost --type String
 nimbuslocal ses verify-email-identity --email-address sender@example.com
+nimbuslocal lambda create-function --function-name my-func --runtime nodejs22.x --role arn:aws:iam::000000000000:role/r --handler index.handler --zip-file fileb://fn.zip
+nimbuslocal lambda invoke --function-name my-func --payload '{}' response.json
 ```
 
 Install:
@@ -158,6 +161,169 @@ curl -X DELETE http://localhost:4566/_nimbus/ses/messages
     "SentAt": "2026-04-03T21:00:00Z"
   }
 ]
+```
+
+---
+
+## Lambda
+
+Nimbus emulates the Lambda REST API (`/2015-03-31/`) in-memory. Functions are stored and invoked locally — no Docker-per-function, no execution sandbox. Invocations return a configurable response body and are useful for asserting invocation behaviour in integration tests.
+
+### Supported operations
+
+**Functions**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/functions` | CreateFunction |
+| GET | `/2015-03-31/functions` | ListFunctions |
+| GET | `/2015-03-31/functions/{name}` | GetFunction |
+| GET | `/2015-03-31/functions/{name}/configuration` | GetFunctionConfiguration |
+| PUT | `/2015-03-31/functions/{name}/code` | UpdateFunctionCode |
+| PUT | `/2015-03-31/functions/{name}/configuration` | UpdateFunctionConfiguration |
+| DELETE | `/2015-03-31/functions/{name}` | DeleteFunction |
+| GET | `/2015-03-31/functions/{name}/versions` | ListVersionsByFunction |
+| POST | `/2015-03-31/functions/{name}/versions` | PublishVersion |
+
+**Invocations**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/functions/{name}/invocations` | Invoke |
+| POST | `/2015-03-31/functions/{name}/invoke-async` | InvokeAsync |
+| POST | `/2015-03-31/functions/{name}/response-streaming-invocations` | InvokeWithResponseStream |
+
+**Aliases**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/functions/{name}/aliases` | CreateAlias |
+| GET | `/2015-03-31/functions/{name}/aliases` | ListAliases |
+| GET | `/2015-03-31/functions/{name}/aliases/{alias}` | GetAlias |
+| PUT | `/2015-03-31/functions/{name}/aliases/{alias}` | UpdateAlias |
+| DELETE | `/2015-03-31/functions/{name}/aliases/{alias}` | DeleteAlias |
+
+**Permissions (resource-based policy)**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/functions/{name}/policy` | AddPermission |
+| GET | `/2015-03-31/functions/{name}/policy` | GetPolicy |
+| DELETE | `/2015-03-31/functions/{name}/policy/{statementId}` | RemovePermission |
+
+**Event Source Mappings**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/event-source-mappings` | CreateEventSourceMapping |
+| GET | `/2015-03-31/event-source-mappings` | ListEventSourceMappings |
+| GET | `/2015-03-31/event-source-mappings/{uuid}` | GetEventSourceMapping |
+| PUT | `/2015-03-31/event-source-mappings/{uuid}` | UpdateEventSourceMapping |
+| DELETE | `/2015-03-31/event-source-mappings/{uuid}` | DeleteEventSourceMapping |
+
+**Concurrency**
+| Method | Path | Operation |
+|--------|------|-----------|
+| PUT | `/2015-03-31/functions/{name}/concurrency` | PutFunctionConcurrency |
+| GET | `/2015-03-31/functions/{name}/concurrency` | GetFunctionConcurrency |
+| DELETE | `/2015-03-31/functions/{name}/concurrency` | DeleteFunctionConcurrency |
+| PUT | `/2015-03-31/functions/{name}/provisioned-concurrency` | PutProvisionedConcurrencyConfig |
+| GET | `/2015-03-31/functions/{name}/provisioned-concurrency` | GetProvisionedConcurrencyConfig / ListProvisionedConcurrencyConfigs |
+| DELETE | `/2015-03-31/functions/{name}/provisioned-concurrency` | DeleteProvisionedConcurrencyConfig |
+
+**Layers**
+| Method | Path | Operation |
+|--------|------|-----------|
+| GET | `/2015-03-31/layers` | ListLayers |
+| POST | `/2015-03-31/layers/{name}/versions` | PublishLayerVersion |
+| GET | `/2015-03-31/layers/{name}/versions` | ListLayerVersions |
+| GET | `/2015-03-31/layers/{name}/versions/{n}` | GetLayerVersion |
+| DELETE | `/2015-03-31/layers/{name}/versions/{n}` | DeleteLayerVersion |
+| POST | `/2015-03-31/layers/{name}/versions/{n}/policy` | AddLayerVersionPermission |
+| GET | `/2015-03-31/layers/{name}/versions/{n}/policy` | GetLayerVersionPolicy |
+| DELETE | `/2015-03-31/layers/{name}/versions/{n}/policy/{statementId}` | RemoveLayerVersionPermission |
+
+**Code Signing**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/code-signing-configs` | CreateCodeSigningConfig |
+| GET | `/2015-03-31/code-signing-configs` | ListCodeSigningConfigs |
+| GET | `/2015-03-31/code-signing-configs/{arn}` | GetCodeSigningConfig |
+| PUT | `/2015-03-31/code-signing-configs/{arn}` | UpdateCodeSigningConfig |
+| DELETE | `/2015-03-31/code-signing-configs/{arn}` | DeleteCodeSigningConfig |
+| GET | `/2015-03-31/code-signing-configs/{arn}/functions` | ListFunctionsByCodeSigningConfig |
+| PUT | `/2015-03-31/functions/{name}/code-signing-config` | PutFunctionCodeSigningConfig |
+| GET | `/2015-03-31/functions/{name}/code-signing-config` | GetFunctionCodeSigningConfig |
+| DELETE | `/2015-03-31/functions/{name}/code-signing-config` | DeleteFunctionCodeSigningConfig |
+
+**Function URLs**
+| Method | Path | Operation |
+|--------|------|-----------|
+| POST | `/2015-03-31/functions/{name}/url` | CreateFunctionUrlConfig |
+| GET | `/2015-03-31/functions/{name}/url` | GetFunctionUrlConfig |
+| PUT | `/2015-03-31/functions/{name}/url` | UpdateFunctionUrlConfig |
+| DELETE | `/2015-03-31/functions/{name}/url` | DeleteFunctionUrlConfig |
+| GET | `/2015-03-31/functions/{name}/urls` | ListFunctionUrlConfigs |
+
+**Event Invoke Config**
+| Method | Path | Operation |
+|--------|------|-----------|
+| PUT | `/2015-03-31/functions/{name}/event-invoke-config` | PutFunctionEventInvokeConfig |
+| GET | `/2015-03-31/functions/{name}/event-invoke-config` | GetFunctionEventInvokeConfig |
+| POST | `/2015-03-31/functions/{name}/event-invoke-config` | UpdateFunctionEventInvokeConfig |
+| DELETE | `/2015-03-31/functions/{name}/event-invoke-config` | DeleteFunctionEventInvokeConfig |
+| GET | `/2015-03-31/event-invoke-config/functions` | ListFunctionEventInvokeConfigs |
+
+**Runtime & Recursion Settings**
+| Method | Path | Operation |
+|--------|------|-----------|
+| GET | `/2015-03-31/functions/{name}/runtime-management-config` | GetRuntimeManagementConfig |
+| PUT | `/2015-03-31/functions/{name}/runtime-management-config` | PutRuntimeManagementConfig |
+| GET | `/2015-03-31/functions/{name}/recursion-config` | GetFunctionRecursionConfig |
+| PUT | `/2015-03-31/functions/{name}/recursion-config` | PutFunctionRecursionConfig |
+| GET | `/2015-03-31/account-settings` | GetAccountSettings |
+
+**Tags**
+| Method | Path | Operation |
+|--------|------|-----------|
+| GET | `/2015-03-31/tags/{arn}` | ListTags |
+| POST | `/2015-03-31/tags/{arn}` | TagResource |
+| DELETE | `/2015-03-31/tags/{arn}` | UntagResource |
+
+### Example usage
+
+```bash
+# Create a function
+nimbuslocal lambda create-function \
+  --function-name my-func \
+  --runtime nodejs22.x \
+  --role arn:aws:iam::000000000000:role/lambda-role \
+  --handler index.handler \
+  --zip-file fileb://function.zip
+
+# Invoke it
+nimbuslocal lambda invoke \
+  --function-name my-func \
+  --payload '{"key":"value"}' \
+  response.json
+
+# Create an alias
+nimbuslocal lambda create-alias \
+  --function-name my-func \
+  --name live \
+  --function-version 1
+
+# Add a trigger (event source mapping)
+nimbuslocal lambda create-event-source-mapping \
+  --function-name my-func \
+  --event-source-arn arn:aws:sqs:us-east-1:000000000000:my-queue \
+  --batch-size 10
+
+# Put reserved concurrency
+nimbuslocal lambda put-function-concurrency \
+  --function-name my-func \
+  --reserved-concurrent-executions 5
+
+# Create a layer
+nimbuslocal lambda publish-layer-version \
+  --layer-name my-layer \
+  --zip-file fileb://layer.zip \
+  --compatible-runtimes nodejs22.x python3.13
 ```
 
 ---
@@ -217,6 +383,18 @@ internal/
     secretsmanager/     # Secrets Manager (in-memory)
     ssm/                # SSM Parameter Store (in-memory)
     ses/                # SES — captures emails in memory, never sends
+    lambda/             # Lambda REST API — all 11 operation groups
+      function_crud/    # CreateFunction, GetFunction, UpdateFunction, DeleteFunction, versions
+      invocation/       # Invoke, InvokeAsync, InvokeWithResponseStream
+      permissions/      # AddPermission, GetPolicy, RemovePermission, layer policies
+      aliases/          # CreateAlias, GetAlias, UpdateAlias, DeleteAlias, ListAliases
+      event_sources/    # CreateEventSourceMapping, List, Get, Update, Delete
+      concurrency/      # Reserved and provisioned concurrency
+      layers/           # PublishLayerVersion, ListLayers, GetLayerVersion, DeleteLayerVersion
+      code_signing/     # CreateCodeSigningConfig, function bindings
+      url_config/       # Function URLs, event invoke config
+      settings/         # Runtime management config, recursion config, account settings
+      capacity/         # Tags (ListTags, TagResource, UntagResource)
   auth/                 # Credential extraction (accepts anything)
   config/               # Environment-based configuration
   uid/                  # UUID generation (stdlib only)
