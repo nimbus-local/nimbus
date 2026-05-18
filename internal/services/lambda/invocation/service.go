@@ -2,6 +2,7 @@ package invocation
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -58,4 +59,27 @@ func (s *Service) ClearInvocations() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.invocations = nil
+}
+
+// DirectInvoke invokes a function synchronously without going through HTTP.
+// It records the invocation and returns the configured mock response.
+func (s *Service) DirectInvoke(functionName string, payload []byte) ([]byte, error) {
+	if !s.checker.FunctionExists(functionName) {
+		return nil, fmt.Errorf("function not found: %s", functionName)
+	}
+
+	s.mu.Lock()
+	s.invocations = append(s.invocations, &InvocationRecord{
+		FunctionName:   functionName,
+		InvocationType: "RequestResponse",
+		Payload:        payload,
+		InvokedAt:      time.Now().UTC(),
+	})
+	response := s.responses[functionName]
+	s.mu.Unlock()
+
+	if response == nil {
+		return json.RawMessage(`null`), nil
+	}
+	return response, nil
 }

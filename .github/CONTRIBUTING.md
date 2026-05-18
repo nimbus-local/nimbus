@@ -4,8 +4,7 @@ Thank you for helping make local AWS development free for everyone.
 
 ## Adding a new AWS service
 
-1. Create `internal/services/<name>/<name>.go`
-2. Implement the `services.Service` interface:
+1. Create `internal/services/<name>/` and implement the `services.Service` interface:
    ```go
    type Service interface {
        Name()                        string
@@ -13,9 +12,40 @@ Thank you for helping make local AWS development free for everyone.
        ServeHTTP(w http.ResponseWriter, r *http.Request)
    }
    ```
-3. Register it in `cmd/nimbus/main.go` — more specific detectors before less specific ones
-4. Add a section to the README services table
-5. Open a PR
+2. Register it in `cmd/nimbus/main.go` — more specific detectors before less specific ones. S3 is the catch-all and must stay last.
+3. Write tests alongside the implementation (`<name>_test.go`).
+4. **Document the service** — see the [Documentation](#documentation) section below.
+5. Open a PR.
+
+## Documentation
+
+Every service has its own reference doc in `docs/services/`. When you add a service, you must also:
+
+### 1. Create `docs/services/<name>.md`
+
+Follow the pattern used by existing services. The file should contain:
+
+- A one-paragraph description of what the service does locally (what's in-memory, what's proxied, what's never sent, etc.)
+- A **Detection** line explaining how the edge router identifies requests for this service.
+- A **Supported operations** table listing each operation and any notable behaviour.
+- An **Example** block with `nimbuslocal` CLI commands.
+- Any Nimbus-specific inspection endpoints (e.g. `/_nimbus/<name>/...`) if the service exposes them.
+
+Use an existing doc as a starting point — [`docs/services/ses.md`](../docs/services/ses.md) is a good compact example; [`docs/services/lambda.md`](../docs/services/lambda.md) shows the full multi-section style for larger services.
+
+### 2. Add a row to the services table in `README.md`
+
+```markdown
+| [Service Name](docs/services/<name>.md) | ✅ Core | `detection hint` | Short summary of supported operations |
+```
+
+Link the service name to its doc file. Match the status badge used by comparable services:
+
+| Badge | Meaning |
+|-------|---------|
+| ✅ Core | Implemented — covers the operations most apps need |
+| ✅ Full | Full parity (e.g. proxied to an authoritative implementation) |
+| 🚧 In Progress | Work has started but isn't ready |
 
 ## Guidelines
 
