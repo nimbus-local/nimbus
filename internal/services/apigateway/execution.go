@@ -75,11 +75,11 @@ type lambdaProxyEvent struct {
 }
 
 type lambdaProxyResponse struct {
-	StatusCode        int               `json:"statusCode"`
-	Headers           map[string]string `json:"headers"`
+	StatusCode        int                 `json:"statusCode"`
+	Headers           map[string]string   `json:"headers"`
 	MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
-	Body              string            `json:"body"`
-	IsBase64Encoded   bool              `json:"isBase64Encoded"`
+	Body              string              `json:"body"`
+	IsBase64Encoded   bool                `json:"isBase64Encoded"`
 }
 
 func (s *Service) executeLambdaProxy(
@@ -147,13 +147,13 @@ func (s *Service) executeLambdaProxy(
 		Body:                  body,
 		IsBase64Encoded:       isBase64,
 		RequestContext: map[string]any{
-			"accountId":   defaultAccount,
-			"apiId":       apiID,
-			"httpMethod":  r.Method,
-			"path":        r.URL.Path,
+			"accountId":    defaultAccount,
+			"apiId":        apiID,
+			"httpMethod":   r.Method,
+			"path":         r.URL.Path,
 			"resourcePath": resource.Path,
-			"stage":       stageName,
-			"requestId":   uid.New(),
+			"stage":        stageName,
+			"requestId":    uid.New(),
 		},
 	}
 

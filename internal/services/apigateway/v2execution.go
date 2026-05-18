@@ -70,16 +70,16 @@ type v2ProxyEvent struct {
 }
 
 type v2RequestContext struct {
-	AccountId    string     `json:"accountId"`
-	ApiId        string     `json:"apiId"`
-	DomainName   string     `json:"domainName"`
-	DomainPrefix string     `json:"domainPrefix"`
-	Http         v2HttpCtx  `json:"http"`
-	RequestId    string     `json:"requestId"`
-	RouteKey     string     `json:"routeKey"`
-	Stage        string     `json:"stage"`
-	Time         string     `json:"time"`
-	TimeEpoch    int64      `json:"timeEpoch"`
+	AccountId    string    `json:"accountId"`
+	ApiId        string    `json:"apiId"`
+	DomainName   string    `json:"domainName"`
+	DomainPrefix string    `json:"domainPrefix"`
+	Http         v2HttpCtx `json:"http"`
+	RequestId    string    `json:"requestId"`
+	RouteKey     string    `json:"routeKey"`
+	Stage        string    `json:"stage"`
+	Time         string    `json:"time"`
+	TimeEpoch    int64     `json:"timeEpoch"`
 }
 
 type v2HttpCtx struct {

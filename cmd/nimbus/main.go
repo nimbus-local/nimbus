@@ -63,7 +63,6 @@ func main() {
 	r.Register(sqs.New(cfg.DefaultRegion))
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
-
 	// Standard endpoints
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_nimbus/health", r.HealthHandler)

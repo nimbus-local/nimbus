@@ -11,24 +11,24 @@ import (
 // HTTP API (v2) data models
 
 type HTTPApi struct {
-	ApiId       string `json:"apiId"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ApiId        string `json:"apiId"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
 	ProtocolType string `json:"protocolType"` // always "HTTP"
-	ApiEndpoint string `json:"apiEndpoint"`
-	CreatedDate string `json:"createdDate"` // RFC3339
+	ApiEndpoint  string `json:"apiEndpoint"`
+	CreatedDate  string `json:"createdDate"` // RFC3339
 }
 
 type V2Route struct {
 	RouteId           string `json:"routeId"`
-	RouteKey          string `json:"routeKey"` // "GET /items/{id}" or "$default"
+	RouteKey          string `json:"routeKey"`         // "GET /items/{id}" or "$default"
 	Target            string `json:"target,omitempty"` // "integrations/{id}"
 	AuthorizationType string `json:"authorizationType"`
 }
 
 type V2Integration struct {
 	IntegrationId        string `json:"integrationId"`
-	IntegrationType      string `json:"integrationType"`           // AWS_PROXY, HTTP_PROXY
+	IntegrationType      string `json:"integrationType"` // AWS_PROXY, HTTP_PROXY
 	IntegrationUri       string `json:"integrationUri,omitempty"`
 	IntegrationMethod    string `json:"integrationMethod,omitempty"`
 	PayloadFormatVersion string `json:"payloadFormatVersion,omitempty"` // "1.0" or "2.0"
