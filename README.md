@@ -202,6 +202,29 @@ docs/
 
 ---
 
+## Local development
+
+The `infra/` directory contains a full dev harness: Docker Compose, Terraform fixtures, and a smoke test script that exercises every service end-to-end.
+
+**Prerequisites:** Docker, Terraform, AWS CLI v2.
+
+```bash
+cd infra
+```
+
+| Goal | Command |
+|------|---------|
+| Start Nimbus + DynamoDB Local | `make start` |
+| Provision all test resources | `make apply` |
+| Run smoke tests | `make smoke-test` |
+| Provision + smoke test in one step | `make test` |
+| Rebuild after Go changes | `make stop && make start && make apply` |
+| Tear everything down | `make clean` |
+
+`make apply` is idempotent — safe to re-run. All AWS credentials are set automatically to dummy values so no environment setup is required.
+
+---
+
 ## Contributing
 
 PRs welcome. If you're adding a new AWS service, implement the `services.Service` interface in `internal/services/<n>/` and register it in `cmd/nimbus/main.go`.
