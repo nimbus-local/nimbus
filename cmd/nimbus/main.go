@@ -13,6 +13,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/eventbridge"
+	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
@@ -61,6 +62,7 @@ func main() {
 	sesSvc := ses.New(cfg.DefaultRegion)
 	r.Register(sesSvc)
 	r.Register(secretsmanager.New(cfg.DefaultRegion))
+	r.Register(kms.New(cfg.DefaultRegion))
 	r.Register(ssm.New(cfg.DefaultRegion))
 	r.Register(sqs.New(cfg.DefaultRegion))
 	snsSvc := sns.New(cfg.DefaultRegion)
