@@ -1,0 +1,40 @@
+name: Action Security
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+jobs:
+  banned-actions:
+    name: Banned Action Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for banned actions
+        run: |
+          banned=(
+            "tj-actions/"          # backdoored to exfiltrate CI secrets (March 2025)
+            "aquasecurity/trivy-action"  # supply chain compromise
+            "tanstack/"            # npm OIDC token theft attack (May 2026)
+          )
+
+          found=0
+          while IFS= read -r file; do
+            for pattern in "${banned[@]}"; do
+              if grep -q "uses:.*${pattern}" "$file"; then
+                echo "::error file=$file::Banned action '${pattern}' found in $file"
+                found=1
+              fi
+            done
+          done < <(find .github/workflows -name "*.yml" ! -name "action-security.yml")
+
+          if [ "$found" -eq 1 ]; then
+            echo ""
+            echo "One or more banned actions were detected."
+            echo "See https://github.com/nimbus-local/nimbus/blob/master/.github/dependabot.yml for the banned list and rationale."
+            exit 1
+          fi
+
+          echo "No banned actions found."

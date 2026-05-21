@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # tj-actions was backdoored to exfiltrate CI secrets (March 2025)
+      - dependency-name: "tj-actions/*"
+      # aquasecurity/trivy-action was compromised in a supply chain attack
+      - dependency-name: "aquasecurity/trivy-action"
+      # TanStack npm packages were used in a cache-poisoning + OIDC theft attack (May 2026)
+      - dependency-name: "tanstack/*"
