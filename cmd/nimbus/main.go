@@ -17,6 +17,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
 	"github.com/nimbus-local/nimbus/internal/services/ses"
+	"github.com/nimbus-local/nimbus/internal/services/sns"
 	"github.com/nimbus-local/nimbus/internal/services/sqs"
 	"github.com/nimbus-local/nimbus/internal/services/ssm"
 )
@@ -62,6 +63,8 @@ func main() {
 	r.Register(secretsmanager.New(cfg.DefaultRegion))
 	r.Register(ssm.New(cfg.DefaultRegion))
 	r.Register(sqs.New(cfg.DefaultRegion))
+	snsSvc := sns.New(cfg.DefaultRegion)
+	r.Register(snsSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
@@ -78,6 +81,18 @@ func main() {
 			sesSvc.MessagesHandler(w, req)
 		case http.MethodDelete:
 			sesSvc.ClearMessagesHandler(w, req)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// SNS inspection endpoints — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/sns/messages", func(w http.ResponseWriter, req *http.Request) {
+		switch req.Method {
+		case http.MethodGet:
+			snsSvc.MessagesHandler(w, req)
+		case http.MethodDelete:
+			snsSvc.ClearMessagesHandler(w, req)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
