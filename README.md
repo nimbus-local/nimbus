@@ -151,6 +151,11 @@ Install:
 go install github.com/nimbus-local/nimbus/cmd/nimbuslocal@latest
 ```
 
+Ensure `$GOPATH/bin` is on your PATH (add to `~/.zshrc` or `~/.bashrc`):
+```bash
+export PATH="$PATH:$HOME/go/bin"
+```
+
 ---
 
 ## Configuration
