@@ -30,6 +30,13 @@ jobs:
       - name: Run tests before release
         run: go test ./... -race -timeout 60s
 
+      - name: Build nimbuslocal binaries
+        run: |
+          GOOS=linux  GOARCH=amd64 go build -o nimbuslocal-linux-amd64  ./cmd/nimbuslocal
+          GOOS=linux  GOARCH=arm64 go build -o nimbuslocal-linux-arm64  ./cmd/nimbuslocal
+          GOOS=darwin GOARCH=amd64 go build -o nimbuslocal-darwin-amd64 ./cmd/nimbuslocal
+          GOOS=darwin GOARCH=arm64 go build -o nimbuslocal-darwin-arm64 ./cmd/nimbuslocal
+
       - name: Set up QEMU
         # Required for multi-arch builds (arm64 for Apple Silicon devs)
         uses: docker/setup-qemu-action@v4
@@ -72,7 +79,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: |
+            nimbuslocal-linux-amd64
+            nimbuslocal-linux-arm64
+            nimbuslocal-darwin-amd64
+            nimbuslocal-darwin-arm64
           body: |
+            ## nimbuslocal CLI
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/nimbus-local/nimbus/master/install.sh | sh
+            ```
+
             ## Docker
 
             ```bash
