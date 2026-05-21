@@ -161,9 +161,9 @@ func (s *Service) createTopic(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	type result struct {
-		XMLName  xml.Name `xml:"CreateTopicResponse"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Result   struct {
+		XMLName xml.Name `xml:"CreateTopicResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
 			TopicArn string `xml:"TopicArn"`
 		} `xml:"CreateTopicResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
@@ -324,9 +324,9 @@ func (s *Service) subscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type result struct {
-		XMLName  xml.Name `xml:"SubscribeResponse"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Result   struct {
+		XMLName xml.Name `xml:"SubscribeResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
 			SubscriptionArn string `xml:"SubscriptionArn"`
 		} `xml:"SubscribeResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
@@ -511,9 +511,9 @@ func (s *Service) confirmSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type result struct {
-		XMLName  xml.Name `xml:"ConfirmSubscriptionResponse"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Result   struct {
+		XMLName xml.Name `xml:"ConfirmSubscriptionResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
 			SubscriptionArn string `xml:"SubscriptionArn"`
 		} `xml:"ConfirmSubscriptionResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
@@ -564,9 +564,9 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	type result struct {
-		XMLName  xml.Name `xml:"PublishResponse"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Result   struct {
+		XMLName xml.Name `xml:"PublishResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
 			MessageId string `xml:"MessageId"`
 		} `xml:"PublishResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`

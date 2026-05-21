@@ -24,8 +24,8 @@ const accountID = "000000000000"
 // decryptable — they are not forwarded to AWS.
 type Service struct {
 	mu      sync.RWMutex
-	keys    map[string]*cmk    // keyID -> key
-	aliases map[string]string  // aliasName -> keyID
+	keys    map[string]*cmk   // keyID -> key
+	aliases map[string]string // aliasName -> keyID
 	region  string
 }
 
@@ -136,7 +136,7 @@ func (s *Service) aliasARN(name string) string {
 
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Description string            `json:"Description"`
+		Description string              `json:"Description"`
 		Tags        []map[string]string `json:"Tags"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
@@ -645,10 +645,10 @@ func (s *Service) reEncrypt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{
-		"CiphertextBlob":             newCiphertext,
-		"SourceKeyId":                srcKey.arn,
-		"KeyId":                      dstKey.arn,
-		"SourceEncryptionAlgorithm":  "SYMMETRIC_DEFAULT",
+		"CiphertextBlob":                 newCiphertext,
+		"SourceKeyId":                    srcKey.arn,
+		"KeyId":                          dstKey.arn,
+		"SourceEncryptionAlgorithm":      "SYMMETRIC_DEFAULT",
 		"DestinationEncryptionAlgorithm": "SYMMETRIC_DEFAULT",
 	})
 }

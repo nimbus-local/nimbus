@@ -1,13 +1,13 @@
 package sns
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-	"encoding/json"
 )
 
 func newTestService() *Service {
@@ -502,7 +502,7 @@ func TestPublishBatch(t *testing.T) {
 	arn := mustCreateTopic(t, svc, "my-topic")
 
 	params := map[string]string{
-		"TopicArn":                                "irrelevant", // overridden below
+		"TopicArn":                                    "irrelevant", // overridden below
 		"PublishBatchRequestEntries.member.1.Id":      "1",
 		"PublishBatchRequestEntries.member.1.Message": "msg-one",
 		"PublishBatchRequestEntries.member.1.Subject": "First",
@@ -528,7 +528,7 @@ func TestPublishBatch_TopicNotFound(t *testing.T) {
 	svc := newTestService()
 
 	w := snsRequest(t, svc, "PublishBatch", map[string]string{
-		"TopicArn":                                "arn:aws:sns:us-east-1:000000000000:no-topic",
+		"TopicArn":                                    "arn:aws:sns:us-east-1:000000000000:no-topic",
 		"PublishBatchRequestEntries.member.1.Id":      "1",
 		"PublishBatchRequestEntries.member.1.Message": "msg",
 	})

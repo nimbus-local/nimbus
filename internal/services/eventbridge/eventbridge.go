@@ -19,9 +19,9 @@ const accountID = "000000000000"
 type Service struct {
 	mu         sync.RWMutex
 	events     []*CapturedEvent
-	eventBuses map[string]*eventBus  // name -> bus
-	rules      map[string]*rule      // busName+"/"+ruleName -> rule
-	targets    map[string][]*target  // busName+"/"+ruleName -> targets
+	eventBuses map[string]*eventBus // name -> bus
+	rules      map[string]*rule     // busName+"/"+ruleName -> rule
+	targets    map[string][]*target // busName+"/"+ruleName -> targets
 	region     string
 }
 
