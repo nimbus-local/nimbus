@@ -1,0 +1,974 @@
+// Package ecs emulates the AWS Elastic Container Service (ECS) control plane
+// for local development. No containers are actually executed; tasks are
+// simulated as immediately RUNNING. All state is in-memory.
+package ecs
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nimbus-local/nimbus/internal/uid"
+)
+
+const (
+	accountID = "000000000000"
+	ecsTarget = "AmazonEC2ContainerServiceV20141113."
+)
+
+// Service implements the ECS control plane (clusters, task definitions,
+// tasks, and services). No containers are started; task state is simulated.
+type Service struct {
+	mu       sync.RWMutex
+	clusters map[string]*cluster          // name -> cluster
+	taskDefs map[string]*taskDef          // "family:revision" -> taskDef
+	taskFams map[string]int               // family -> latest revision number
+	tasks    map[string]*ecsTask          // taskArn -> task
+	services map[string]*ecsService       // serviceArn -> service
+	tags     map[string]map[string]string // resourceArn -> tags
+	region   string
+}
+
+type cluster struct {
+	name                string
+	arn                 string
+	status              string
+	runningTasksCount   int
+	pendingTasksCount   int
+	activeServicesCount int
+	createdAt           time.Time
+}
+
+type taskDef struct {
+	family                  string
+	revision                int
+	arn                     string
+	status                  string
+	containerDefinitions    []json.RawMessage
+	networkMode             string
+	cpu                     string
+	memory                  string
+	requiresCompatibilities []string
+	executionRoleArn        string
+	taskRoleArn             string
+	registeredAt            time.Time
+}
+
+type ecsTask struct {
+	taskArn       string
+	taskDefArn    string
+	clusterArn    string
+	group         string
+	launchType    string
+	cpu           string
+	memory        string
+	lastStatus    string
+	desiredStatus string
+	startedAt     time.Time
+	createdAt     time.Time
+}
+
+type ecsService struct {
+	name         string
+	arn          string
+	clusterArn   string
+	taskDefArn   string
+	desiredCount int
+	runningCount int
+	pendingCount int
+	launchType   string
+	status       string
+	createdAt    time.Time
+}
+
+func New(region string) *Service {
+	if region == "" {
+		region = "us-east-1"
+	}
+	s := &Service{
+		region:   region,
+		clusters: map[string]*cluster{},
+		taskDefs: map[string]*taskDef{},
+		taskFams: map[string]int{},
+		tasks:    map[string]*ecsTask{},
+		services: map[string]*ecsService{},
+		tags:     map[string]map[string]string{},
+	}
+	s.makeCluster("default")
+	return s
+}
+
+func (s *Service) Name() string { return "ecs" }
+
+func (s *Service) Detect(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), ecsTarget)
+}
+
+func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	action := strings.TrimPrefix(r.Header.Get("X-Amz-Target"), ecsTarget)
+	switch action {
+	// Clusters
+	case "CreateCluster":
+		s.createCluster(w, r)
+	case "DeleteCluster":
+		s.deleteCluster(w, r)
+	case "DescribeClusters":
+		s.describeClusters(w, r)
+	case "ListClusters":
+		s.listClusters(w, r)
+	// Task definitions
+	case "RegisterTaskDefinition":
+		s.registerTaskDefinition(w, r)
+	case "DeregisterTaskDefinition":
+		s.deregisterTaskDefinition(w, r)
+	case "DescribeTaskDefinition":
+		s.describeTaskDefinition(w, r)
+	case "ListTaskDefinitions":
+		s.listTaskDefinitions(w, r)
+	case "ListTaskDefinitionFamilies":
+		s.listTaskDefinitionFamilies(w, r)
+	// Tasks
+	case "RunTask":
+		s.runTask(w, r)
+	case "StopTask":
+		s.stopTask(w, r)
+	case "DescribeTasks":
+		s.describeTasks(w, r)
+	case "ListTasks":
+		s.listTasks(w, r)
+	// Services
+	case "CreateService":
+		s.createService(w, r)
+	case "UpdateService":
+		s.updateService(w, r)
+	case "DeleteService":
+		s.deleteService(w, r)
+	case "DescribeServices":
+		s.describeServices(w, r)
+	case "ListServices":
+		s.listServices(w, r)
+	// Tags
+	case "TagResource":
+		s.tagResource(w, r)
+	case "UntagResource":
+		s.untagResource(w, r)
+	case "ListTagsForResource":
+		s.listTagsForResource(w, r)
+	default:
+		jsonError(w, http.StatusBadRequest, "UnsupportedOperationException",
+			fmt.Sprintf("Operation %s is not supported.", action))
+	}
+}
+
+// --- Clusters ---
+
+func (s *Service) makeCluster(name string) *cluster {
+	c := &cluster{
+		name:      name,
+		arn:       s.clusterARN(name),
+		status:    "ACTIVE",
+		createdAt: time.Now().UTC(),
+	}
+	s.clusters[name] = c
+	return c
+}
+
+func (s *Service) createCluster(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClusterName string              `json:"clusterName"`
+		Tags        []map[string]string `json:"tags"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.ClusterName == "" {
+		req.ClusterName = "default"
+	}
+
+	s.mu.Lock()
+	c, exists := s.clusters[req.ClusterName]
+	if !exists {
+		c = s.makeCluster(req.ClusterName)
+		for _, t := range req.Tags {
+			s.setTag(c.arn, t["key"], t["value"])
+		}
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": clusterMeta(c)})
+}
+
+func (s *Service) deleteCluster(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster string `json:"cluster"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	c, ok := s.resolveCluster(req.Cluster)
+	if ok {
+		delete(s.clusters, c.name)
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ClusterNotFoundException", "Cluster not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": clusterMeta(c)})
+}
+
+func (s *Service) describeClusters(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Clusters []string `json:"clusters"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []map[string]interface{}
+	if len(req.Clusters) == 0 {
+		for _, c := range s.clusters {
+			result = append(result, clusterMeta(c))
+		}
+	} else {
+		for _, id := range req.Clusters {
+			if c, ok := s.resolveCluster(id); ok {
+				result = append(result, clusterMeta(c))
+			}
+		}
+	}
+	if result == nil {
+		result = []map[string]interface{}{}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"clusters": result, "failures": []interface{}{}})
+}
+
+func (s *Service) listClusters(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	arns := []string{}
+	for _, c := range s.clusters {
+		arns = append(arns, c.arn)
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"clusterArns": arns})
+}
+
+// --- Task Definitions ---
+
+func (s *Service) registerTaskDefinition(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Family                  string            `json:"family"`
+		ContainerDefinitions    []json.RawMessage `json:"containerDefinitions"`
+		NetworkMode             string            `json:"networkMode"`
+		CPU                     string            `json:"cpu"`
+		Memory                  string            `json:"memory"`
+		RequiresCompatibilities []string          `json:"requiresCompatibilities"`
+		ExecutionRoleArn        string            `json:"executionRoleArn"`
+		TaskRoleArn             string            `json:"taskRoleArn"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Family == "" {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "family is required")
+		return
+	}
+
+	s.mu.Lock()
+	revision := s.taskFams[req.Family] + 1
+	s.taskFams[req.Family] = revision
+	td := &taskDef{
+		family:                  req.Family,
+		revision:                revision,
+		arn:                     s.taskDefARN(req.Family, revision),
+		status:                  "ACTIVE",
+		containerDefinitions:    req.ContainerDefinitions,
+		networkMode:             req.NetworkMode,
+		cpu:                     req.CPU,
+		memory:                  req.Memory,
+		requiresCompatibilities: req.RequiresCompatibilities,
+		executionRoleArn:        req.ExecutionRoleArn,
+		taskRoleArn:             req.TaskRoleArn,
+		registeredAt:            time.Now().UTC(),
+	}
+	if len(td.containerDefinitions) == 0 {
+		td.containerDefinitions = []json.RawMessage{}
+	}
+	if len(td.requiresCompatibilities) == 0 {
+		td.requiresCompatibilities = []string{"EC2"}
+	}
+	s.taskDefs[tdKey(req.Family, revision)] = td
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"taskDefinition": taskDefMeta(td)})
+}
+
+func (s *Service) deregisterTaskDefinition(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TaskDefinition string `json:"taskDefinition"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	td, ok := s.resolveTaskDef(req.TaskDefinition)
+	if ok {
+		td.status = "INACTIVE"
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task definition not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"taskDefinition": taskDefMeta(td)})
+}
+
+func (s *Service) describeTaskDefinition(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TaskDefinition string `json:"taskDefinition"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	td, ok := s.resolveTaskDef(req.TaskDefinition)
+	s.mu.RUnlock()
+
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ClientException", "task definition not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"taskDefinition": taskDefMeta(td)})
+}
+
+func (s *Service) listTaskDefinitions(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FamilyPrefix string `json:"familyPrefix"`
+		Status       string `json:"status"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	arns := []string{}
+	for _, td := range s.taskDefs {
+		if req.FamilyPrefix != "" && !strings.HasPrefix(td.family, req.FamilyPrefix) {
+			continue
+		}
+		if req.Status != "" && td.status != req.Status {
+			continue
+		}
+		arns = append(arns, td.arn)
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"taskDefinitionArns": arns})
+}
+
+func (s *Service) listTaskDefinitionFamilies(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FamilyPrefix string `json:"familyPrefix"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	seen := map[string]bool{}
+	families := []string{}
+	for _, td := range s.taskDefs {
+		if req.FamilyPrefix != "" && !strings.HasPrefix(td.family, req.FamilyPrefix) {
+			continue
+		}
+		if !seen[td.family] {
+			seen[td.family] = true
+			families = append(families, td.family)
+		}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"families": families})
+}
+
+// --- Tasks ---
+
+func (s *Service) runTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster        string `json:"cluster"`
+		TaskDefinition string `json:"taskDefinition"`
+		Count          int    `json:"count"`
+		LaunchType     string `json:"launchType"`
+		Group          string `json:"group"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Cluster == "" {
+		req.Cluster = "default"
+	}
+	if req.Count <= 0 {
+		req.Count = 1
+	}
+	if req.LaunchType == "" {
+		req.LaunchType = "FARGATE"
+	}
+
+	s.mu.Lock()
+	c, ok := s.resolveCluster(req.Cluster)
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ClusterNotFoundException", "cluster not found")
+		return
+	}
+	td, ok := s.resolveTaskDef(req.TaskDefinition)
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task definition not found")
+		return
+	}
+
+	now := time.Now().UTC()
+	var tasks []map[string]interface{}
+	for i := 0; i < req.Count; i++ {
+		t := &ecsTask{
+			taskArn:       s.taskARN(c.name, uid.New()),
+			taskDefArn:    td.arn,
+			clusterArn:    c.arn,
+			group:         req.Group,
+			launchType:    req.LaunchType,
+			cpu:           td.cpu,
+			memory:        td.memory,
+			lastStatus:    "RUNNING",
+			desiredStatus: "RUNNING",
+			startedAt:     now,
+			createdAt:     now,
+		}
+		s.tasks[t.taskArn] = t
+		c.runningTasksCount++
+		tasks = append(tasks, taskMeta(t))
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"tasks": tasks, "failures": []interface{}{}})
+}
+
+func (s *Service) stopTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster string `json:"cluster"`
+		Task    string `json:"task"`
+		Reason  string `json:"reason"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	t, ok := s.resolveTask(req.Cluster, req.Task)
+	if ok {
+		if t.lastStatus == "RUNNING" {
+			if c, cok := s.resolveCluster(req.Cluster); cok {
+				c.runningTasksCount--
+			}
+		}
+		t.lastStatus = "STOPPED"
+		t.desiredStatus = "STOPPED"
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"task": taskMeta(t)})
+}
+
+func (s *Service) describeTasks(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster string   `json:"cluster"`
+		Tasks   []string `json:"tasks"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []map[string]interface{}
+	for _, id := range req.Tasks {
+		if t, ok := s.resolveTask(req.Cluster, id); ok {
+			result = append(result, taskMeta(t))
+		}
+	}
+	if result == nil {
+		result = []map[string]interface{}{}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"tasks": result, "failures": []interface{}{}})
+}
+
+func (s *Service) listTasks(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster       string `json:"cluster"`
+		ServiceName   string `json:"serviceName"`
+		Family        string `json:"family"`
+		DesiredStatus string `json:"desiredStatus"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var clusterArn string
+	if req.Cluster != "" {
+		if c, ok := s.resolveCluster(req.Cluster); ok {
+			clusterArn = c.arn
+		}
+	}
+
+	arns := []string{}
+	for _, t := range s.tasks {
+		if clusterArn != "" && t.clusterArn != clusterArn {
+			continue
+		}
+		if req.DesiredStatus != "" && t.desiredStatus != req.DesiredStatus {
+			continue
+		}
+		if req.ServiceName != "" {
+			expectedGroup := "service:" + req.ServiceName
+			if t.group != expectedGroup {
+				continue
+			}
+		}
+		arns = append(arns, t.taskArn)
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"taskArns": arns})
+}
+
+// --- Services ---
+
+func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster        string `json:"cluster"`
+		ServiceName    string `json:"serviceName"`
+		TaskDefinition string `json:"taskDefinition"`
+		DesiredCount   int    `json:"desiredCount"`
+		LaunchType     string `json:"launchType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ServiceName == "" {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "serviceName is required")
+		return
+	}
+	if req.Cluster == "" {
+		req.Cluster = "default"
+	}
+	if req.LaunchType == "" {
+		req.LaunchType = "FARGATE"
+	}
+
+	s.mu.Lock()
+	c, ok := s.resolveCluster(req.Cluster)
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ClusterNotFoundException", "cluster not found")
+		return
+	}
+	td, ok := s.resolveTaskDef(req.TaskDefinition)
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task definition not found")
+		return
+	}
+
+	svc := &ecsService{
+		name:         req.ServiceName,
+		arn:          s.serviceARN(c.name, req.ServiceName),
+		clusterArn:   c.arn,
+		taskDefArn:   td.arn,
+		desiredCount: req.DesiredCount,
+		runningCount: req.DesiredCount, // simulated as immediately running
+		pendingCount: 0,
+		launchType:   req.LaunchType,
+		status:       "ACTIVE",
+		createdAt:    time.Now().UTC(),
+	}
+	s.services[svc.arn] = svc
+	c.activeServicesCount++
+	c.runningTasksCount += req.DesiredCount
+
+	// Create simulated tasks for the service
+	now := time.Now().UTC()
+	for i := 0; i < req.DesiredCount; i++ {
+		t := &ecsTask{
+			taskArn:       s.taskARN(c.name, uid.New()),
+			taskDefArn:    td.arn,
+			clusterArn:    c.arn,
+			group:         "service:" + req.ServiceName,
+			launchType:    req.LaunchType,
+			cpu:           td.cpu,
+			memory:        td.memory,
+			lastStatus:    "RUNNING",
+			desiredStatus: "RUNNING",
+			startedAt:     now,
+			createdAt:     now,
+		}
+		s.tasks[t.taskArn] = t
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+}
+
+func (s *Service) updateService(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster        string `json:"cluster"`
+		Service        string `json:"service"`
+		TaskDefinition string `json:"taskDefinition"`
+		DesiredCount   *int   `json:"desiredCount"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	svc, ok := s.resolveService(req.Cluster, req.Service)
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ServiceNotFoundException", "service not found")
+		return
+	}
+
+	if req.TaskDefinition != "" {
+		if td, ok := s.resolveTaskDef(req.TaskDefinition); ok {
+			svc.taskDefArn = td.arn
+		}
+	}
+	if req.DesiredCount != nil {
+		svc.desiredCount = *req.DesiredCount
+		svc.runningCount = *req.DesiredCount
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+}
+
+func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster string `json:"cluster"`
+		Service string `json:"service"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	svc, ok := s.resolveService(req.Cluster, req.Service)
+	if ok {
+		svc.status = "INACTIVE"
+		svc.desiredCount = 0
+		svc.runningCount = 0
+		delete(s.services, svc.arn)
+		if c, cok := s.resolveCluster(req.Cluster); cok {
+			c.activeServicesCount--
+		}
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ServiceNotFoundException", "service not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+}
+
+func (s *Service) describeServices(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster  string   `json:"cluster"`
+		Services []string `json:"services"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []map[string]interface{}
+	for _, id := range req.Services {
+		if svc, ok := s.resolveService(req.Cluster, id); ok {
+			result = append(result, serviceMeta(svc))
+		}
+	}
+	if result == nil {
+		result = []map[string]interface{}{}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"services": result, "failures": []interface{}{}})
+}
+
+func (s *Service) listServices(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster string `json:"cluster"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var clusterArn string
+	if req.Cluster != "" {
+		if c, ok := s.resolveCluster(req.Cluster); ok {
+			clusterArn = c.arn
+		}
+	}
+
+	arns := []string{}
+	for _, svc := range s.services {
+		if clusterArn != "" && svc.clusterArn != clusterArn {
+			continue
+		}
+		arns = append(arns, svc.arn)
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"serviceArns": arns})
+}
+
+// --- Tags ---
+
+func (s *Service) tagResource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ResourceArn string              `json:"resourceArn"`
+		Tags        []map[string]string `json:"tags"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	for _, t := range req.Tags {
+		s.setTag(req.ResourceArn, t["key"], t["value"])
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) untagResource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ResourceArn string   `json:"resourceArn"`
+		TagKeys     []string `json:"tagKeys"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if m, ok := s.tags[req.ResourceArn]; ok {
+		for _, k := range req.TagKeys {
+			delete(m, k)
+		}
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ResourceArn string `json:"resourceArn"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	m := s.tags[req.ResourceArn]
+	type tag struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	tags := []tag{}
+	for k, v := range m {
+		tags = append(tags, tag{Key: k, Value: v})
+	}
+	s.mu.RUnlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"tags": tags})
+}
+
+// --- ARN helpers ---
+
+func (s *Service) clusterARN(name string) string {
+	return fmt.Sprintf("arn:aws:ecs:%s:%s:cluster/%s", s.region, accountID, name)
+}
+
+func (s *Service) taskDefARN(family string, revision int) string {
+	return fmt.Sprintf("arn:aws:ecs:%s:%s:task-definition/%s:%d", s.region, accountID, family, revision)
+}
+
+func (s *Service) taskARN(clusterName, id string) string {
+	return fmt.Sprintf("arn:aws:ecs:%s:%s:task/%s/%s", s.region, accountID, clusterName, id)
+}
+
+func (s *Service) serviceARN(clusterName, serviceName string) string {
+	return fmt.Sprintf("arn:aws:ecs:%s:%s:service/%s/%s", s.region, accountID, clusterName, serviceName)
+}
+
+// --- Resolve helpers (caller must hold appropriate lock) ---
+
+// resolveCluster looks up a cluster by name or ARN.
+func (s *Service) resolveCluster(id string) (*cluster, bool) {
+	// Try name first
+	if c, ok := s.clusters[id]; ok {
+		return c, true
+	}
+	// Try ARN — last segment after "cluster/"
+	if strings.Contains(id, ":cluster/") {
+		name := id[strings.LastIndex(id, "/")+1:]
+		if c, ok := s.clusters[name]; ok {
+			return c, true
+		}
+	}
+	return nil, false
+}
+
+// resolveTaskDef resolves "family", "family:rev", or full ARN.
+func (s *Service) resolveTaskDef(id string) (*taskDef, bool) {
+	if id == "" {
+		return nil, false
+	}
+	// Full ARN: arn:aws:ecs:...:task-definition/family:rev
+	if strings.HasPrefix(id, "arn:") {
+		id = id[strings.LastIndex(id, "/")+1:]
+	}
+	// "family:revision"
+	if strings.Contains(id, ":") {
+		if td, ok := s.taskDefs[id]; ok {
+			return td, true
+		}
+		return nil, false
+	}
+	// Bare family name — use latest revision
+	if rev, ok := s.taskFams[id]; ok {
+		return s.taskDefs[tdKey(id, rev)], true
+	}
+	return nil, false
+}
+
+// resolveTask looks up a task by ARN or short ID within an optional cluster.
+func (s *Service) resolveTask(clusterHint, id string) (*ecsTask, bool) {
+	if t, ok := s.tasks[id]; ok {
+		return t, true
+	}
+	// id might be a UUID (short ID) — scan
+	for arn, t := range s.tasks {
+		if strings.HasSuffix(arn, "/"+id) {
+			if clusterHint == "" {
+				return t, true
+			}
+			if c, ok := s.resolveCluster(clusterHint); ok && t.clusterArn == c.arn {
+				return t, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// resolveService looks up a service by ARN or name within an optional cluster.
+func (s *Service) resolveService(clusterHint, id string) (*ecsService, bool) {
+	if svc, ok := s.services[id]; ok {
+		return svc, true
+	}
+	for _, svc := range s.services {
+		if svc.name == id || svc.arn == id {
+			if clusterHint == "" {
+				return svc, true
+			}
+			if c, ok := s.resolveCluster(clusterHint); ok && svc.clusterArn == c.arn {
+				return svc, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (s *Service) setTag(arn, key, value string) {
+	if s.tags[arn] == nil {
+		s.tags[arn] = map[string]string{}
+	}
+	s.tags[arn][key] = value
+}
+
+// --- Metadata serialisers ---
+
+func clusterMeta(c *cluster) map[string]interface{} {
+	return map[string]interface{}{
+		"clusterArn":                     c.arn,
+		"clusterName":                    c.name,
+		"status":                         c.status,
+		"runningTasksCount":              c.runningTasksCount,
+		"pendingTasksCount":              c.pendingTasksCount,
+		"activeServicesCount":            c.activeServicesCount,
+		"registeredTaskDefinitionsCount": 0,
+	}
+}
+
+func taskDefMeta(td *taskDef) map[string]interface{} {
+	containerDefs := td.containerDefinitions
+	if containerDefs == nil {
+		containerDefs = []json.RawMessage{}
+	}
+	compat := td.requiresCompatibilities
+	if compat == nil {
+		compat = []string{"EC2"}
+	}
+	return map[string]interface{}{
+		"taskDefinitionArn":       td.arn,
+		"family":                  td.family,
+		"revision":                td.revision,
+		"status":                  td.status,
+		"containerDefinitions":    containerDefs,
+		"networkMode":             td.networkMode,
+		"cpu":                     td.cpu,
+		"memory":                  td.memory,
+		"requiresCompatibilities": compat,
+		"executionRoleArn":        td.executionRoleArn,
+		"taskRoleArn":             td.taskRoleArn,
+		"registeredAt":            float64(td.registeredAt.Unix()),
+	}
+}
+
+func taskMeta(t *ecsTask) map[string]interface{} {
+	return map[string]interface{}{
+		"taskArn":           t.taskArn,
+		"taskDefinitionArn": t.taskDefArn,
+		"clusterArn":        t.clusterArn,
+		"group":             t.group,
+		"launchType":        t.launchType,
+		"cpu":               t.cpu,
+		"memory":            t.memory,
+		"lastStatus":        t.lastStatus,
+		"desiredStatus":     t.desiredStatus,
+		"startedAt":         float64(t.startedAt.Unix()),
+		"createdAt":         float64(t.createdAt.Unix()),
+		"connectivity":      "CONNECTED",
+		"containers":        []interface{}{},
+	}
+}
+
+func serviceMeta(svc *ecsService) map[string]interface{} {
+	return map[string]interface{}{
+		"serviceArn":     svc.arn,
+		"serviceName":    svc.name,
+		"clusterArn":     svc.clusterArn,
+		"taskDefinition": svc.taskDefArn,
+		"desiredCount":   svc.desiredCount,
+		"runningCount":   svc.runningCount,
+		"pendingCount":   svc.pendingCount,
+		"launchType":     svc.launchType,
+		"status":         svc.status,
+		"createdAt":      float64(svc.createdAt.Unix()),
+		"deployments":    []interface{}{},
+		"events":         []interface{}{},
+	}
+}
+
+// --- Key helpers ---
+
+func tdKey(family string, revision int) string {
+	return fmt.Sprintf("%s:%d", family, revision)
+}
+
+// --- HTTP helpers ---
+
+func jsonWrite(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func jsonError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"__type":  code,
+		"message": message,
+	})
+}
