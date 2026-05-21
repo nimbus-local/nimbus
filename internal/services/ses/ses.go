@@ -90,7 +90,8 @@ func isSESAction(action string) bool {
 	switch action {
 	case "SendEmail", "SendRawEmail", "VerifyEmailIdentity",
 		"VerifyEmailAddress", "ListIdentities", "DeleteIdentity",
-		"GetSendQuota", "GetSendStatistics":
+		"GetSendQuota", "GetSendStatistics",
+		"GetIdentityVerificationAttributes":
 		return true
 	}
 	return false
@@ -132,6 +133,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getSendQuota(w, r)
 	case "GetSendStatistics":
 		s.getSendStatistics(w, r)
+	case "GetIdentityVerificationAttributes":
+		s.getIdentityVerificationAttributes(w, r)
 	default:
 		s.xmlError(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", action))
@@ -398,6 +401,52 @@ func (s *Service) getSendStatistics(w http.ResponseWriter, r *http.Request) {
 			DeliveryAttempts: total,
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 		}}
+	}
+	xmlWrite(w, http.StatusOK, resp)
+}
+
+// GetIdentityVerificationAttributes — all identities are auto-verified in Nimbus
+func (s *Service) getIdentityVerificationAttributes(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.xmlError(w, http.StatusBadRequest, "InvalidParameterValue", "Could not parse form")
+		return
+	}
+
+	var identities []string
+	for i := 1; ; i++ {
+		id := r.FormValue(fmt.Sprintf("Identities.member.%d", i))
+		if id == "" {
+			break
+		}
+		identities = append(identities, id)
+	}
+
+	type attrValue struct {
+		VerificationStatus string `xml:"VerificationStatus"`
+	}
+	type entry struct {
+		Key   string    `xml:"key"`
+		Value attrValue `xml:"value"`
+	}
+	type result struct {
+		XMLName xml.Name `xml:"GetIdentityVerificationAttributesResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
+			VerificationAttributes []entry `xml:"VerificationAttributes>entry"`
+		} `xml:"GetIdentityVerificationAttributesResult"`
+		Metadata struct {
+			RequestID string `xml:"RequestId"`
+		} `xml:"ResponseMetadata"`
+	}
+
+	var resp result
+	resp.Xmlns = "http://ses.amazonaws.com/doc/2010-12-01/"
+	resp.Metadata.RequestID = uid.New()
+	for _, id := range identities {
+		resp.Result.VerificationAttributes = append(resp.Result.VerificationAttributes, entry{
+			Key:   id,
+			Value: attrValue{VerificationStatus: "Success"},
+		})
 	}
 	xmlWrite(w, http.StatusOK, resp)
 }

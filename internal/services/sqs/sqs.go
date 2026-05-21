@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"crypto/md5"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -81,13 +82,17 @@ func (s *Service) Detect(r *http.Request) bool {
 	}
 	action := r.URL.Query().Get("Action")
 	if action != "" {
-		// Only claim it if it's a known SQS action
 		return isSQSAction(action)
 	}
 	// SQS path style: /:accountId/:queueName
 	path := strings.Trim(r.URL.Path, "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 2 && parts[0] == accountID {
+		return true
+	}
+	// Also detect form-body Action for traditional query protocol
+	r.ParseForm()
+	if isSQSAction(r.Form.Get("Action")) {
 		return true
 	}
 	return false
@@ -104,15 +109,114 @@ func isSQSAction(action string) bool {
 	return false
 }
 
+// sqsCtx captures the request protocol (JSON vs. form/query) and the decoded body.
+type sqsCtx struct {
+	useJSON bool
+	body    map[string]interface{}
+}
+
+func newSQSCtx(r *http.Request) sqsCtx {
+	target := r.Header.Get("X-Amz-Target")
+	ct := r.Header.Get("Content-Type")
+	if target != "" || strings.Contains(ct, "application/x-amz-json") {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body == nil {
+			body = map[string]interface{}{}
+		}
+		return sqsCtx{useJSON: true, body: body}
+	}
+	return sqsCtx{useJSON: false}
+}
+
+// str reads a string parameter from either JSON body or form values.
+func (c *sqsCtx) str(key string, r *http.Request) string {
+	if c.useJSON {
+		v, _ := c.body[key].(string)
+		return v
+	}
+	return r.FormValue(key)
+}
+
+// intVal reads an integer parameter.
+func (c *sqsCtx) intVal(key string, r *http.Request) (int, bool) {
+	if c.useJSON {
+		switch v := c.body[key].(type) {
+		case float64:
+			return int(v), true
+		case string:
+			n, err := strconv.Atoi(v)
+			return n, err == nil
+		}
+		return 0, false
+	}
+	s := r.FormValue(key)
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
+// attrs reads the Attributes map (JSON: {"Attributes": {"K":"V"}} vs form Attribute.N.Name/Value).
+func (c *sqsCtx) attrs(r *http.Request) map[string]string {
+	if c.useJSON {
+		raw, _ := c.body["Attributes"].(map[string]interface{})
+		if raw == nil {
+			return nil
+		}
+		m := make(map[string]string, len(raw))
+		for k, v := range raw {
+			if sv, ok := v.(string); ok {
+				m[k] = sv
+			}
+		}
+		return m
+	}
+	m := map[string]string{}
+	for i := 1; ; i++ {
+		k := r.FormValue(fmt.Sprintf("Attribute.%d.Name", i))
+		v := r.FormValue(fmt.Sprintf("Attribute.%d.Value", i))
+		if k == "" {
+			break
+		}
+		m[k] = v
+	}
+	return m
+}
+
+// writeOK writes either a JSON map or an XML struct depending on protocol.
+func (c *sqsCtx) writeOK(w http.ResponseWriter, jsonVal interface{}, xmlVal interface{}) {
+	if c.useJSON {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(jsonVal)
+	} else {
+		xmlWrite(w, http.StatusOK, xmlVal)
+	}
+}
+
+// writeError writes a protocol-appropriate error response.
+func (c *sqsCtx) writeError(w http.ResponseWriter, status int, code, msg string) {
+	if c.useJSON {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": msg})
+	} else {
+		sqsXMLError(w, status, code, msg)
+	}
+}
+
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.xmlError(w, http.StatusBadRequest, "InvalidParameterValue", "could not parse form")
+		sqsXMLError(w, http.StatusBadRequest, "InvalidParameterValue", "could not parse form")
 		return
 	}
 
+	ctx := newSQSCtx(r)
+
 	action := r.FormValue("Action")
 	if action == "" {
-		// JSON/AWS SDK v2 style uses X-Amz-Target
 		target := r.Header.Get("X-Amz-Target")
 		if idx := strings.LastIndex(target, "."); idx != -1 {
 			action = target[idx+1:]
@@ -121,29 +225,38 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch action {
 	case "CreateQueue":
-		s.createQueue(w, r)
+		s.createQueue(w, r, ctx)
 	case "DeleteQueue":
-		s.deleteQueue(w, r)
+		s.deleteQueue(w, r, ctx)
 	case "GetQueueUrl":
-		s.getQueueURL(w, r)
+		s.getQueueURL(w, r, ctx)
 	case "GetQueueAttributes":
-		s.getQueueAttributes(w, r)
+		s.getQueueAttributes(w, r, ctx)
 	case "SetQueueAttributes":
-		s.setQueueAttributes(w, r)
+		s.setQueueAttributes(w, r, ctx)
 	case "ListQueues":
-		s.listQueues(w, r)
+		s.listQueues(w, r, ctx)
 	case "SendMessage":
-		s.sendMessage(w, r)
+		s.sendMessage(w, r, ctx)
 	case "ReceiveMessage":
-		s.receiveMessage(w, r)
+		s.receiveMessage(w, r, ctx)
 	case "DeleteMessage":
-		s.deleteMessage(w, r)
+		s.deleteMessage(w, r, ctx)
 	case "PurgeQueue":
-		s.purgeQueue(w, r)
+		s.purgeQueue(w, r, ctx)
 	case "ChangeMessageVisibility":
-		s.changeMessageVisibility(w, r)
+		s.changeMessageVisibility(w, r, ctx)
+	case "ListQueueTags":
+		s.listQueueTags(w, r, ctx)
+	case "TagQueue":
+		s.tagQueue(w, r, ctx)
+	case "UntagQueue":
+		ctx.writeOK(w, map[string]interface{}{}, struct {
+			XMLName  xml.Name         `xml:"UntagQueueResponse"`
+			Metadata responseMetadata `xml:"ResponseMetadata"`
+		}{Metadata: responseMetadata{RequestId: uid.New()}})
 	default:
-		s.xmlError(w, http.StatusBadRequest, "InvalidAction",
+		ctx.writeError(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("The action %s is not valid for this endpoint.", action))
 	}
 }
@@ -158,10 +271,10 @@ func (s *Service) queueARN(name string) string {
 	return fmt.Sprintf("arn:aws:sqs:%s:%s:%s", s.region, accountID, name)
 }
 
-func (s *Service) createQueue(w http.ResponseWriter, r *http.Request) {
-	name := r.FormValue("QueueName")
+func (s *Service) createQueue(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	name := ctx.str("QueueName", r)
 	if name == "" {
-		s.xmlError(w, http.StatusBadRequest, "InvalidParameterValue", "QueueName is required")
+		ctx.writeError(w, http.StatusBadRequest, "InvalidParameterValue", "QueueName is required")
 		return
 	}
 
@@ -183,12 +296,7 @@ func (s *Service) createQueue(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Override with provided attributes
-		for i := 1; ; i++ {
-			k := r.FormValue(fmt.Sprintf("Attribute.%d.Name", i))
-			v := r.FormValue(fmt.Sprintf("Attribute.%d.Value", i))
-			if k == "" {
-				break
-			}
+		for k, v := range ctx.attrs(r) {
 			attrs[k] = v
 		}
 
@@ -202,7 +310,7 @@ func (s *Service) createQueue(w http.ResponseWriter, r *http.Request) {
 		s.byName[name] = qURL
 	}
 
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"CreateQueueResponse"`
 		Result  struct {
 			QueueUrl string `xml:"QueueUrl"`
@@ -210,14 +318,15 @@ func (s *Service) createQueue(w http.ResponseWriter, r *http.Request) {
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
 
-	var res result
-	res.Result.QueueUrl = qURL
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+	var xmlRes xmlResult
+	xmlRes.Result.QueueUrl = qURL
+	xmlRes.Metadata.RequestId = uid.New()
+
+	ctx.writeOK(w, map[string]string{"QueueUrl": qURL}, xmlRes)
 }
 
-func (s *Service) deleteQueue(w http.ResponseWriter, r *http.Request) {
-	qURL := r.FormValue("QueueUrl")
+func (s *Service) deleteQueue(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
 	s.mu.Lock()
 	q, ok := s.queues[qURL]
 	if ok {
@@ -226,131 +335,175 @@ func (s *Service) deleteQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName  xml.Name         `xml:"DeleteQueueResponse"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	xmlWrite(w, http.StatusOK, result{Metadata: responseMetadata{RequestId: uid.New()}})
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
 }
 
-func (s *Service) getQueueURL(w http.ResponseWriter, r *http.Request) {
-	name := r.FormValue("QueueName")
+func (s *Service) getQueueURL(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	name := ctx.str("QueueName", r)
 	s.mu.RLock()
 	qURL, ok := s.byName[name]
 	s.mu.RUnlock()
 
 	if !ok {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"GetQueueUrlResponse"`
 		Result  struct {
 			QueueUrl string `xml:"QueueUrl"`
 		} `xml:"GetQueueUrlResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	var res result
-	res.Result.QueueUrl = qURL
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+	var xmlRes xmlResult
+	xmlRes.Result.QueueUrl = qURL
+	xmlRes.Metadata.RequestId = uid.New()
+	ctx.writeOK(w, map[string]string{"QueueUrl": qURL}, xmlRes)
 }
 
-func (s *Service) listQueues(w http.ResponseWriter, r *http.Request) {
-	prefix := r.FormValue("QueueNamePrefix")
+func (s *Service) listQueues(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	prefix := ctx.str("QueueNamePrefix", r)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"ListQueuesResponse"`
 		Result  struct {
 			QueueUrl []string `xml:"QueueUrl"`
 		} `xml:"ListQueuesResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	var res result
+	var xmlRes xmlResult
+	var jsonURLs []string
 	for name, qURL := range s.byName {
 		if prefix == "" || strings.HasPrefix(name, prefix) {
-			res.Result.QueueUrl = append(res.Result.QueueUrl, qURL)
+			xmlRes.Result.QueueUrl = append(xmlRes.Result.QueueUrl, qURL)
+			jsonURLs = append(jsonURLs, qURL)
 		}
 	}
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+	xmlRes.Metadata.RequestId = uid.New()
+	ctx.writeOK(w, map[string]interface{}{"QueueUrls": jsonURLs}, xmlRes)
 }
 
-func (s *Service) getQueueAttributes(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) getQueueAttributes(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
 	q.mu.Lock()
-	// Update approximate message count
 	q.attributes["ApproximateNumberOfMessages"] = strconv.Itoa(len(q.messages))
 	q.attributes["ApproximateNumberOfMessagesNotVisible"] = strconv.Itoa(len(q.inflightByReceipt))
 	q.mu.Unlock()
 
-	type attr struct {
+	// Determine which attributes to return
+	var requestedNames []string
+	if ctx.useJSON {
+		if names, ok := ctx.body["AttributeNames"].([]interface{}); ok {
+			for _, n := range names {
+				if s, ok := n.(string); ok {
+					requestedNames = append(requestedNames, s)
+				}
+			}
+		}
+	} else {
+		for i := 1; ; i++ {
+			n := r.FormValue(fmt.Sprintf("AttributeName.%d", i))
+			if n == "" {
+				break
+			}
+			requestedNames = append(requestedNames, n)
+		}
+	}
+
+	wantAll := len(requestedNames) == 0
+	for _, n := range requestedNames {
+		if n == "All" {
+			wantAll = true
+		}
+	}
+
+	wantAttr := func(name string) bool {
+		if wantAll {
+			return true
+		}
+		for _, n := range requestedNames {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	type xmlAttr struct {
 		Name  string `xml:"Name"`
 		Value string `xml:"Value"`
 	}
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"GetQueueAttributesResponse"`
 		Result  struct {
-			Attribute []attr `xml:"Attribute"`
+			Attribute []xmlAttr `xml:"Attribute"`
 		} `xml:"GetQueueAttributesResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
 
-	var res result
+	jsonAttrs := map[string]string{}
+	var xmlRes xmlResult
+	q.mu.Lock()
 	for k, v := range q.attributes {
-		res.Result.Attribute = append(res.Result.Attribute, attr{Name: k, Value: v})
+		if wantAttr(k) {
+			xmlRes.Result.Attribute = append(xmlRes.Result.Attribute, xmlAttr{Name: k, Value: v})
+			jsonAttrs[k] = v
+		}
 	}
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+	q.mu.Unlock()
+	xmlRes.Metadata.RequestId = uid.New()
+	ctx.writeOK(w, map[string]interface{}{"Attributes": jsonAttrs}, xmlRes)
 }
 
-func (s *Service) setQueueAttributes(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) setQueueAttributes(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
 	q.mu.Lock()
-	for i := 1; ; i++ {
-		k := r.FormValue(fmt.Sprintf("Attribute.%d.Name", i))
-		v := r.FormValue(fmt.Sprintf("Attribute.%d.Value", i))
-		if k == "" {
-			break
-		}
+	for k, v := range ctx.attrs(r) {
 		q.attributes[k] = v
 	}
 	q.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName  xml.Name         `xml:"SetQueueAttributesResponse"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	xmlWrite(w, http.StatusOK, result{Metadata: responseMetadata{RequestId: uid.New()}})
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
 }
 
 // --- Message operations ---
 
-func (s *Service) sendMessage(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) sendMessage(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
-	body := r.FormValue("MessageBody")
+	body := ctx.str("MessageBody", r)
 	sum := md5.Sum([]byte(body))
 	msgID := uid.New()
 
@@ -366,7 +519,7 @@ func (s *Service) sendMessage(w http.ResponseWriter, r *http.Request) {
 	q.messages = append(q.messages, msg)
 	q.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"SendMessageResponse"`
 		Result  struct {
 			MD5OfMessageBody string `xml:"MD5OfMessageBody"`
@@ -374,40 +527,41 @@ func (s *Service) sendMessage(w http.ResponseWriter, r *http.Request) {
 		} `xml:"SendMessageResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	var res result
-	res.Result.MD5OfMessageBody = msg.md5
-	res.Result.MessageId = msgID
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+	var xmlRes xmlResult
+	xmlRes.Result.MD5OfMessageBody = msg.md5
+	xmlRes.Result.MessageId = msgID
+	xmlRes.Metadata.RequestId = uid.New()
+	ctx.writeOK(w, map[string]string{
+		"MD5OfMessageBody": msg.md5,
+		"MessageId":        msgID,
+	}, xmlRes)
 }
 
-func (s *Service) receiveMessage(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) receiveMessage(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
-	maxStr := r.FormValue("MaxNumberOfMessages")
 	max := defaultMaxMessages
-	if maxStr != "" {
-		fmt.Sscanf(maxStr, "%d", &max)
+	if n, ok := ctx.intVal("MaxNumberOfMessages", r); ok {
+		max = n
 	}
 	if max > 10 {
 		max = 10
 	}
 
-	vtStr := r.FormValue("VisibilityTimeout")
 	vt := defaultVisibilityTimeout
-	if vtStr != "" {
-		fmt.Sscanf(vtStr, "%d", &vt)
+	if n, ok := ctx.intVal("VisibilityTimeout", r); ok {
+		vt = n
 	}
 
 	now := time.Now()
 
 	q.mu.Lock()
-	// Recover any expired in-flight messages
 	for receipt, inf := range q.inflightByReceipt {
 		if now.After(inf.visibleAt) {
 			inf.msg.visibleAt = now
@@ -427,7 +581,7 @@ func (s *Service) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	q.messages = remaining
 
-	// Move received messages to in-flight
+	receiptMap := map[*message]string{}
 	for _, msg := range received {
 		receipt := uid.New()
 		msg.visibleAt = now.Add(time.Duration(vt) * time.Second)
@@ -437,64 +591,82 @@ func (s *Service) receiveMessage(w http.ResponseWriter, r *http.Request) {
 			receiptHandle: receipt,
 			visibleAt:     msg.visibleAt,
 		}
+		receiptMap[msg] = receipt
 	}
 	q.mu.Unlock()
 
-	type msgXML struct {
+	type xmlMsg struct {
 		MessageId     string `xml:"MessageId"`
 		ReceiptHandle string `xml:"ReceiptHandle"`
 		MD5OfBody     string `xml:"MD5OfBody"`
 		Body          string `xml:"Body"`
 	}
-	type result struct {
+	type xmlResult struct {
 		XMLName xml.Name `xml:"ReceiveMessageResponse"`
 		Result  struct {
-			Message []msgXML `xml:"Message"`
+			Message []xmlMsg `xml:"Message"`
 		} `xml:"ReceiveMessageResult"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
 
-	var res result
-	for receipt, inf := range q.inflightByReceipt {
-		for _, recv := range received {
-			if recv == inf.msg {
-				res.Result.Message = append(res.Result.Message, msgXML{
-					MessageId:     recv.id,
-					ReceiptHandle: receipt,
-					MD5OfBody:     recv.md5,
-					Body:          recv.body,
-				})
-			}
-		}
+	type jsonMsg struct {
+		MessageId     string `json:"MessageId"`
+		ReceiptHandle string `json:"ReceiptHandle"`
+		MD5OfBody     string `json:"MD5OfBody"`
+		Body          string `json:"Body"`
 	}
-	res.Metadata.RequestId = uid.New()
-	xmlWrite(w, http.StatusOK, res)
+
+	var xmlRes xmlResult
+	var jsonMsgs []jsonMsg
+	for _, msg := range received {
+		receipt := receiptMap[msg]
+		xmlRes.Result.Message = append(xmlRes.Result.Message, xmlMsg{
+			MessageId:     msg.id,
+			ReceiptHandle: receipt,
+			MD5OfBody:     msg.md5,
+			Body:          msg.body,
+		})
+		jsonMsgs = append(jsonMsgs, jsonMsg{
+			MessageId:     msg.id,
+			ReceiptHandle: receipt,
+			MD5OfBody:     msg.md5,
+			Body:          msg.body,
+		})
+	}
+	xmlRes.Metadata.RequestId = uid.New()
+
+	if jsonMsgs == nil {
+		jsonMsgs = []jsonMsg{}
+	}
+	ctx.writeOK(w, map[string]interface{}{"Messages": jsonMsgs}, xmlRes)
 }
 
-func (s *Service) deleteMessage(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) deleteMessage(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
-	receipt := r.FormValue("ReceiptHandle")
+	receipt := ctx.str("ReceiptHandle", r)
 	q.mu.Lock()
 	delete(q.inflightByReceipt, receipt)
 	q.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName  xml.Name         `xml:"DeleteMessageResponse"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	xmlWrite(w, http.StatusOK, result{Metadata: responseMetadata{RequestId: uid.New()}})
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
 }
 
-func (s *Service) purgeQueue(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) purgeQueue(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
@@ -504,25 +676,27 @@ func (s *Service) purgeQueue(w http.ResponseWriter, r *http.Request) {
 	q.inflightByReceipt = map[string]*inFlight{}
 	q.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName  xml.Name         `xml:"PurgeQueueResponse"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	xmlWrite(w, http.StatusOK, result{Metadata: responseMetadata{RequestId: uid.New()}})
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
 }
 
-func (s *Service) changeMessageVisibility(w http.ResponseWriter, r *http.Request) {
-	q := s.findQueue(r)
+func (s *Service) changeMessageVisibility(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	qURL := ctx.str("QueueUrl", r)
+	q := s.findQueueByURL(qURL, r)
 	if q == nil {
-		s.xmlError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 			"The specified queue does not exist.")
 		return
 	}
 
-	receipt := r.FormValue("ReceiptHandle")
-	vtStr := r.FormValue("VisibilityTimeout")
+	receipt := ctx.str("ReceiptHandle", r)
 	vt := 0
-	fmt.Sscanf(vtStr, "%d", &vt)
+	if n, ok := ctx.intVal("VisibilityTimeout", r); ok {
+		vt = n
+	}
 
 	q.mu.Lock()
 	if inf, ok := q.inflightByReceipt[receipt]; ok {
@@ -530,17 +704,34 @@ func (s *Service) changeMessageVisibility(w http.ResponseWriter, r *http.Request
 	}
 	q.mu.Unlock()
 
-	type result struct {
+	type xmlResult struct {
 		XMLName  xml.Name         `xml:"ChangeMessageVisibilityResponse"`
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
-	xmlWrite(w, http.StatusOK, result{Metadata: responseMetadata{RequestId: uid.New()}})
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
+}
+
+func (s *Service) listQueueTags(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	type xmlResult struct {
+		XMLName  xml.Name         `xml:"ListQueueTagsResponse"`
+		Result   struct{}         `xml:"ListQueueTagsResult"`
+		Metadata responseMetadata `xml:"ResponseMetadata"`
+	}
+	ctx.writeOK(w, map[string]interface{}{"Tags": map[string]string{}},
+		xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
+}
+
+func (s *Service) tagQueue(w http.ResponseWriter, r *http.Request, ctx sqsCtx) {
+	type xmlResult struct {
+		XMLName  xml.Name         `xml:"TagQueueResponse"`
+		Metadata responseMetadata `xml:"ResponseMetadata"`
+	}
+	ctx.writeOK(w, map[string]interface{}{}, xmlResult{Metadata: responseMetadata{RequestId: uid.New()}})
 }
 
 // --- Helpers ---
 
-func (s *Service) findQueue(r *http.Request) *queue {
-	qURL := r.FormValue("QueueUrl")
+func (s *Service) findQueueByURL(qURL string, r *http.Request) *queue {
 	if qURL == "" {
 		// Try to find from path: /:accountId/:queueName
 		path := strings.Trim(r.URL.Path, "/")
@@ -573,7 +764,7 @@ func xmlWrite(w http.ResponseWriter, status int, v interface{}) {
 	xml.NewEncoder(w).Encode(v)
 }
 
-func (s *Service) xmlError(w http.ResponseWriter, status int, code, message string) {
+func sqsXMLError(w http.ResponseWriter, status int, code, message string) {
 	type errResp struct {
 		XMLName xml.Name `xml:"ErrorResponse"`
 		Error   struct {

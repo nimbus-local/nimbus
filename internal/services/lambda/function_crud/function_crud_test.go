@@ -112,6 +112,7 @@ func doJSON(t *testing.T, method, path string, body any, handler http.HandlerFun
 }
 
 // decodeConfig decodes the response body into a FunctionConfig.
+// Used for Create, GetConfiguration, Update responses (flat format).
 func decodeConfig(t *testing.T, w *httptest.ResponseRecorder) function_crud.FunctionConfig {
 	t.Helper()
 	var cfg function_crud.FunctionConfig
@@ -119,6 +120,18 @@ func decodeConfig(t *testing.T, w *httptest.ResponseRecorder) function_crud.Func
 		t.Fatalf("decode FunctionConfig: %v\nbody: %s", err, w.Body.String())
 	}
 	return cfg
+}
+
+// decodeGetFunctionConfig decodes the GetFunction envelope {"Configuration": {...}} format.
+func decodeGetFunctionConfig(t *testing.T, w *httptest.ResponseRecorder) function_crud.FunctionConfig {
+	t.Helper()
+	var envelope struct {
+		Configuration function_crud.FunctionConfig `json:"Configuration"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode GetFunction envelope: %v\nbody: %s", err, w.Body.String())
+	}
+	return envelope.Configuration
 }
 
 // decodeError decodes the response body into the AWS error envelope.
@@ -462,7 +475,7 @@ func TestGet_HappyPath(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("Get: expected 200, got %d\n%s", w.Code, w.Body.String())
 	}
-	got := decodeConfig(t, w)
+	got := decodeGetFunctionConfig(t, w)
 	if got.FunctionName != created.FunctionName {
 		t.Errorf("FunctionName: expected %q, got %q", created.FunctionName, got.FunctionName)
 	}
@@ -589,7 +602,7 @@ func TestUpdateCode_DryRun(t *testing.T) {
 	}
 
 	// The function should be unchanged.
-	getCfg := decodeConfig(t, doGet(t, svc, "dryrun-func"))
+	getCfg := decodeGetFunctionConfig(t, doGet(t, svc, "dryrun-func"))
 	if getCfg.RevisionId != original.RevisionId {
 		t.Error("UpdateCode DryRun: RevisionId should not change")
 	}

@@ -77,8 +77,15 @@ func New(region string) *Service {
 func (s *Service) Name() string { return "eventbridge" }
 
 // Detect identifies EventBridge requests by X-Amz-Target header.
+// Multiple prefixes are used by different callers:
+//   - AmazonEventBridge.*       — aws_eventbridge_* Terraform resources, SDK v2
+//   - AmazonCloudWatchEvents.*  — older CloudWatch Events SDK clients
+//   - AWSEvents.*               — Terraform aws_cloudwatch_event_* resources (provider v5)
 func (s *Service) Detect(r *http.Request) bool {
-	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonEventBridge.")
+	target := r.Header.Get("X-Amz-Target")
+	return strings.HasPrefix(target, "AmazonEventBridge.") ||
+		strings.HasPrefix(target, "AmazonCloudWatchEvents.") ||
+		strings.HasPrefix(target, "AWSEvents.")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +124,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.removeTargets(w, r)
 	case "ListTargetsByRule":
 		s.listTargetsByRule(w, r)
+	case "ListTagsForResource":
+		s.listTagsForResource(w, r)
+	case "TagResource":
+		s.tagResource(w, r)
+	case "UntagResource":
+		jsonWrite(w, http.StatusOK, map[string]interface{}{})
 	default:
 		s.jsonError(w, http.StatusBadRequest, "UnknownOperationException",
 			fmt.Sprintf("Unknown operation: %s", action))
@@ -232,16 +245,34 @@ func (s *Service) describeEventBus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	bus, ok := s.eventBuses[name]
+	bus := s.findEventBus(name)
 	s.mu.RUnlock()
 
-	if !ok {
+	if bus == nil {
 		s.jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
 			fmt.Sprintf("Event bus %s does not exist.", name))
 		return
 	}
 
-	jsonWrite(w, http.StatusOK, map[string]string{"Name": bus.Name, "Arn": bus.ARN})
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Name":   bus.Name,
+		"Arn":    bus.ARN,
+		"Policy": "",
+	})
+}
+
+// findEventBus looks up a bus by name or ARN (must be called with mu held).
+func (s *Service) findEventBus(nameOrARN string) *eventBus {
+	if bus, ok := s.eventBuses[nameOrARN]; ok {
+		return bus
+	}
+	// ARN lookup: arn:aws:events:{region}:{account}:event-bus/{name}
+	for _, bus := range s.eventBuses {
+		if bus.ARN == nameOrARN {
+			return bus
+		}
+	}
+	return nil
 }
 
 func (s *Service) listEventBuses(w http.ResponseWriter, r *http.Request) {
@@ -528,6 +559,19 @@ func (s *Service) listTargetsByRule(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, http.StatusOK, map[string]interface{}{"Targets": entries})
 }
 
+// --- Tag operations ---
+
+func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
+	// SDK v2 cannot decode an empty map {} for Tags; use null to indicate no tags.
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Tags": nil,
+	})
+}
+
+func (s *Service) tagResource(w http.ResponseWriter, r *http.Request) {
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
 // --- Nimbus inspection endpoints ---
 
 // EventsHandler serves captured events at GET /_nimbus/eventbridge/events.
@@ -561,13 +605,14 @@ func (s *Service) EventCount() int {
 // --- Helpers ---
 
 func jsonWrite(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
 func (s *Service) jsonError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	w.Header().Set("x-amzn-ErrorType", code)
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,

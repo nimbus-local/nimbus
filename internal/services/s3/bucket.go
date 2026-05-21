@@ -177,6 +177,15 @@ func (s *Service) headBucket(w http.ResponseWriter, r *http.Request, bucket stri
 	w.WriteHeader(http.StatusOK)
 }
 
+// getBucketPolicy returns 404 NoSuchBucketPolicy since Nimbus doesn't store bucket policies.
+func (s *Service) getBucketPolicy(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	s.xmlError(w, http.StatusNotFound, "NoSuchBucketPolicy", "The bucket policy does not exist.")
+}
+
 // validBucketName enforces S3 bucket naming rules
 func validBucketName(name string) bool {
 	if len(name) < 3 || len(name) > 63 {

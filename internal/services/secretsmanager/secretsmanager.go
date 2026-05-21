@@ -86,6 +86,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeSecret(w, r)
 	case "RestoreSecret":
 		s.restoreSecret(w, r)
+	case "GetResourcePolicy":
+		s.getResourcePolicy(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", operation))
@@ -424,6 +426,27 @@ func (s *Service) describeSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonhttp.Write(w, http.StatusOK, resp)
+}
+
+// GetResourcePolicy — no resource-based policy is stored in Nimbus
+func (s *Service) getResourcePolicy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SecretId string `json:"SecretId"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	sec := s.findSecret(req.SecretId)
+	if sec == nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Secrets Manager can't find the specified secret: %s", req.SecretId))
+		return
+	}
+	// No resource policy attached; omit ResourcePolicy field so Terraform treats it as absent
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"ARN":  sec.arn,
+		"Name": sec.name,
+	})
 }
 
 // --- Helpers ---

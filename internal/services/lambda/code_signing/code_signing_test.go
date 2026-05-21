@@ -350,8 +350,9 @@ func TestGetFunctionConfig_NoBinding(t *testing.T) {
 	w := httptest.NewRecorder()
 	svc.GetFunctionConfig(w, req, "my-fn")
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 got %d", w.Code)
+	// Real AWS returns 200 with null CodeSigningConfigArn when no config is attached.
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d", w.Code)
 	}
 }
 
