@@ -148,12 +148,29 @@ nimbuslocal apigateway create-rest-api --name my-api
 
 Install:
 ```bash
-go install github.com/nimbus-local/nimbus/cmd/nimbuslocal@latest
+curl -fsSL https://raw.githubusercontent.com/nimbus-local/nimbus/master/install.sh | sh
 ```
 
-Ensure `$GOPATH/bin` is on your PATH (add to `~/.zshrc` or `~/.bashrc`):
+The script detects your OS and architecture, downloads the right binary to `~/.local/bin`, and adds it to your shell profile automatically.
+
+Or install manually with Go:
 ```bash
+go install github.com/nimbus-local/nimbus/cmd/nimbuslocal@latest
+# ensure $GOPATH/bin is on your PATH
 export PATH="$PATH:$HOME/go/bin"
+```
+
+To uninstall:
+```bash
+# If installed via the script:
+rm ~/.local/bin/nimbuslocal
+# Then remove the managed block from your shell profile (~/.zshrc etc.):
+# ### MANAGED BY NIMBUSLOCAL START (DO NOT EDIT)
+# ...
+# ### MANAGED BY NIMBUSLOCAL END (DO NOT EDIT)
+
+# If installed via go install:
+rm ~/go/bin/nimbuslocal
 ```
 
 ---
