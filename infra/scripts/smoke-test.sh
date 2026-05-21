@@ -121,6 +121,8 @@ try_match "get SecureString param" "super-secret-api-key" \
 # ── SES ───────────────────────────────────────────────────────────────────────
 
 section "SES"
+try "verify-email-identity" \
+  $CLI ses verify-email-identity --email-address "noreply@nimbus.local"
 try_match "list-identities contains email" "noreply@nimbus.local" \
   $CLI ses list-identities --query Identities
 try "send-email (captured, never delivered)" \
@@ -135,7 +137,7 @@ try_match "/_nimbus/ses/messages captured" "smoke test" \
 
 section "Lambda"
 try_match "get-function config" '"python3.12"' \
-  $CLI lambda get-function --function-name "$PREFIX" --query 'Configuration.Runtime' --output text
+  $CLI lambda get-function --function-name "$PREFIX" --query 'Configuration.Runtime'
 
 # ── API Gateway ───────────────────────────────────────────────────────────────
 
@@ -188,10 +190,10 @@ KEY_ID=$($CLI kms describe-key --key-id "alias/${PREFIX}" --query KeyMetadata.Ke
 if [ -n "${KEY_ID:-}" ]; then
   try "describe-key via alias" true
   # Encrypt → Decrypt round-trip
-  # AWS CLI v2 auto-base64-encodes --plaintext strings
+  # AWS CLI v2 requires --plaintext as base64 for blob parameters
   CT=$($CLI kms encrypt \
     --key-id "alias/${PREFIX}" \
-    --plaintext "nimbus-kms-probe" \
+    --plaintext "$(printf 'nimbus-kms-probe' | base64)" \
     --query CiphertextBlob --output text 2>/dev/null)
   if [ -n "$CT" ]; then
     PT=$($CLI kms decrypt \

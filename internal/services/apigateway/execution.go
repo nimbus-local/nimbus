@@ -216,6 +216,11 @@ func (s *Service) executeMock(w http.ResponseWriter, method *Method) {
 	if integ.IntegrationResponses != nil {
 		if ir, ok := integ.IntegrationResponses["200"]; ok {
 			statusCode, _ = strconv.Atoi(ir.StatusCode)
+			if ir.ResponseTemplates != nil {
+				if b, ok := ir.ResponseTemplates["application/json"]; ok {
+					body = b
+				}
+			}
 		} else {
 			for sc, ir := range integ.IntegrationResponses {
 				statusCode, _ = strconv.Atoi(sc)
