@@ -113,6 +113,22 @@ cfg, _ := config.LoadDefaultConfig(context.TODO(),
 )
 ```
 
+**AWS CLI v2:**
+
+Set `AWS_ENDPOINT_URL` once and omit `--endpoint-url` from every command:
+```bash
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=us-east-1
+
+aws s3 mb s3://my-bucket
+aws sqs create-queue --queue-name my-queue
+aws lambda invoke --function-name my-func --payload '{}' --cli-binary-format raw-in-base64-out response.json
+```
+
+These variables are exported automatically when using the `infra/` dev harness (`make start`).
+
 ---
 
 ## nimbuslocal CLI
