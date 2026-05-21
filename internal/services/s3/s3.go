@@ -73,6 +73,15 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodHead && bucket != "" && key == "":
 		s.headBucket(w, r, bucket)
 
+	case r.Method == http.MethodGet && bucket != "" && key == "" && r.URL.Query().Has("policy"):
+		s.getBucketPolicy(w, r, bucket)
+
+	case r.Method == http.MethodPut && bucket != "" && key == "" && r.URL.Query().Has("policy"):
+		w.WriteHeader(http.StatusNoContent)
+
+	case r.Method == http.MethodDelete && bucket != "" && key == "" && r.URL.Query().Has("policy"):
+		w.WriteHeader(http.StatusNoContent)
+
 	case r.Method == http.MethodGet && bucket != "" && key == "":
 		s.listObjects(w, r, bucket)
 

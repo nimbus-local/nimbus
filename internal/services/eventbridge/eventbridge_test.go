@@ -503,7 +503,7 @@ func TestClearEventsHandler(t *testing.T) {
 func TestUnknownAction(t *testing.T) {
 	svc := newTestService()
 
-	w := ebRequest(t, svc, "TagResource", map[string]string{})
+	w := ebRequest(t, svc, "SomeCompletelyUnknownAction", map[string]string{})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unknown action, got %d", w.Code)
 	}

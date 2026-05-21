@@ -85,7 +85,7 @@ func isSNSAction(action string) bool {
 	case "CreateTopic", "DeleteTopic", "ListTopics", "GetTopicAttributes", "SetTopicAttributes",
 		"Subscribe", "Unsubscribe", "ListSubscriptions", "ListSubscriptionsByTopic",
 		"GetSubscriptionAttributes", "ConfirmSubscription",
-		"Publish", "PublishBatch":
+		"Publish", "PublishBatch", "ListTagsForResource", "TagResource":
 		return true
 	}
 	return false
@@ -132,6 +132,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.publish(w, r)
 	case "PublishBatch":
 		s.publishBatch(w, r)
+	case "ListTagsForResource":
+		s.listTagsForResource(w, r)
+	case "TagResource":
+		s.tagResource(w, r)
 	default:
 		s.xmlError(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Action %s is not valid.", action))
@@ -251,6 +255,11 @@ func (s *Service) getTopicAttributes(w http.ResponseWriter, r *http.Request) {
 		Metadata responseMetadata `xml:"ResponseMetadata"`
 	}
 
+	defaultPolicy := fmt.Sprintf(
+		`{"Version":"2012-10-17","Id":"%s/SQSDefaultPolicy","Statement":[]}`,
+		t.arn,
+	)
+
 	var resp result
 	resp.Xmlns = xmlNS
 	resp.Metadata.RequestID = uid.New()
@@ -261,6 +270,7 @@ func (s *Service) getTopicAttributes(w http.ResponseWriter, r *http.Request) {
 		{Key: "SubscriptionsPending", Value: "0"},
 		{Key: "SubscriptionsDeleted", Value: "0"},
 		{Key: "Owner", Value: accountID},
+		{Key: "Policy", Value: defaultPolicy},
 	}
 	xmlWrite(w, http.StatusOK, resp)
 }
@@ -485,6 +495,8 @@ func (s *Service) getSubscriptionAttributes(w http.ResponseWriter, r *http.Reque
 		{Key: "Endpoint", Value: sub.endpoint},
 		{Key: "Owner", Value: accountID},
 		{Key: "RawMessageDelivery", Value: "false"},
+		{Key: "PendingConfirmation", Value: "false"},
+		{Key: "ConfirmationWasAuthenticated", Value: "true"},
 	}
 	xmlWrite(w, http.StatusOK, resp)
 }
@@ -664,6 +676,30 @@ func (s *Service) MessageCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.messages)
+}
+
+// listTagsForResource — returns empty tags; tags are not stored in Nimbus
+func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
+	type result struct {
+		XMLName xml.Name `xml:"ListTagsForResourceResponse"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Result  struct {
+			Tags []struct{} `xml:"Tags>member"`
+		} `xml:"ListTagsForResourceResult"`
+		Metadata responseMetadata `xml:"ResponseMetadata"`
+	}
+	resp := result{Xmlns: xmlNS, Metadata: responseMetadata{RequestID: uid.New()}}
+	xmlWrite(w, http.StatusOK, resp)
+}
+
+// tagResource — accepts tags but does not store them
+func (s *Service) tagResource(w http.ResponseWriter, r *http.Request) {
+	type result struct {
+		XMLName  xml.Name         `xml:"TagResourceResponse"`
+		Xmlns    string           `xml:"xmlns,attr"`
+		Metadata responseMetadata `xml:"ResponseMetadata"`
+	}
+	xmlWrite(w, http.StatusOK, result{Xmlns: xmlNS, Metadata: responseMetadata{RequestID: uid.New()}})
 }
 
 // --- Helpers ---

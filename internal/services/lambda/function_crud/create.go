@@ -145,6 +145,7 @@ func newFunctionConfig(req CreateFunctionRequest, arn string) *FunctionConfig {
 		Runtime:           req.Runtime,
 		SnapStart:         req.SnapStart,
 		State:             "Active",
+		LastUpdateStatus:  "Successful",
 		Timeout:           req.Timeout,
 		TracingConfig:     req.TracingConfig,
 		Version:           "$LATEST",

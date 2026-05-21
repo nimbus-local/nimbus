@@ -63,14 +63,22 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "lambda" }
 
-// Detect identifies Lambda requests by the /2015-03-31/ path prefix.
+// Detect identifies Lambda requests by API date-versioned path prefixes.
+// AWS added newer operations under /2020-06-30/ (e.g. GetFunctionCodeSigningConfig).
 func (s *Service) Detect(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/2015-03-31/")
+	return strings.HasPrefix(r.URL.Path, "/2015-03-31/") ||
+		strings.HasPrefix(r.URL.Path, "/2020-06-30/")
 }
 
 // ServeHTTP routes to the appropriate sub-package handler.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/2015-03-31")
+	path := r.URL.Path
+	switch {
+	case strings.HasPrefix(path, "/2015-03-31"):
+		path = strings.TrimPrefix(path, "/2015-03-31")
+	case strings.HasPrefix(path, "/2020-06-30"):
+		path = strings.TrimPrefix(path, "/2020-06-30")
+	}
 
 	// Prefix-dispatched routes
 	switch {

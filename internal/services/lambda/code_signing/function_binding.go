@@ -66,9 +66,12 @@ func (s *Service) GetFunctionConfig(w http.ResponseWriter, r *http.Request, func
 	arn, ok := s.functionBinding[functionName]
 	s.mu.RUnlock()
 
+	// Real AWS returns 200 with null CodeSigningConfigArn when no config is attached.
 	if !ok {
-		jsonhttp.Error(w, http.StatusNotFound, "ResourceNotFoundException",
-			fmt.Sprintf("No code signing config found for function: %s", functionName))
+		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+			"CodeSigningConfigArn": nil,
+			"FunctionName":         functionName,
+		})
 		return
 	}
 

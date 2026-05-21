@@ -83,6 +83,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.deleteParameters(w, r)
 	case "DescribeParameters":
 		s.describeParameters(w, r)
+	case "ListTagsForResource":
+		s.listTagsForResource(w, r)
 	default:
 		s.jsonError(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", operation))
@@ -335,9 +337,13 @@ func (s *Service) deleteParameters(w http.ResponseWriter, r *http.Request) {
 // DescribeParameters — returns metadata about parameters (not values)
 func (s *Service) describeParameters(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MaxResults int `json:"MaxResults"`
+		MaxResults       int `json:"MaxResults"`
+		ParameterFilters []struct {
+			Key    string   `json:"Key"`
+			Option string   `json:"Option"`
+			Values []string `json:"Values"`
+		} `json:"ParameterFilters"`
 	}
-	// Ignore decode errors — request body is optional for DescribeParameters
 	json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.RLock()
@@ -354,6 +360,9 @@ func (s *Service) describeParameters(w http.ResponseWriter, r *http.Request) {
 
 	var results []paramMeta
 	for _, p := range s.parameters {
+		if !matchesParameterFilters(p, req.ParameterFilters) {
+			continue
+		}
 		results = append(results, paramMeta{
 			Name:             p.name,
 			Type:             p.paramType,
@@ -366,6 +375,57 @@ func (s *Service) describeParameters(w http.ResponseWriter, r *http.Request) {
 
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Parameters": results,
+	})
+}
+
+// matchesParameterFilters checks if a parameter matches all provided filters.
+func matchesParameterFilters(p *parameter, filters []struct {
+	Key    string   `json:"Key"`
+	Option string   `json:"Option"`
+	Values []string `json:"Values"`
+}) bool {
+	for _, f := range filters {
+		switch f.Key {
+		case "Name":
+			matched := false
+			for _, v := range f.Values {
+				switch f.Option {
+				case "Equals", "":
+					if p.name == v {
+						matched = true
+					}
+				case "BeginsWith":
+					if strings.HasPrefix(p.name, v) {
+						matched = true
+					}
+				case "Contains":
+					if strings.Contains(p.name, v) {
+						matched = true
+					}
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "Type":
+			matched := false
+			for _, v := range f.Values {
+				if p.paramType == v {
+					matched = true
+				}
+			}
+			if !matched {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ListTagsForResource — returns tags for a parameter (always empty in Nimbus)
+func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"TagList": []interface{}{},
 	})
 }
 
