@@ -160,6 +160,24 @@ section "ECR"
 try_match "describe-repositories finds repo" "$PREFIX" \
   $CLI ecr describe-repositories --query 'repositories[].repositoryName' --output text
 
+# Docker push/pull round-trip
+REGISTRY="localhost:4566"
+ECR_TOKEN=$($CLI ecr get-authorization-token \
+  --query 'authorizationData[0].authorizationToken' --output text 2>/dev/null \
+  | base64 --decode | cut -d: -f2)
+if echo "$ECR_TOKEN" | docker login --username AWS --password-stdin "$REGISTRY" >/dev/null 2>&1; then
+  try "docker login" true
+  docker pull hello-world:latest >/dev/null 2>&1 || true
+  docker tag hello-world:latest "$REGISTRY/$PREFIX:smoke" >/dev/null 2>&1
+  try "docker push"  docker push "$REGISTRY/$PREFIX:smoke" >/dev/null 2>&1
+  docker rmi "$REGISTRY/$PREFIX:smoke" >/dev/null 2>&1 || true
+  try_match "docker pull" "Pull complete\|Already exists\|$PREFIX" \
+    docker pull "$REGISTRY/$PREFIX:smoke"
+  docker rmi "$REGISTRY/$PREFIX:smoke" >/dev/null 2>&1 || true
+else
+  fail "docker login"
+fi
+
 # ── ECS ───────────────────────────────────────────────────────────────────────
 
 section "ECS"
