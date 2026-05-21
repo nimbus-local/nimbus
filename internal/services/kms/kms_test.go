@@ -620,4 +620,3 @@ func TestUnknownAction(t *testing.T) {
 		t.Errorf("expected 400 for unknown action, got %d", w.Code)
 	}
 }
-
