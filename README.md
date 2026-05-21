@@ -1,4 +1,8 @@
-# Nimbus ☁️
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Nimbus" width="300" />
+</p>
+
+# Nimbus
 
 **A free, open-source AWS emulator for local development. Forever.**
 
