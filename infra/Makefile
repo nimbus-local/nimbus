@@ -3,6 +3,10 @@ TF_DIR         := terraform
 DOCKER_COMPOSE := docker compose -f docker-compose.yml
 AWS            := aws --endpoint-url http://localhost:4566 --region us-east-1 --no-cli-pager
 
+export AWS_ACCESS_KEY_ID     ?= test
+export AWS_SECRET_ACCESS_KEY ?= test
+export AWS_DEFAULT_REGION    ?= us-east-1
+
 .PHONY: start stop init plan apply destroy test smoke-test
 
 # ── Docker ──────────────────────────────────────────────────────────────────
@@ -21,13 +25,13 @@ stop:
 init:
 	cd $(TF_DIR) && $(TERRAFORM) init
 
-plan:
+plan: init
 	cd $(TF_DIR) && $(TERRAFORM) plan
 
-apply:
+apply: init
 	cd $(TF_DIR) && $(TERRAFORM) apply -auto-approve
 
-destroy:
+destroy: init
 	cd $(TF_DIR) && $(TERRAFORM) destroy -auto-approve
 
 # ── Tests ────────────────────────────────────────────────────────────────────

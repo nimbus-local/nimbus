@@ -57,12 +57,28 @@ Link the service name to its doc file. Match the status badge used by comparable
 
 ## Running locally
 
+**Unit tests (fast, no Docker required):**
+
 ```bash
 go build ./...
 go test ./...
 go vet ./...
 gofmt -l .
 ```
+
+**End-to-end smoke tests (requires Docker and Terraform):**
+
+```bash
+cd infra
+make start        # boot Nimbus + DynamoDB Local
+make apply        # provision all test resources
+make smoke-test   # run the full suite
+make clean        # tear everything down when done
+```
+
+After Go code changes, rebuild before re-running: `make stop && make start && make apply`.
+
+The smoke test suite is also a required CI check on every PR — it runs automatically via GitHub Actions.
 
 ## Release process
 
