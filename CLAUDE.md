@@ -43,3 +43,13 @@ docs/
 1. Create `internal/services/{name}/` and implement the `services.Service` interface (`Name()`, `Detect()`, `ServeHTTP()`).
 2. Register it in `cmd/nimbus/main.go` before S3 (the catch-all).
 3. Follow the README update steps above.
+
+## Project North Star
+
+The long-term roadmap is tracked in [`docs/north-star-roadmap.md`](docs/north-star-roadmap.md).
+It describes the phased plan to make Nimbus a complete local ECS development environment
+(ECS container execution, ALB, CloudWatch Logs, IAM, Aurora, Valkey, ACM, Route 53, CloudWatch Metrics).
+
+When implementing a North Star phase, follow the same checklist above **plus**:
+- Add a Terraform fixture in `infra/terraform/`
+- Add a smoke test section in `infra/scripts/smoke-test.sh`
