@@ -1,0 +1,47 @@
+services:
+  nimbus:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nimbus
+    ports:
+      - "4566:4566"
+    environment:
+      NIMBUS_LOG_LEVEL: ${NIMBUS_LOG_LEVEL:-info}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+    volumes:
+      - nimbus_data:/var/lib/nimbus
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    networks:
+      - nimbus-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_nimbus/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: nimbus-dynamodb
+    # -inMemory avoids SQLite on-disk issues (ARM/Apple-Silicon compatibility)
+    command: "-jar DynamoDBLocal.jar -inMemory"
+    networks:
+      - nimbus-net
+    healthcheck:
+      # DynamoDB Local returns 400 for GET / — check status starts with 2 or 4
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000 | grep -qE '^[24]'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  nimbus_data:
+
+networks:
+  nimbus-net:
+    driver: bridge
