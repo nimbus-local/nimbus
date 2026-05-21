@@ -58,6 +58,7 @@ volumes:
 | [SES](docs/services/ses.md) | ✅ Core | `AmazonSimpleEmailService.*` target or `/v2/email/` path | SendEmail (v1+v2), SendRawEmail, VerifyEmailIdentity, ListIdentities — emails captured in memory, never sent |
 | [Lambda](docs/services/lambda.md) | ✅ Core | `/2015-03-31/` path prefix | Functions (CRUD, versions, publish), invocations, aliases, permissions, event source mappings, concurrency, layers, code signing, function URLs, event invoke config, runtime & recursion settings, tags |
 | [API Gateway](docs/services/apigateway.md) | ✅ Core | `/restapis` (REST v1), `/apis` (HTTP v2) | REST API: resources, methods, integrations (AWS\_PROXY + MOCK), stages. HTTP API: routes, integrations (AWS\_PROXY, payload format v1+v2), stages, `$default` catch-all — execute via `/{apiId}/{stage}/_user_request_/` |
+| [EventBridge](docs/services/eventbridge.md) | ✅ Core | `AmazonEventBridge.*` target | PutEvents (captured in memory), event buses (CRUD), rules (CRUD, enable/disable), targets (put/remove/list) |
 | SNS | 🚧 In Progress | `SNS.*` target | |
 
 ---

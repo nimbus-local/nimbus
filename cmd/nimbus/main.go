@@ -12,6 +12,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/router"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
+	"github.com/nimbus-local/nimbus/internal/services/eventbridge"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
@@ -61,6 +62,8 @@ func main() {
 	r.Register(secretsmanager.New(cfg.DefaultRegion))
 	r.Register(ssm.New(cfg.DefaultRegion))
 	r.Register(sqs.New(cfg.DefaultRegion))
+	ebSvc := eventbridge.New(cfg.DefaultRegion)
+	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
 	// Standard endpoints
@@ -75,6 +78,18 @@ func main() {
 			sesSvc.MessagesHandler(w, req)
 		case http.MethodDelete:
 			sesSvc.ClearMessagesHandler(w, req)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// EventBridge inspection endpoints — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/eventbridge/events", func(w http.ResponseWriter, req *http.Request) {
+		switch req.Method {
+		case http.MethodGet:
+			ebSvc.EventsHandler(w, req)
+		case http.MethodDelete:
+			ebSvc.ClearEventsHandler(w, req)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
