@@ -138,13 +138,17 @@ func (s *Service) fire(sch *schedule, now time.Time) {
 
 func (s *Service) Name() string { return "scheduler" }
 
-// Detect identifies EventBridge Scheduler requests by their API-versioned path prefix.
+// Detect identifies EventBridge Scheduler requests by path.
+// The Scheduler API uses bare /schedules, /schedule-groups, and /tags/{schedulerArn} paths.
 func (s *Service) Detect(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/2020-11-23/")
+	p := r.URL.Path
+	return strings.HasPrefix(p, "/schedules") ||
+		strings.HasPrefix(p, "/schedule-groups") ||
+		(strings.HasPrefix(p, "/tags/") && strings.Contains(p, "scheduler"))
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/2020-11-23")
+	path := r.URL.Path
 
 	switch {
 	case path == "/schedule-groups" && r.Method == http.MethodGet:
@@ -175,6 +179,19 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.updateSchedule(w, r, name)
 		case http.MethodDelete:
 			s.deleteSchedule(w, r, name)
+		default:
+			jsonError(w, http.StatusMethodNotAllowed, "MethodNotAllowedException", "Method not allowed")
+		}
+
+	case strings.HasPrefix(path, "/tags/"):
+		arn := strings.TrimPrefix(path, "/tags/")
+		switch r.Method {
+		case http.MethodGet:
+			s.listTagsForResource(w, r, arn)
+		case http.MethodPost:
+			jsonWrite(w, http.StatusOK, map[string]interface{}{})
+		case http.MethodDelete:
+			jsonWrite(w, http.StatusOK, map[string]interface{}{})
 		default:
 			jsonError(w, http.StatusMethodNotAllowed, "MethodNotAllowedException", "Method not allowed")
 		}
@@ -231,8 +248,8 @@ func (s *Service) getScheduleGroup(w http.ResponseWriter, r *http.Request, name 
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{
 		"Arn":                  g.arn,
-		"CreationDate":         g.creationDate.Format(time.RFC3339),
-		"LastModificationDate": g.lastModifiedDate.Format(time.RFC3339),
+		"CreationDate":         float64(g.creationDate.Unix()),
+		"LastModificationDate": float64(g.lastModifiedDate.Unix()),
 		"Name":                 g.name,
 		"State":                g.state,
 		"Tags":                 g.tags,
@@ -272,11 +289,11 @@ func (s *Service) listScheduleGroups(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type entry struct {
-		Arn                  string `json:"Arn"`
-		CreationDate         string `json:"CreationDate"`
-		LastModificationDate string `json:"LastModificationDate"`
-		Name                 string `json:"Name"`
-		State                string `json:"State"`
+		Arn                  string  `json:"Arn"`
+		CreationDate         float64 `json:"CreationDate"`
+		LastModificationDate float64 `json:"LastModificationDate"`
+		Name                 string  `json:"Name"`
+		State                string  `json:"State"`
 	}
 	var groups []entry
 	for _, g := range s.groups {
@@ -285,8 +302,8 @@ func (s *Service) listScheduleGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		groups = append(groups, entry{
 			Arn:                  g.arn,
-			CreationDate:         g.creationDate.Format(time.RFC3339),
-			LastModificationDate: g.lastModifiedDate.Format(time.RFC3339),
+			CreationDate:         float64(g.creationDate.Unix()),
+			LastModificationDate: float64(g.lastModifiedDate.Unix()),
 			Name:                 g.name,
 			State:                g.state,
 		})
@@ -387,11 +404,11 @@ func (s *Service) getSchedule(w http.ResponseWriter, r *http.Request, name strin
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{
 		"Arn":                        sch.arn,
-		"CreationDate":               sch.creationDate.Format(time.RFC3339),
+		"CreationDate":               float64(sch.creationDate.Unix()),
 		"Description":                sch.description,
 		"FlexibleTimeWindow":         sch.flexibleTimeWindow,
 		"GroupName":                  sch.groupName,
-		"LastModificationDate":       sch.lastModifiedDate.Format(time.RFC3339),
+		"LastModificationDate":       float64(sch.lastModifiedDate.Unix()),
 		"Name":                       sch.name,
 		"ScheduleExpression":         sch.scheduleExpression,
 		"ScheduleExpressionTimezone": sch.scheduleExpressionTimezone,
@@ -481,12 +498,12 @@ func (s *Service) listSchedules(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type entry struct {
-		Arn                  string `json:"Arn"`
-		CreationDate         string `json:"CreationDate"`
-		GroupName            string `json:"GroupName"`
-		LastModificationDate string `json:"LastModificationDate"`
-		Name                 string `json:"Name"`
-		State                string `json:"State"`
+		Arn                  string  `json:"Arn"`
+		CreationDate         float64 `json:"CreationDate"`
+		GroupName            string  `json:"GroupName"`
+		LastModificationDate float64 `json:"LastModificationDate"`
+		Name                 string  `json:"Name"`
+		State                string  `json:"State"`
 		Target               struct {
 			Arn string `json:"Arn"`
 		} `json:"Target"`
@@ -506,9 +523,9 @@ func (s *Service) listSchedules(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(sch.target, &tgt)
 		schedules = append(schedules, entry{
 			Arn:                  sch.arn,
-			CreationDate:         sch.creationDate.Format(time.RFC3339),
+			CreationDate:         float64(sch.creationDate.Unix()),
 			GroupName:            sch.groupName,
-			LastModificationDate: sch.lastModifiedDate.Format(time.RFC3339),
+			LastModificationDate: float64(sch.lastModifiedDate.Unix()),
 			Name:                 sch.name,
 			State:                sch.state,
 			Target:               tgt,
@@ -518,6 +535,26 @@ func (s *Service) listSchedules(w http.ResponseWriter, r *http.Request) {
 		"NextToken": "",
 		"Schedules": schedules,
 	})
+}
+
+// --- Tag operations ---
+
+func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request, arn string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Scheduler uses a list [{Key,Value}] not a map — SDK fails on map type.
+	var tags []tag
+	for _, g := range s.groups {
+		if g.arn == arn {
+			tags = g.tags
+			break
+		}
+	}
+	if tags == nil {
+		tags = []tag{}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"Tags": tags})
 }
 
 // --- Nimbus inspection endpoint ---

@@ -2,7 +2,7 @@
 
 EventBridge Scheduler is emulated entirely in-memory. Schedules and schedule groups are stored locally and never reach AWS. Schedule expressions are accepted and stored but the ticker (Part 2) is required before any firing occurs.
 
-**Detection**: `r.URL.Path` starts with `/2020-11-23/` (the Scheduler API version prefix, distinct from EventBridge Events which uses `X-Amz-Target`).
+**Detection**: `r.URL.Path` starts with `/schedules` or `/schedule-groups` (the Scheduler REST API uses bare paths, no date prefix — distinct from EventBridge Events which uses `X-Amz-Target`).
 
 ## Supported operations
 
