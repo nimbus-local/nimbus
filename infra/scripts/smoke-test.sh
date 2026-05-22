@@ -290,6 +290,18 @@ try_match "get-instance-profile" "$PREFIX-task-execution" \
     --instance-profile-name "$PREFIX-task-execution" \
     --query InstanceProfile.InstanceProfileName --output text
 
+# ── CloudWatch Logs ───────────────────────────────────────────────────────────
+
+section "CloudWatch Logs"
+try_match "describe-log-groups finds group" "/nimbus/$PREFIX/app" \
+  $CLI logs describe-log-groups \
+    --log-group-name-prefix "/nimbus/$PREFIX" \
+    --query "logGroups[].logGroupName" --output text
+try_match "describe-log-streams finds stream" "container" \
+  $CLI logs describe-log-streams \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --query "logStreams[].logStreamName" --output text
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

@@ -11,6 +11,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/config"
 	"github.com/nimbus-local/nimbus/internal/router"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
+	"github.com/nimbus-local/nimbus/internal/services/cloudwatchlogs"
 	"github.com/nimbus-local/nimbus/internal/services/iam"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/ecr"
@@ -59,6 +60,7 @@ func main() {
 
 	// Register services — order matters: more specific detectors first
 	r.Register(iam.New())
+	r.Register(cloudwatchlogs.New(cfg.DefaultRegion))
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	r.Register(lambdaSvc)

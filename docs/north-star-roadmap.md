@@ -103,12 +103,12 @@ Needed for `aws_iam_instance_profile` and tag-based resources.
 **Unblocks Function logging.** Once containers run, the `awslogs` log driver can
 ship output to Nimbus instead of real CloudWatch.
 
-### Part 1 — Log group + stream CRUD
+### Part 1 — Log group + stream CRUD ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` | |
-| `CreateLogStream` / `DescribeLogStreams` | |
+| `CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` | ✅ |
+| `CreateLogStream` / `DescribeLogStreams` | ✅ |
 
 ### Part 2 — Log ingestion
 
