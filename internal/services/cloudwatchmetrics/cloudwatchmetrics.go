@@ -730,6 +730,7 @@ func wrap(action, body string) string {
 
 func writeXML(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/xml")
+	w.Header().Set("x-amzn-requestid", uid.New())
 	w.WriteHeader(status)
 	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`)
 	fmt.Fprint(w, body)
