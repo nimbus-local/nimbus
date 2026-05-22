@@ -76,6 +76,7 @@ volumes:
 | [ElastiCache](docs/services/elasticache.md) | ✅ Core | form-encoded body, `Version=2015-02-02` | Subnet group, parameter group, cache cluster, and replication group CRUD — endpoints resolve to a real Valkey sidecar; status always `available` |
 | [ACM](docs/services/acm.md) | ✅ Core | `X-Amz-Target: CertificateManager.*` | Certificate CRUD — `RequestCertificate` generates a real self-signed cert; status always `ISSUED`; PEM downloadable via `/_nimbus/acm/certs/{arn}` |
 | [Route 53](docs/services/route53.md) | ✅ Core | `/2013-04-01/` path prefix | Hosted zone and record set CRUD — `GetChange` always returns `INSYNC`; no DNS resolution |
+| [CloudWatch Metrics](docs/services/cloudwatchmetrics.md) | ✅ Core | form-encoded body, `Version=2010-08-01` | PutMetricData, ListMetrics, GetMetricStatistics, GetMetricData, metric alarms (structural, always OK), tags |
 
 ---
 

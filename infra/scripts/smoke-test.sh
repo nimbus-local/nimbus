@@ -594,6 +594,62 @@ else
   fail "list-hosted-zones (zone not found — run 'make apply' first)"
 fi
 
+# ── CloudWatch Metrics ───────────────────────────────────────────────────────
+
+section "CloudWatch Metrics"
+
+try "put-metric-data" \
+  $CLI cloudwatch put-metric-data \
+    --namespace "Nimbus/$PREFIX" \
+    --metric-name RequestCount \
+    --value 42 \
+    --unit Count
+
+try "put-metric-data second point" \
+  $CLI cloudwatch put-metric-data \
+    --namespace "Nimbus/$PREFIX" \
+    --metric-name RequestCount \
+    --value 58 \
+    --unit Count
+
+try_match "list-metrics finds namespace" "Nimbus/$PREFIX" \
+  $CLI cloudwatch list-metrics --namespace "Nimbus/$PREFIX" --query "Metrics[*].Namespace" --output text
+
+try_match "list-metrics finds metric name" "RequestCount" \
+  $CLI cloudwatch list-metrics --namespace "Nimbus/$PREFIX" --query "Metrics[*].MetricName" --output text
+
+try "get-metric-statistics" \
+  $CLI cloudwatch get-metric-statistics \
+    --namespace "Nimbus/$PREFIX" \
+    --metric-name RequestCount \
+    --start-time "$(date -u -v-1H '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ')" \
+    --end-time "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --period 3600 \
+    --statistics Sum Average
+
+try "put-metric-alarm" \
+  $CLI cloudwatch put-metric-alarm \
+    --alarm-name "$PREFIX-cpu" \
+    --metric-name CPUUtilization \
+    --namespace "AWS/EC2" \
+    --comparison-operator GreaterThanThreshold \
+    --threshold 80 \
+    --evaluation-periods 1 \
+    --period 60 \
+    --statistic Average
+
+try_match "describe-alarms finds alarm" "$PREFIX-cpu" \
+  $CLI cloudwatch describe-alarms --alarm-names "$PREFIX-cpu" --query "MetricAlarms[*].AlarmName" --output text
+
+try_match "describe-alarms state is OK" "OK" \
+  $CLI cloudwatch describe-alarms --alarm-names "$PREFIX-cpu" --query "MetricAlarms[*].StateValue" --output text
+
+try_match "/_nimbus/metrics inspection endpoint" "RequestCount" \
+  curl -sf "$NIMBUS/_nimbus/metrics"
+
+try "delete-alarms" \
+  $CLI cloudwatch delete-alarms --alarm-names "$PREFIX-cpu"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
