@@ -20,6 +20,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
+	"github.com/nimbus-local/nimbus/internal/services/scheduler"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
 	"github.com/nimbus-local/nimbus/internal/services/ses"
 	"github.com/nimbus-local/nimbus/internal/services/sns"
@@ -77,6 +78,8 @@ func main() {
 	r.Register(sqs.New(cfg.DefaultRegion))
 	snsSvc := sns.New(cfg.DefaultRegion)
 	r.Register(snsSvc)
+	schedSvc := scheduler.New(cfg.DefaultRegion)
+	r.Register(schedSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
@@ -115,6 +118,9 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Scheduler inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/scheduler/schedules", schedSvc.SchedulesHandler)
 
 	// EventBridge inspection endpoints — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/eventbridge/events", func(w http.ResponseWriter, req *http.Request) {

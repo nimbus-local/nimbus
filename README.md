@@ -69,6 +69,7 @@ volumes:
 | [KMS](docs/services/kms.md) | ✅ Core | `TrentService.*` target | CreateKey, Encrypt/Decrypt (real AES-256-GCM), GenerateDataKey, ReEncrypt, aliases, tags, key lifecycle (enable/disable/schedule-deletion) |
 | [SNS](docs/services/sns.md) | ✅ Core | `AmazonSimpleNotificationService.*` target or `Action` param | CreateTopic, Subscribe (all protocols, auto-confirmed), Publish, PublishBatch — messages captured in memory, never delivered |
 | [EventBridge](docs/services/eventbridge.md) | ✅ Core | `AmazonEventBridge.*` target | PutEvents (captured in memory), event buses (CRUD), rules (CRUD, enable/disable), targets (put/remove/list) |
+| [EventBridge Scheduler](docs/services/scheduler.md) | ✅ Core | `/2020-11-23/` path prefix | Schedule groups (CRUD), schedules (CRUD) — expressions stored; firing added in Part 2 |
 
 ---
 
