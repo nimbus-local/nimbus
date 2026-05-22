@@ -24,5 +24,7 @@ provider "aws" {
     kms            = var.nimbus_endpoint
     sns            = var.nimbus_endpoint
     eventbridge    = var.nimbus_endpoint
+    iam            = var.nimbus_endpoint
+    sts            = var.nimbus_endpoint
   }
 }

@@ -53,3 +53,20 @@ It describes the phased plan to make Nimbus a complete local ECS development env
 When implementing a North Star phase, follow the same checklist above **plus**:
 - Add a Terraform fixture in `infra/terraform/`
 - Add a smoke test section in `infra/scripts/smoke-test.sh`
+
+## Implementation strategy — parts, not phases
+
+Every phase is split into numbered parts in the roadmap. **Each part is one working
+commit.** Never implement an entire phase in one pass.
+
+Rules:
+1. **Write code first.** Do not plan, outline, or reason about an implementation
+   for more than a few sentences before opening a file and writing real code.
+2. **Part 1 always unblocks the critical path** — the minimum needed for Terraform
+   `init`/`plan` to pass, or for an integration test to run. Later parts add depth.
+3. **Compile and `go vet` after every part.** A part is not done until `go build ./...`
+   passes with no errors.
+4. **Complete the checklist after Part 1** (service doc, README row, Terraform fixture,
+   smoke test). Subsequent parts update those files — they don't defer them.
+5. **Never re-read files you just wrote.** Trust that Edit/Write succeeded.
+6. **One file at a time.** Write it, move on. No drafting the same file twice.

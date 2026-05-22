@@ -260,6 +260,36 @@ try "put-events" $CLI events put-events --entries \
 try_match "/_nimbus/eventbridge/events captured" "nimbus.test" \
   curl -sf "$NIMBUS/_nimbus/eventbridge/events"
 
+# ── IAM / STS ─────────────────────────────────────────────────────────────────
+
+section "IAM / STS"
+try_match "get-caller-identity" "000000000000" \
+  $CLI sts get-caller-identity --query Account --output text
+try_match "create-role / get-role" "$PREFIX-task-execution" \
+  $CLI iam get-role --role-name "$PREFIX-task-execution" --query Role.RoleName --output text
+try_match "list-roles finds role" "$PREFIX-task-execution" \
+  $CLI iam list-roles --query "Roles[].RoleName" --output text
+try "assume-role" \
+  $CLI sts assume-role \
+    --role-arn "arn:aws:iam::000000000000:role/$PREFIX-task-execution" \
+    --role-session-name smoke-test
+try_match "list-attached-role-policies" "AmazonECSTaskExecutionRolePolicy" \
+  $CLI iam list-attached-role-policies --role-name "$PREFIX-task-execution" \
+    --query "AttachedPolicies[].PolicyName" --output text
+try_match "get-policy (customer-managed)" "$PREFIX-custom" \
+  $CLI iam get-policy \
+    --policy-arn "arn:aws:iam::000000000000:policy/$PREFIX-custom" \
+    --query Policy.PolicyName --output text
+try_match "get-role-policy (inline)" "$PREFIX-inline" \
+  $CLI iam get-role-policy \
+    --role-name "$PREFIX-task-execution" \
+    --policy-name "$PREFIX-inline" \
+    --query PolicyName --output text
+try_match "get-instance-profile" "$PREFIX-task-execution" \
+  $CLI iam get-instance-profile \
+    --instance-profile-name "$PREFIX-task-execution" \
+    --query InstanceProfile.InstanceProfileName --output text
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
