@@ -215,7 +215,7 @@ func (s *Service) listRoles(w http.ResponseWriter, r *http.Request) {
 	var buf strings.Builder
 	for _, ro := range s.roles {
 		buf.WriteString("<member>")
-		buf.WriteString(renderRole(ro))
+		buf.WriteString(renderRoleFields(ro))
 		buf.WriteString("</member>")
 	}
 	result := fmt.Sprintf("<Roles>%s</Roles><IsTruncated>false</IsTruncated>", buf.String())
@@ -327,21 +327,26 @@ func (s *Service) createInstanceProfile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.instanceProfiles[name] = p
+	profileXML := s.renderProfile(p)
 	s.mu.Unlock()
-	writeXML(w, http.StatusOK, iamWrap("CreateInstanceProfile", s.renderProfile(p)))
+	writeXML(w, http.StatusOK, iamWrap("CreateInstanceProfile", profileXML))
 }
 
 func (s *Service) getInstanceProfile(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("InstanceProfileName")
 	s.mu.RLock()
 	p, ok := s.instanceProfiles[name]
+	var profileXML string
+	if ok {
+		profileXML = s.renderProfile(p)
+	}
 	s.mu.RUnlock()
 	if !ok {
 		xmlError(w, http.StatusNotFound, "NoSuchEntity",
 			fmt.Sprintf("Instance profile %s not found.", name))
 		return
 	}
-	writeXML(w, http.StatusOK, iamWrap("GetInstanceProfile", s.renderProfile(p)))
+	writeXML(w, http.StatusOK, iamWrap("GetInstanceProfile", profileXML))
 }
 
 func (s *Service) deleteInstanceProfile(w http.ResponseWriter, r *http.Request) {
@@ -680,7 +685,8 @@ func (s *Service) renderProfile(p *instanceProfile) string {
 	var roleXML string
 	if p.roleName != "" {
 		if ro, ok := s.roles[p.roleName]; ok {
-			roleXML = "<member>" + renderRole(ro) + "</member>"
+			// In the query protocol, list members contain fields directly — no <Role> wrapper.
+			roleXML = "<member>" + renderRoleFields(ro) + "</member>"
 		}
 	}
 	return fmt.Sprintf(`<InstanceProfile>
@@ -695,8 +701,10 @@ func (s *Service) renderProfile(p *instanceProfile) string {
 		p.createdAt.Format(time.RFC3339), roleXML)
 }
 
-func renderRole(ro *role) string {
-	return fmt.Sprintf(`<Role>
+// renderRoleFields returns the inner XML fields of a role without the outer <Role> wrapper.
+// Use inside <member> elements for list responses (ListRoles, InstanceProfile.Roles).
+func renderRoleFields(ro *role) string {
+	return fmt.Sprintf(`
     <Path>%s</Path>
     <RoleName>%s</RoleName>
     <RoleId>%s</RoleId>
@@ -704,13 +712,16 @@ func renderRole(ro *role) string {
     <CreateDate>%s</CreateDate>
     <AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument>
     <Description>%s</Description>
-    <MaxSessionDuration>%d</MaxSessionDuration>
-  </Role>`,
+    <MaxSessionDuration>%d</MaxSessionDuration>`,
 		esc(ro.path), esc(ro.name), esc(ro.roleID), esc(ro.arn),
 		ro.createdAt.Format(time.RFC3339),
 		url.QueryEscape(ro.assumeRolePolicyDocument),
 		esc(ro.description),
 		ro.maxSessionDuration)
+}
+
+func renderRole(ro *role) string {
+	return "<Role>" + renderRoleFields(ro) + "\n  </Role>"
 }
 
 // --- XML response wrappers ---
