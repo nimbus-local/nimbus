@@ -78,7 +78,7 @@ func main() {
 	r.Register(sqs.New(cfg.DefaultRegion))
 	snsSvc := sns.New(cfg.DefaultRegion)
 	r.Register(snsSvc)
-	schedSvc := scheduler.New(cfg.DefaultRegion)
+	schedSvc := scheduler.New(cfg.DefaultRegion, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port))
 	r.Register(schedSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)

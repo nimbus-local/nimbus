@@ -143,11 +143,11 @@ ship output to Nimbus instead of real CloudWatch.
 | Cron / rate expression parser — evaluate next-fire time | ✅ `rate(N unit)` + `cron(min hour dom month dow year)` with ranges, steps, name aliases |
 | In-memory ticker — fires schedules at the right time | ✅ 5 s tick; advances nextFire past now to handle bursts |
 
-### Part 3 — Target invocation + inspection
+### Part 3 — Target invocation + inspection ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| Target invocation — HTTP POST to Lambda/ECS ARN endpoint | |
+| Target invocation — HTTP POST to Lambda ARN endpoint | ✅ Lambda: `Event` invocation type, goroutine so ticker never blocks; other ARN types log and skip |
 | `/_nimbus/scheduler/schedules` inspection endpoint | ✅ (shipped in Part 1; shows NextFire + LastFired since Part 2) |
 
 ---

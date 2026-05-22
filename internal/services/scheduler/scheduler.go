@@ -13,12 +13,14 @@ import (
 const accountID = "000000000000"
 
 // Service implements the AWS EventBridge Scheduler emulator.
-// Schedules and schedule groups are stored in-memory; no scheduling fires in Part 1.
+// Schedules and schedule groups are stored in-memory. The ticker fires schedules
+// and invokes their Lambda targets via HTTP.
 type Service struct {
-	mu       sync.RWMutex
-	groups   map[string]*scheduleGroup // name -> group
-	schedules map[string]*schedule     // groupName+"/"+name -> schedule
-	region   string
+	mu        sync.RWMutex
+	groups    map[string]*scheduleGroup // name -> group
+	schedules map[string]*schedule      // groupName+"/"+name -> schedule
+	region    string
+	baseURL   string // Nimbus endpoint (e.g. http://localhost:4566) for target invocations
 }
 
 type scheduleGroup struct {
@@ -56,12 +58,16 @@ type schedule struct {
 	lastFired                  *time.Time
 }
 
-func New(region string) *Service {
+func New(region, baseURL string) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
+	if baseURL == "" {
+		baseURL = "http://localhost:4566"
+	}
 	s := &Service{
 		region:    region,
+		baseURL:   baseURL,
 		groups:    map[string]*scheduleGroup{},
 		schedules: map[string]*schedule{},
 	}
@@ -117,12 +123,17 @@ func (s *Service) tick(now time.Time) {
 	}
 }
 
-// fire logs the schedule invocation. Part 3 adds the actual HTTP call to the target.
+// fire records the invocation time and dispatches the target call in a goroutine
+// so the ticker never blocks waiting on an HTTP response.
 func (s *Service) fire(sch *schedule, now time.Time) {
-	slog.Info("scheduler: fired", "schedule", sch.name, "group", sch.groupName,
-		"expression", sch.scheduleExpression, "at", now.UTC().Format(time.RFC3339))
 	t := now
 	sch.lastFired = &t
+	slog.Info("scheduler: fired", "schedule", sch.name, "group", sch.groupName,
+		"expression", sch.scheduleExpression, "at", now.UTC().Format(time.RFC3339))
+	// Copy target bytes so the goroutine reads stable data after mu is released.
+	targetCopy := append([]byte(nil), sch.target...)
+	name := sch.name
+	go s.invokeTarget(name, targetCopy)
 }
 
 func (s *Service) Name() string { return "scheduler" }
