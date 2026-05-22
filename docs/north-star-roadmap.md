@@ -219,28 +219,28 @@ AWS Terraform provider v6.
 
 Sidecar pattern: a real Postgres container alongside Nimbus. RDS API returns endpoints pointing to it.
 
-### Part 1 — Terraform stubs
+### Part 1 — Terraform stubs ✅ shipped
 
 Needed so `terraform plan` doesn't fail before the cluster exists.
 
 | Work item | Status |
 |-----------|--------|
-| `CreateDBSubnetGroup` / `DescribeDBSubnetGroups` / `DeleteDBSubnetGroup` | |
-| `CreateDBClusterParameterGroup` / `CreateDBParameterGroup` — accept and ignore | |
+| `CreateDBSubnetGroup` / `DescribeDBSubnetGroups` / `DeleteDBSubnetGroup` | ✅ |
+| `CreateDBClusterParameterGroup` / `CreateDBParameterGroup` — accept and ignore | ✅ |
 
-### Part 2 — Cluster + sidecar
-
-| Work item | Status |
-|-----------|--------|
-| Add `postgres:16` sidecar to `docker-compose.yml` | |
-| `CreateDBCluster` / `DescribeDBClusters` / `DeleteDBCluster` — Aurora Serverless v2 | |
-| Endpoint resolves to `localhost:{postgres_port}` | |
-
-### Part 3 — DB instances
+### Part 2 — Cluster + sidecar ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateDBInstance` / `DescribeDBInstances` / `DeleteDBInstance` | |
+| Add `postgres:16` sidecar to `docker-compose.yml` | ✅ |
+| `CreateDBCluster` / `DescribeDBClusters` / `DeleteDBCluster` — Aurora Serverless v2 | ✅ |
+| Endpoint resolves to `localhost:{postgres_port}` | ✅ |
+
+### Part 3 — DB instances ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateDBInstance` / `DescribeDBInstances` / `DeleteDBInstance` | ✅ |
 
 ---
 

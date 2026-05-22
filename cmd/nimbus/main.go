@@ -21,6 +21,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/iam"
 	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
+	"github.com/nimbus-local/nimbus/internal/services/rds"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/scheduler"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
@@ -86,6 +87,8 @@ func main() {
 	r.Register(schedSvc)
 	albSvc := alb.New(cfg.DefaultRegion)
 	r.Register(albSvc)
+	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
+	r.Register(rdsSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
@@ -127,6 +130,9 @@ func main() {
 
 	// CloudFront inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/cloudfront/distributions", cfSvc.DistributionsHandler)
+
+	// RDS inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/rds/clusters", rdsSvc.ClustersHandler)
 
 	// ALB inspection endpoints — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/alb/loadbalancers", albSvc.LoadBalancersHandler)
