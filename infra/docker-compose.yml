@@ -12,6 +12,8 @@ services:
       NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       NIMBUS_POSTGRES_HOST: postgres
       NIMBUS_POSTGRES_PORT: "5432"
+      NIMBUS_VALKEY_HOST: valkey
+      NIMBUS_VALKEY_PORT: "6379"
     volumes:
       - nimbus_data:/var/lib/nimbus
       - /var/run/docker.sock:/var/run/docker.sock
@@ -20,6 +22,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
     networks:
       - nimbus-net
     healthcheck:
@@ -27,6 +31,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 15
+    restart: unless-stopped
+
+  valkey:
+    image: valkey/valkey:7.2
+    container_name: nimbus-valkey
+    networks:
+      - nimbus-net
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   postgres:
