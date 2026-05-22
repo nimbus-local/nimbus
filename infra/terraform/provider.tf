@@ -26,5 +26,6 @@ provider "aws" {
     eventbridge    = var.nimbus_endpoint
     iam            = var.nimbus_endpoint
     sts            = var.nimbus_endpoint
+    cloudwatchlogs = var.nimbus_endpoint
   }
 }
