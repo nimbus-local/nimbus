@@ -292,18 +292,15 @@ Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates
 
 Mostly needed so Terraform plans succeed. Local DNS resolution is a stretch goal.
 
-### Part 1 — Hosted zone CRUD
+### Part 1 — Hosted zone CRUD + record sets ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateHostedZone` / `GetHostedZone` / `ListHostedZones` / `DeleteHostedZone` | |
-| `GetChange` — always return `INSYNC` | |
-
-### Part 2 — Record sets
-
-| Work item | Status |
-|-----------|--------|
-| `ChangeResourceRecordSets` / `ListResourceRecordSets` — accept any records, store in-memory | |
+| `CreateHostedZone` / `GetHostedZone` / `ListHostedZones` / `DeleteHostedZone` | ✅ |
+| `GetChange` — always return `INSYNC` | ✅ |
+| `ChangeResourceRecordSets` / `ListResourceRecordSets` — accept any records, store in-memory | ✅ |
+| `ListTagsForResource` / `ChangeTagsForResource` — tag support | ✅ |
+| `GetHostedZoneCount` | ✅ |
 
 ---
 
