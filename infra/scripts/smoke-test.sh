@@ -497,6 +497,35 @@ fi
 try_match "/_nimbus/rds/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/rds/clusters"
 
+section "ElastiCache / Valkey"
+EC_RG=$($CLI elasticache describe-replication-groups --replication-group-id "$PREFIX" \
+  --query "ReplicationGroups[0].ReplicationGroupId" --output text 2>/dev/null)
+if [ -n "${EC_RG:-}" ] && [ "$EC_RG" != "None" ]; then
+  try "describe-replication-groups finds group" true
+  try_match "replication group status available" "available" \
+    $CLI elasticache describe-replication-groups --replication-group-id "$PREFIX" \
+      --query "ReplicationGroups[0].Status" --output text
+  try_match "replication group endpoint set" "localhost\|valkey\|127" \
+    $CLI elasticache describe-replication-groups --replication-group-id "$PREFIX" \
+      --query "ReplicationGroups[0].ConfigurationEndpoint.Address" --output text
+else
+  fail "describe-replication-groups (group not found — run 'make apply' first)"
+fi
+
+EC_SUBNET=$($CLI elasticache describe-cache-subnet-groups --cache-subnet-group-name "$PREFIX" \
+  --query "CacheSubnetGroups[0].CacheSubnetGroupName" --output text 2>/dev/null)
+if [ -n "${EC_SUBNET:-}" ] && [ "$EC_SUBNET" != "None" ]; then
+  try "describe-cache-subnet-groups finds group" true
+  try_match "cache subnet group status Complete" "Complete" \
+    $CLI elasticache describe-cache-subnet-groups --cache-subnet-group-name "$PREFIX" \
+      --query "CacheSubnetGroups[0].SubnetGroupStatus" --output text
+else
+  fail "describe-cache-subnet-groups (subnet group not found — run 'make apply' first)"
+fi
+
+try_match "/_nimbus/elasticache/clusters inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/elasticache/clusters"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

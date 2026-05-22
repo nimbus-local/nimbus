@@ -14,6 +14,8 @@ type Config struct {
 	Services         string
 	PostgresHost     string
 	PostgresPort     int
+	ValkeyHost       string
+	ValkeyPort       int
 }
 
 func Load() Config {
@@ -26,6 +28,8 @@ func Load() Config {
 		Services:         envOr("SERVICES", ""),
 		PostgresHost:     envOr("NIMBUS_POSTGRES_HOST", "postgres"),
 		PostgresPort:     5432,
+		ValkeyHost:       envOr("NIMBUS_VALKEY_HOST", "valkey"),
+		ValkeyPort:       6379,
 	}
 
 	if portStr := os.Getenv("NIMBUS_PORT"); portStr != "" {
@@ -36,6 +40,11 @@ func Load() Config {
 	if portStr := os.Getenv("NIMBUS_POSTGRES_PORT"); portStr != "" {
 		if p, err := strconv.Atoi(portStr); err == nil {
 			c.PostgresPort = p
+		}
+	}
+	if portStr := os.Getenv("NIMBUS_VALKEY_PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			c.ValkeyPort = p
 		}
 	}
 

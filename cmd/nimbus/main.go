@@ -17,6 +17,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/ecr"
 	"github.com/nimbus-local/nimbus/internal/services/ecs"
+	"github.com/nimbus-local/nimbus/internal/services/elasticache"
 	"github.com/nimbus-local/nimbus/internal/services/eventbridge"
 	"github.com/nimbus-local/nimbus/internal/services/iam"
 	"github.com/nimbus-local/nimbus/internal/services/kms"
@@ -89,6 +90,8 @@ func main() {
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
 	r.Register(rdsSvc)
+	ecSvc := elasticache.New(cfg.DefaultRegion, cfg.ValkeyHost, cfg.ValkeyPort)
+	r.Register(ecSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
@@ -133,6 +136,9 @@ func main() {
 
 	// RDS inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/rds/clusters", rdsSvc.ClustersHandler)
+
+	// ElastiCache inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/elasticache/clusters", ecSvc.ClustersHandler)
 
 	// ALB inspection endpoints — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/alb/loadbalancers", albSvc.LoadBalancersHandler)

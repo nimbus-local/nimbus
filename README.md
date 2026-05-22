@@ -73,6 +73,7 @@ volumes:
 | [CloudFront](docs/services/cloudfront.md) | ✅ Core | `/2020-05-31/` path prefix | Distribution CRUD — `localhost`-based `DomainName`, status always `Deployed`, ETag per distribution |
 | [ALB](docs/services/alb.md) | ✅ Core | form-encoded body, `Version=2015-12-01` | Load balancer, target group, listener, and rule CRUD — `localhost`-based `DNSName`, state always `active`; listeners start a real reverse proxy that routes requests to registered IP targets |
 | [RDS / Aurora](docs/services/rds.md) | ✅ Core | form-encoded body, `Version=2014-10-31` | Subnet group, parameter group, cluster, and instance CRUD — cluster endpoint resolves to a real Postgres sidecar; status always `available` |
+| [ElastiCache](docs/services/elasticache.md) | ✅ Core | form-encoded body, `Version=2015-02-02` | Subnet group, parameter group, cache cluster, and replication group CRUD — endpoints resolve to a real Valkey sidecar; status always `available` |
 
 ---
 

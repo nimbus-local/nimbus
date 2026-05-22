@@ -15,12 +15,16 @@ services:
       NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       NIMBUS_POSTGRES_HOST: postgres
       NIMBUS_POSTGRES_PORT: "5432"
+      NIMBUS_VALKEY_HOST: valkey
+      NIMBUS_VALKEY_PORT: "6379"
     volumes:
       - nimbus_data:/var/lib/nimbus
     depends_on:
       dynamodb-local:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     networks:
       - nimbus-network
@@ -45,6 +49,21 @@ services:
       - nimbus-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nimbus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Valkey sidecar — ElastiCache cluster endpoints resolve to this
+  valkey:
+    image: valkey/valkey:7.2
+    container_name: nimbus-valkey
+    ports:
+      - "6379:6379"
+    networks:
+      - nimbus-network
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
