@@ -15,12 +15,10 @@ vet:
 
 # ── PR gate ───────────────────────────────────────────────────────────────────
 # Runs the full clean-build-test cycle before creating the PR.
-# Usage: make pr TITLE="feat: my change" BODY_FILE=/tmp/pr-body.md
+# Usage: make pr
+# Optional overrides: make pr TITLE="feat: override title" BODY="override body"
 
 pr: _fmt-check _build _vet
-ifndef TITLE
-	$(error TITLE is required. Usage: make pr TITLE="..." BODY_FILE=/tmp/body.md)
-endif
 	@echo "── Destroying existing environment..."
 	$(INFRA) stop
 	@echo "── Starting Nimbus (rebuilding image)..."
@@ -30,7 +28,9 @@ endif
 	@echo "── Running smoke tests..."
 	$(INFRA) smoke-test
 	@echo "── All checks passed. Creating PR..."
-	gh pr create --title "$(TITLE)" $(if $(BODY_FILE),--body-file "$(BODY_FILE)")
+	gh pr create --fill \
+		$(if $(TITLE),--title "$(TITLE)") \
+		$(if $(BODY),--body "$(BODY)")
 
 # ── Internal check targets ────────────────────────────────────────────────────
 
