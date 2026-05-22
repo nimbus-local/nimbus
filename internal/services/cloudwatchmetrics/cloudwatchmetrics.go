@@ -585,12 +585,12 @@ func matchDims(target, filter map[string]string) bool {
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 type bucket struct {
-	start  time.Time
-	sum    float64
-	min    float64
-	max    float64
-	count  float64
-	unit   string
+	start time.Time
+	sum   float64
+	min   float64
+	max   float64
+	count float64
+	unit  string
 }
 
 func (b *bucket) average() float64 {
