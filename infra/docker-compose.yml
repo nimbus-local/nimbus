@@ -12,6 +12,7 @@ services:
       NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
     volumes:
       - nimbus_data:/var/lib/nimbus
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       dynamodb-local:
         condition: service_healthy
@@ -44,4 +45,5 @@ volumes:
 
 networks:
   nimbus-net:
+    name: nimbus-net  # explicit name so spawned containers can join by this name
     driver: bridge

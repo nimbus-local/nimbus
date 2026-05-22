@@ -17,23 +17,38 @@ Each phase is a self-contained chunk that ships with:
 
 ---
 
-## Phase 1 — ECS Container Execution ⬅ start here
+## Phase 1 — ECS Container Execution ✅ shipped
 
 **The unlock.** Everything else depends on containers actually running.
 
-Mount the Docker socket into Nimbus so `RunTask` starts real containers on the
-host daemon instead of returning a simulated `RUNNING` record.
+`/var/run/docker.sock` is mounted into Nimbus. `RunTask` shells out to the
+`docker` CLI (no SDK dependency) and starts real containers. Tasks transition
+`PENDING → RUNNING → STOPPED` via a 5 s polling goroutine. Services are
+kept at `desiredCount` by a 10 s reconciliation loop.
 
 | Work item | Notes |
 |-----------|-------|
-| Mount `/var/run/docker.sock` in `docker-compose.yml` | Same pattern as DynamoDB Local sidecar |
-| Docker SDK dependency (`github.com/docker/docker/client`) | First runtime dependency — justified by the feature value |
-| `RunTask` → `docker.ContainerCreate` + `ContainerStart` | Map ECS container definitions to Docker config (image, env, ports, CPU/mem) |
-| Task lifecycle goroutine | Watch real container state: `PENDING → RUNNING → STOPPED` |
-| Service reconciliation loop | Keep `desiredCount` containers running; restart on exit |
-| `StopTask` → `docker.ContainerStop` + `ContainerRemove` | Clean up on stop/delete |
-| `/_nimbus/ecs/tasks/{id}/logs` inspection endpoint | Stream container stdout/stderr |
-| Networking | Attach spawned containers to `nimbus-net` so they reach each other and Nimbus |
+| Mount `/var/run/docker.sock` in `docker-compose.yml` | ✅ Done — explicit `name: nimbus-net` added so spawned containers can join |
+| Container execution via `docker` CLI | ✅ `os/exec` — no SDK dep, works wherever Docker is installed |
+| `RunTask` → `docker run -d` | ✅ Maps image, env, portMappings, cpu, memory, command, entryPoint |
+| Task lifecycle goroutine (5 s poll) | ✅ `docker inspect` — transitions PENDING → RUNNING → STOPPED |
+| Service reconciliation loop (10 s poll) | ✅ Restarts containers that have exited |
+| `StopTask` → `docker stop` + `docker rm -f` | ✅ Async to keep API responsive |
+| `/_nimbus/ecs/tasks/{id}/logs` inspection endpoint | ✅ Streams last 200 lines from all containers |
+| Networking | ✅ `--network nimbus-net` — containers reach each other and Nimbus |
+
+**Phase 1 limitations** (targets for later iterations):
+
+| Limitation | Notes |
+|-----------|-------|
+| `secrets` field not resolved | Parsed but silently skipped; values are not injected. Future: resolve from Nimbus SSM/SecretsManager |
+| `volumes` / `mountPoints` ignored | No bind-mount or named-volume support |
+| `healthCheck` ignored | Docker's built-in healthcheck default applies |
+| `logConfiguration` ignored | Use `/_nimbus/ecs/tasks/{id}/logs` instead |
+| `links`, `dependsOn`, `ulimits`, `resourceRequirements` ignored | No dependency ordering between containers |
+| Polling, not event-driven | Replace `docker inspect` loop with `docker events` streaming for lower latency |
+| `StopTask` on a service task triggers reconciler restart | This is correct ECS behaviour; scale to 0 via `UpdateService(desiredCount=0)` |
+| Image pulls block container start | Large images can make `RunTask` slow; future: pre-pull or surface pull progress |
 
 ---
 
