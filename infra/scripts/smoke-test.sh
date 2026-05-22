@@ -454,6 +454,49 @@ try_match "/_nimbus/alb/targetgroups inspection" "$PREFIX" \
 try_match "/_nimbus/alb/listeners inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/alb/listeners"
 
+# ── RDS / Aurora ─────────────────────────────────────────────────────────────
+
+section "RDS / Aurora"
+DB_CLUSTER=$($CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
+  --query "DBClusters[0].DBClusterIdentifier" --output text 2>/dev/null)
+if [ -n "${DB_CLUSTER:-}" ] && [ "$DB_CLUSTER" != "None" ]; then
+  try "describe-db-clusters finds cluster" true
+  try_match "cluster status available" "available" \
+    $CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
+      --query "DBClusters[0].Status" --output text
+  try_match "cluster endpoint set" "localhost\|postgres\|127" \
+    $CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
+      --query "DBClusters[0].Endpoint" --output text
+else
+  fail "describe-db-clusters (cluster not found — run 'make apply' first)"
+fi
+
+DB_SUBNET=$($CLI rds describe-db-subnet-groups --db-subnet-group-name "$PREFIX" \
+  --query "DBSubnetGroups[0].DBSubnetGroupName" --output text 2>/dev/null)
+if [ -n "${DB_SUBNET:-}" ] && [ "$DB_SUBNET" != "None" ]; then
+  try "describe-db-subnet-groups finds group" true
+  try_match "subnet group status Complete" "Complete" \
+    $CLI rds describe-db-subnet-groups --db-subnet-group-name "$PREFIX" \
+      --query "DBSubnetGroups[0].SubnetGroupStatus" --output text
+else
+  fail "describe-db-subnet-groups (subnet group not found — run 'make apply' first)"
+fi
+
+DB_INSTANCE=$($CLI rds describe-db-instances \
+  --db-instance-identifier "${PREFIX}-instance-1" \
+  --query "DBInstances[0].DBInstanceIdentifier" --output text 2>/dev/null)
+if [ -n "${DB_INSTANCE:-}" ] && [ "$DB_INSTANCE" != "None" ]; then
+  try "describe-db-instances finds instance" true
+  try_match "instance status available" "available" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].DBInstanceStatus" --output text
+else
+  fail "describe-db-instances (instance not found — run 'make apply' first)"
+fi
+
+try_match "/_nimbus/rds/clusters inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/rds/clusters"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

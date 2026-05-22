@@ -10,11 +10,15 @@ services:
       NIMBUS_LOG_LEVEL: ${NIMBUS_LOG_LEVEL:-info}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
       NIMBUS_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      NIMBUS_POSTGRES_HOST: postgres
+      NIMBUS_POSTGRES_PORT: "5432"
     volumes:
       - nimbus_data:/var/lib/nimbus
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       dynamodb-local:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - nimbus-net
@@ -23,6 +27,22 @@ services:
       interval: 5s
       timeout: 3s
       retries: 15
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: nimbus-postgres
+    environment:
+      POSTGRES_USER: nimbus
+      POSTGRES_PASSWORD: nimbus
+      POSTGRES_DB: nimbus
+    networks:
+      - nimbus-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nimbus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   dynamodb-local:
