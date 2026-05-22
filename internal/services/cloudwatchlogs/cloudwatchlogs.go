@@ -87,6 +87,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getLogEvents(w, r)
 	case "FilterLogEvents":
 		s.filterLogEvents(w, r)
+	case "ListTagsForResource", "ListTagsLogGroup":
+		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{"tags": map[string]string{}})
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
 			fmt.Sprintf("Action %s is not supported.", action))
