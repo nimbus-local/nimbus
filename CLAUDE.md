@@ -54,6 +54,57 @@ When implementing a North Star phase, follow the same checklist above **plus**:
 - Add a Terraform fixture in `infra/terraform/`
 - Add a smoke test section in `infra/scripts/smoke-test.sh`
 
+## Terraform AWS provider v6 compatibility
+
+Hard-won discoveries. Each entry saved hours of debugging — do not re-derive them.
+
+### provider.tf — endpoint entry required for every new service
+
+When `endpoints {}` is explicitly configured in `provider.tf`, any service **not listed** hits real AWS instead of Nimbus. Always add `{service_key} = var.nimbus_endpoint` when implementing a new service. The key is usually the lowercase service name (`cloudwatch`, `cloudwatchlogs`, etc.). Pattern: check the existing entries in `infra/terraform/provider.tf`.
+
+### CloudWatch Metrics — dual protocol (smithy-rpc-v2-cbor vs awsJson1.0)
+
+The AWS CLI uses **awsJson1.0**: `POST /` with `X-Amz-Target: GraniteServiceVersion20100801.{Action}` and `Content-Type: application/x-amz-json-1.0`.
+
+TF provider v6 (AWS SDK Go v2) uses **smithy-rpc-v2-cbor**: `POST /service/GraniteServiceVersion20100801/operation/{Action}` with `Content-Type: application/cbor` and `smithy-protocol: rpc-v2-cbor` header. The response must also set `smithy-protocol: rpc-v2-cbor` + `Content-Type: application/cbor`.
+
+Detect both:
+```go
+func (s *Service) Detect(r *http.Request) bool {
+    return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "GraniteServiceVersion20100801.") ||
+        strings.HasPrefix(r.URL.Path, "/service/GraniteServiceVersion20100801/operation/")
+}
+```
+
+**CBOR timestamp encoding**: timestamps must be CBOR tag-1 epoch seconds (`0xc1` + uint64 epoch), NOT RFC3339 strings. The inline encoder/decoder lives in `internal/services/cloudwatchmetrics/cbor.go`.
+
+Use `TF_LOG=DEBUG terraform apply` to inspect the actual HTTP method, URL, and headers the provider sends if a new service behaves unexpectedly.
+
+### Re-apply stub operations (TF v6 calls these on second `terraform apply`)
+
+TF provider v6 calls update operations not needed during fresh creation. Implement stubs that return the existing resource:
+
+| Service | Operation | Returns |
+|---------|-----------|---------|
+| RDS | `ModifyDBSubnetGroup` | existing subnet group XML |
+| ALB | `SetSubnets` | availability zones XML |
+| ALB | `ModifyTargetGroup` | existing target group XML |
+| ElastiCache | `ModifyCacheSubnetGroup` | existing subnet group XML |
+
+Without these, `terraform apply` on an already-provisioned environment returns 400/InvalidAction.
+
+### Delete path operations (v6 calls these before deleting resources)
+
+| Service | Operation required before delete |
+|---------|----------------------------------|
+| IAM | `ListInstanceProfilesForRole`, `ListPolicyVersions` |
+| CloudWatch Logs | `DeleteLogStream` |
+| ECS services | After `DeleteService`, keep service in map with `status = "INACTIVE"` and filter from `ListServices` but not `DescribeServices` |
+
+### DynamoDB WarmThroughput injection
+
+Provider v6 reads `WarmThroughput.Status` from `DescribeTable`. DynamoDB Local omits this field. Fix: intercept the response with a `captureWriter`, parse JSON, inject `"WarmThroughput":{"Status":"ACTIVE","ReadUnitsPerSecond":0,"WriteUnitsPerSecond":0}` before forwarding to the client.
+
 ## Implementation strategy — parts, not phases
 
 Every phase is split into numbered parts in the roadmap. **Each part is one working
