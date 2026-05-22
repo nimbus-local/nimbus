@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,16 +21,19 @@ const (
 )
 
 // Service implements the ECS control plane (clusters, task definitions,
-// tasks, and services). No containers are started; task state is simulated.
+// tasks, and services). When the Docker CLI is reachable, RunTask/CreateService
+// start real containers via exec; otherwise tasks are simulated as immediately RUNNING.
 type Service struct {
-	mu       sync.RWMutex
-	clusters map[string]*cluster          // name -> cluster
-	taskDefs map[string]*taskDef          // "family:revision" -> taskDef
-	taskFams map[string]int               // family -> latest revision number
-	tasks    map[string]*ecsTask          // taskArn -> task
-	services map[string]*ecsService       // serviceArn -> service
-	tags     map[string]map[string]string // resourceArn -> tags
-	region   string
+	mu          sync.RWMutex
+	clusters    map[string]*cluster          // name -> cluster
+	taskDefs    map[string]*taskDef          // "family:revision" -> taskDef
+	taskFams    map[string]int               // family -> latest revision number
+	tasks       map[string]*ecsTask          // taskArn -> task
+	services    map[string]*ecsService       // serviceArn -> service
+	tags        map[string]map[string]string // resourceArn -> tags
+	region      string
+	dockerAvail bool   // true → shell out to docker CLI; false → simulate
+	networkName string // Docker network to attach containers to
 }
 
 type cluster struct {
@@ -67,8 +71,10 @@ type ecsTask struct {
 	memory        string
 	lastStatus    string
 	desiredStatus string
+	stoppedReason string
 	startedAt     time.Time
 	createdAt     time.Time
+	containers    map[string]string // container name → Docker container ID; nil in simulation mode
 }
 
 type ecsService struct {
@@ -88,16 +94,26 @@ func New(region string) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
+	network := os.Getenv("NIMBUS_DOCKER_NETWORK")
+	if network == "" {
+		network = "nimbus-net"
+	}
 	s := &Service{
-		region:   region,
-		clusters: map[string]*cluster{},
-		taskDefs: map[string]*taskDef{},
-		taskFams: map[string]int{},
-		tasks:    map[string]*ecsTask{},
-		services: map[string]*ecsService{},
-		tags:     map[string]map[string]string{},
+		region:      region,
+		networkName: network,
+		clusters:    map[string]*cluster{},
+		taskDefs:    map[string]*taskDef{},
+		taskFams:    map[string]int{},
+		tasks:       map[string]*ecsTask{},
+		services:    map[string]*ecsService{},
+		tags:        map[string]map[string]string{},
 	}
 	s.makeCluster("default")
+	s.dockerAvail = initDocker()
+	if s.dockerAvail {
+		go s.pollTaskLifecycle()
+		go s.reconcileServices()
+	}
 	return s
 }
 
@@ -389,6 +405,36 @@ func (s *Service) listTaskDefinitionFamilies(w http.ResponseWriter, r *http.Requ
 
 // --- Tasks ---
 
+// createTaskRecord creates a task record and stores it. Caller must hold s.mu (write).
+// In Docker mode the task starts as PENDING; the lifecycle goroutine transitions
+// it to RUNNING once containers are up. In simulation mode it is immediately RUNNING.
+func (s *Service) createTaskRecord(c *cluster, td *taskDef, group, launchType string) *ecsTask {
+	now := time.Now().UTC()
+	status := "RUNNING"
+	if s.dockerAvail && hasContainerImages(td) {
+		status = "PENDING"
+	}
+	t := &ecsTask{
+		taskArn:       s.taskARN(c.name, uid.New()),
+		taskDefArn:    td.arn,
+		clusterArn:    c.arn,
+		group:         group,
+		launchType:    launchType,
+		cpu:           td.cpu,
+		memory:        td.memory,
+		lastStatus:    status,
+		desiredStatus: "RUNNING",
+		startedAt:     now,
+		createdAt:     now,
+		containers:    map[string]string{},
+	}
+	s.tasks[t.taskArn] = t
+	if status == "RUNNING" {
+		c.runningTasksCount++
+	}
+	return t
+}
+
 func (s *Service) runTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Cluster        string `json:"cluster"`
@@ -423,27 +469,33 @@ func (s *Service) runTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UTC()
-	var tasks []map[string]interface{}
+	tdCopy := *td
+	var newTasks []*ecsTask
 	for i := 0; i < req.Count; i++ {
-		t := &ecsTask{
-			taskArn:       s.taskARN(c.name, uid.New()),
-			taskDefArn:    td.arn,
-			clusterArn:    c.arn,
-			group:         req.Group,
-			launchType:    req.LaunchType,
-			cpu:           td.cpu,
-			memory:        td.memory,
-			lastStatus:    "RUNNING",
-			desiredStatus: "RUNNING",
-			startedAt:     now,
-			createdAt:     now,
-		}
-		s.tasks[t.taskArn] = t
-		c.runningTasksCount++
-		tasks = append(tasks, taskMeta(t))
+		newTasks = append(newTasks, s.createTaskRecord(c, td, req.Group, req.LaunchType))
 	}
 	s.mu.Unlock()
+
+	// Start real containers asynchronously; task transitions PENDING→RUNNING via the poller.
+	if s.dockerAvail && hasContainerImages(&tdCopy) {
+		for _, t := range newTasks {
+			arn := t.taskArn
+			td := tdCopy
+			go s.startTaskAsync(arn, &td)
+		}
+	}
+
+	s.mu.RLock()
+	var tasks []map[string]interface{}
+	for _, t := range newTasks {
+		if latest, ok := s.tasks[t.taskArn]; ok {
+			tasks = append(tasks, taskMeta(latest))
+		}
+	}
+	s.mu.RUnlock()
+	if tasks == nil {
+		tasks = []map[string]interface{}{}
+	}
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{"tasks": tasks, "failures": []interface{}{}})
 }
@@ -458,6 +510,8 @@ func (s *Service) stopTask(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	t, ok := s.resolveTask(req.Cluster, req.Task)
+	var meta map[string]interface{}
+	var containerIDs map[string]string
 	if ok {
 		if t.lastStatus == "RUNNING" {
 			if c, cok := s.resolveCluster(req.Cluster); cok {
@@ -466,6 +520,16 @@ func (s *Service) stopTask(w http.ResponseWriter, r *http.Request) {
 		}
 		t.lastStatus = "STOPPED"
 		t.desiredStatus = "STOPPED"
+		if req.Reason != "" {
+			t.stoppedReason = req.Reason
+		}
+		if len(t.containers) > 0 {
+			containerIDs = make(map[string]string, len(t.containers))
+			for k, v := range t.containers {
+				containerIDs[k] = v
+			}
+		}
+		meta = taskMeta(t)
 	}
 	s.mu.Unlock()
 
@@ -473,7 +537,12 @@ func (s *Service) stopTask(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task not found")
 		return
 	}
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"task": taskMeta(t)})
+
+	if s.dockerAvail && len(containerIDs) > 0 {
+		go s.stopTaskContainers(containerIDs)
+	}
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"task": meta})
 }
 
 func (s *Service) describeTasks(w http.ResponseWriter, r *http.Request) {
@@ -577,7 +646,7 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 		clusterArn:   c.arn,
 		taskDefArn:   td.arn,
 		desiredCount: req.DesiredCount,
-		runningCount: req.DesiredCount, // simulated as immediately running
+		runningCount: 0, // updated by reconciler (Docker) or createTaskRecord (simulation)
 		pendingCount: 0,
 		launchType:   req.LaunchType,
 		status:       "ACTIVE",
@@ -585,29 +654,30 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	}
 	s.services[svc.arn] = svc
 	c.activeServicesCount++
-	c.runningTasksCount += req.DesiredCount
 
-	// Create simulated tasks for the service
-	now := time.Now().UTC()
+	tdCopy := *td
+	var svcTasks []*ecsTask
 	for i := 0; i < req.DesiredCount; i++ {
-		t := &ecsTask{
-			taskArn:       s.taskARN(c.name, uid.New()),
-			taskDefArn:    td.arn,
-			clusterArn:    c.arn,
-			group:         "service:" + req.ServiceName,
-			launchType:    req.LaunchType,
-			cpu:           td.cpu,
-			memory:        td.memory,
-			lastStatus:    "RUNNING",
-			desiredStatus: "RUNNING",
-			startedAt:     now,
-			createdAt:     now,
-		}
-		s.tasks[t.taskArn] = t
+		svcTasks = append(svcTasks, s.createTaskRecord(c, td, "service:"+req.ServiceName, req.LaunchType))
+	}
+	if !s.dockerAvail || !hasContainerImages(td) {
+		svc.runningCount = req.DesiredCount // simulation: immediately running
 	}
 	s.mu.Unlock()
 
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+	if s.dockerAvail && hasContainerImages(&tdCopy) {
+		for _, t := range svcTasks {
+			arn := t.taskArn
+			td := tdCopy
+			go s.startTaskAsync(arn, &td)
+		}
+	}
+
+	s.mu.RLock()
+	meta := serviceMeta(svc)
+	s.mu.RUnlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": meta})
 }
 
 func (s *Service) updateService(w http.ResponseWriter, r *http.Request) {
@@ -634,7 +704,9 @@ func (s *Service) updateService(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DesiredCount != nil {
 		svc.desiredCount = *req.DesiredCount
-		svc.runningCount = *req.DesiredCount
+		if !s.dockerAvail {
+			svc.runningCount = *req.DesiredCount // simulation only
+		}
 	}
 	s.mu.Unlock()
 
@@ -926,6 +998,7 @@ func taskMeta(t *ecsTask) map[string]interface{} {
 		"memory":            t.memory,
 		"lastStatus":        t.lastStatus,
 		"desiredStatus":     t.desiredStatus,
+		"stoppedReason":     t.stoppedReason,
 		"startedAt":         float64(t.startedAt.Unix()),
 		"createdAt":         float64(t.createdAt.Unix()),
 		"connectivity":      "CONNECTED",

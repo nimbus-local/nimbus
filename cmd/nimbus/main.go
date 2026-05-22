@@ -64,7 +64,8 @@ func main() {
 	sesSvc := ses.New(cfg.DefaultRegion)
 	r.Register(sesSvc)
 	r.Register(ecr.New(cfg.DefaultRegion))
-	r.Register(ecs.New(cfg.DefaultRegion))
+	ecsSvc := ecs.New(cfg.DefaultRegion)
+	r.Register(ecsSvc)
 	r.Register(secretsmanager.New(cfg.DefaultRegion))
 	r.Register(kms.New(cfg.DefaultRegion))
 	r.Register(ssm.New(cfg.DefaultRegion))
@@ -79,6 +80,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_nimbus/health", r.HealthHandler)
 	mux.HandleFunc("/_localstack/health", r.HealthHandler) // LocalStack-compatible alias
+
+	// ECS inspection endpoints — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/ecs/tasks/", ecsSvc.LogsHandler)
 
 	// SES inspection endpoints — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/ses/messages", func(w http.ResponseWriter, req *http.Request) {
