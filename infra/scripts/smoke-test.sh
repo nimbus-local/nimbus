@@ -526,6 +526,41 @@ fi
 try_match "/_nimbus/elasticache/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/elasticache/clusters"
 
+# ── Route 53 ─────────────────────────────────────────────────────────────────
+
+section "Route 53"
+
+R53_ZONE_ID=$($CLI route53 list-hosted-zones \
+  --query "HostedZones[?Name=='${PREFIX}.nimbus.local.'].Id" --output text \
+  | sed 's|/hostedzone/||')
+if [ -n "${R53_ZONE_ID:-}" ]; then
+  try "list-hosted-zones finds zone" true
+
+  try_match "get-hosted-zone name matches" "${PREFIX}.nimbus.local" \
+    $CLI route53 get-hosted-zone --id "$R53_ZONE_ID" \
+      --query "HostedZone.Name" --output text
+
+  try_match "list-resource-record-sets finds A record" "127.0.0.1" \
+    $CLI route53 list-resource-record-sets --hosted-zone-id "$R53_ZONE_ID"
+
+  try_match "list-resource-record-sets finds CNAME" "www\\." \
+    $CLI route53 list-resource-record-sets --hosted-zone-id "$R53_ZONE_ID"
+
+  CHANGE_ID=$($CLI route53 change-resource-record-sets \
+    --hosted-zone-id "$R53_ZONE_ID" \
+    --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"probe.'"${PREFIX}"'.nimbus.local","Type":"TXT","TTL":60,"ResourceRecords":[{"Value":"\"nimbus-probe\""}]}}]}' \
+    --query "ChangeInfo.Id" --output text)
+  if echo "$CHANGE_ID" | grep -q "/change/"; then ok "change-resource-record-sets returns change ID"; else fail "change-resource-record-sets returns change ID" "got: $CHANGE_ID"; fi
+
+  try_match "get-change returns INSYNC" "INSYNC" \
+    $CLI route53 get-change --id "$CHANGE_ID" --query "ChangeInfo.Status" --output text
+
+  try_match "list-tags-for-resource" "$PREFIX" \
+    $CLI route53 list-tags-for-resource --resource-type hostedzone --resource-id "$R53_ZONE_ID"
+else
+  fail "list-hosted-zones (zone not found — run 'make apply' first)"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

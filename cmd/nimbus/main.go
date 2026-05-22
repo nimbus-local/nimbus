@@ -23,6 +23,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
 	"github.com/nimbus-local/nimbus/internal/services/rds"
+	"github.com/nimbus-local/nimbus/internal/services/route53"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
 	"github.com/nimbus-local/nimbus/internal/services/scheduler"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
@@ -90,6 +91,7 @@ func main() {
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
 	r.Register(rdsSvc)
+	r.Register(route53.New())
 	ecSvc := elasticache.New(cfg.DefaultRegion, cfg.ValkeyHost, cfg.ValkeyPort)
 	r.Register(ecSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
