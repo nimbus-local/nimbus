@@ -13,14 +13,14 @@ In-memory CloudWatch Logs emulator. Log groups, streams, and events are stored l
 | `DescribeLogGroups` | Lists groups; supports `logGroupNamePrefix` filter |
 | `CreateLogStream` | Creates a stream inside a group |
 | `DescribeLogStreams` | Lists streams; supports `logStreamNamePrefix` filter |
-| `PutLogEvents` | Accepts log events from containers or SDKs *(Part 2)* |
-| `GetLogEvents` | Retrieves events from a stream *(Part 3)* |
-| `FilterLogEvents` | Pattern-filtered event retrieval *(Part 3)* |
+| `PutLogEvents` | Accepts log events from containers (`awslogs` driver) or any SDK caller; capped at 10,000 events per stream |
+| `GetLogEvents` | Retrieves events from a stream; supports `startTime`, `endTime`, `limit` |
+| `FilterLogEvents` | Substring pattern filter across one or more streams |
 
 ## Inspection endpoint
 
 ```bash
-# Tail a stream (Part 3)
+# Dump all events in a stream as plain text (timestamp + message per line)
 curl http://localhost:4566/_nimbus/logs/{group}/{stream}
 ```
 
@@ -33,5 +33,18 @@ nimbuslocal logs create-log-stream \
   --log-group-name /myapp/prod \
   --log-stream-name 2024/01/01/container
 
-nimbuslocal logs describe-log-groups --log-group-name-prefix /myapp
+nimbuslocal logs put-log-events \
+  --log-group-name /myapp/prod \
+  --log-stream-name 2024/01/01/container \
+  --log-events "[{\"timestamp\":$(date +%s%3N),\"message\":\"hello world\"}]"
+
+nimbuslocal logs get-log-events \
+  --log-group-name /myapp/prod \
+  --log-stream-name 2024/01/01/container
+
+nimbuslocal logs filter-log-events \
+  --log-group-name /myapp/prod \
+  --filter-pattern "ERROR"
+
+curl http://localhost:4566/_nimbus/logs/myapp/prod/2024/01/01/container
 ```

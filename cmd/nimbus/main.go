@@ -60,7 +60,8 @@ func main() {
 
 	// Register services — order matters: more specific detectors first
 	r.Register(iam.New())
-	r.Register(cloudwatchlogs.New(cfg.DefaultRegion))
+	cwlSvc := cloudwatchlogs.New(cfg.DefaultRegion)
+	r.Register(cwlSvc)
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	r.Register(lambdaSvc)
@@ -84,6 +85,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_nimbus/health", r.HealthHandler)
 	mux.HandleFunc("/_localstack/health", r.HealthHandler) // LocalStack-compatible alias
+
+	// CloudWatch Logs inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/logs/", cwlSvc.LogsHandler)
 
 	// ECS inspection endpoints — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/ecs/tasks/", ecsSvc.LogsHandler)

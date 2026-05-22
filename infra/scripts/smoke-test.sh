@@ -301,6 +301,23 @@ try_match "describe-log-streams finds stream" "container" \
   $CLI logs describe-log-streams \
     --log-group-name "/nimbus/$PREFIX/app" \
     --query "logStreams[].logStreamName" --output text
+try "put-log-events" \
+  $CLI logs put-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --log-stream-name "container" \
+    --log-events "[{\"timestamp\":$(date +%s%3N),\"message\":\"nimbus-cwl-probe-$$\"}]"
+try_match "get-log-events returns event" "nimbus-cwl-probe" \
+  $CLI logs get-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --log-stream-name "container" \
+    --query "events[].message" --output text
+try_match "filter-log-events pattern match" "nimbus-cwl-probe" \
+  $CLI logs filter-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --filter-pattern "nimbus-cwl-probe" \
+    --query "events[].message" --output text
+try_match "/_nimbus/logs inspection endpoint" "nimbus-cwl-probe" \
+  curl -sf "$NIMBUS/_nimbus/logs/nimbus/$PREFIX/app/container"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

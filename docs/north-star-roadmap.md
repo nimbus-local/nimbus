@@ -98,7 +98,7 @@ Needed for `aws_iam_instance_profile` and tag-based resources.
 
 ---
 
-## Phase 3 — CloudWatch Logs
+## Phase 3 — CloudWatch Logs ✅ shipped
 
 **Unblocks Function logging.** Once containers run, the `awslogs` log driver can
 ship output to Nimbus instead of real CloudWatch.
@@ -110,18 +110,18 @@ ship output to Nimbus instead of real CloudWatch.
 | `CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` | ✅ |
 | `CreateLogStream` / `DescribeLogStreams` | ✅ |
 
-### Part 2 — Log ingestion
+### Part 2 — Log ingestion ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `PutLogEvents` — accept from containers via `awslogs` driver | |
+| `PutLogEvents` — accept from containers via `awslogs` driver | ✅ |
 
-### Part 3 — Retrieval + inspection
+### Part 3 — Retrieval + inspection ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `GetLogEvents` / `FilterLogEvents` — basic pattern filter | |
-| `/_nimbus/logs/{group}/{stream}` inspection endpoint | |
+| `GetLogEvents` / `FilterLogEvents` — basic pattern filter | ✅ |
+| `/_nimbus/logs/{group}/{stream}` inspection endpoint | ✅ |
 
 ---
 

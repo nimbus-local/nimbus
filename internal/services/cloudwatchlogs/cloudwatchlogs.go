@@ -83,6 +83,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeLogStreams(w, r)
 	case "PutLogEvents":
 		s.putLogEvents(w, r)
+	case "GetLogEvents":
+		s.getLogEvents(w, r)
+	case "FilterLogEvents":
+		s.filterLogEvents(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
 			fmt.Sprintf("Action %s is not supported.", action))
@@ -308,6 +312,171 @@ func (s *Service) putLogEvents(w http.ResponseWriter, r *http.Request) {
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"nextSequenceToken": token,
 	})
+}
+
+// --- Log retrieval ---
+
+func (s *Service) getLogEvents(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName  string `json:"logGroupName"`
+		LogStreamName string `json:"logStreamName"`
+		StartTime     int64  `json:"startTime"`
+		EndTime       int64  `json:"endTime"`
+		Limit         int    `json:"limit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+	st, ok := g.streams[req.LogStreamName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log stream %s not found.", req.LogStreamName))
+		return
+	}
+
+	events := filterEvents(st.events, req.StartTime, req.EndTime, "", req.Limit)
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"events":            toOutputEvents(events),
+		"nextForwardToken":  "f/0",
+		"nextBackwardToken": "b/0",
+	})
+}
+
+func (s *Service) filterLogEvents(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName   string   `json:"logGroupName"`
+		LogStreamNames []string `json:"logStreamNames"`
+		StartTime      int64    `json:"startTime"`
+		EndTime        int64    `json:"endTime"`
+		FilterPattern  string   `json:"filterPattern"`
+		Limit          int      `json:"limit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+
+	// Collect streams to search
+	streams := g.streams
+	if len(req.LogStreamNames) > 0 {
+		streams = make(map[string]*logStream, len(req.LogStreamNames))
+		for _, name := range req.LogStreamNames {
+			if st, exists := g.streams[name]; exists {
+				streams[name] = st
+			}
+		}
+	}
+
+	type filteredEvent struct {
+		LogStreamName string `json:"logStreamName"`
+		Timestamp     int64  `json:"timestamp"`
+		Message       string `json:"message"`
+		IngestionTime int64  `json:"ingestionTime"`
+		EventId       string `json:"eventId"`
+	}
+	var results []filteredEvent
+	for streamName, st := range streams {
+		for _, e := range filterEvents(st.events, req.StartTime, req.EndTime, req.FilterPattern, 0) {
+			results = append(results, filteredEvent{
+				LogStreamName: streamName,
+				Timestamp:     e.timestamp,
+				Message:       e.message,
+				IngestionTime: nowMS(),
+				EventId:       uid.New(),
+			})
+		}
+	}
+	if req.Limit > 0 && len(results) > req.Limit {
+		results = results[:req.Limit]
+	}
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"events":    results,
+		"nextToken": "",
+	})
+}
+
+// filterEvents applies time-range and pattern filters to a slice of events.
+func filterEvents(events []logEvent, start, end int64, pattern string, limit int) []logEvent {
+	var out []logEvent
+	for _, e := range events {
+		if start > 0 && e.timestamp < start {
+			continue
+		}
+		if end > 0 && e.timestamp > end {
+			continue
+		}
+		if pattern != "" && !strings.Contains(e.message, pattern) {
+			continue
+		}
+		out = append(out, e)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+type outputEvent struct {
+	Timestamp     int64  `json:"timestamp"`
+	Message       string `json:"message"`
+	IngestionTime int64  `json:"ingestionTime"`
+}
+
+func toOutputEvents(events []logEvent) []outputEvent {
+	now := nowMS()
+	out := make([]outputEvent, len(events))
+	for i, e := range events {
+		out[i] = outputEvent{Timestamp: e.timestamp, Message: e.message, IngestionTime: now}
+	}
+	return out
+}
+
+// LogsHandler serves /_nimbus/logs/{group}/{stream} — streams recent events as plain text.
+func (s *Service) LogsHandler(w http.ResponseWriter, r *http.Request) {
+	// Path: /_nimbus/logs/{group...}/{stream}
+	path := strings.TrimPrefix(r.URL.Path, "/_nimbus/logs/")
+	idx := strings.LastIndex(path, "/")
+	if idx < 0 {
+		http.Error(w, "path must be /_nimbus/logs/{group}/{stream}", http.StatusBadRequest)
+		return
+	}
+	groupName := "/" + path[:idx]
+	streamName := path[idx+1:]
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	g, ok := s.groups[groupName]
+	if !ok {
+		http.Error(w, fmt.Sprintf("log group %s not found", groupName), http.StatusNotFound)
+		return
+	}
+	st, ok := g.streams[streamName]
+	if !ok {
+		http.Error(w, fmt.Sprintf("log stream %s not found", streamName), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	for _, e := range st.events {
+		t := time.UnixMilli(e.timestamp).UTC().Format(time.RFC3339)
+		fmt.Fprintf(w, "%s %s\n", t, e.message)
+	}
 }
 
 // --- ARN helpers ---

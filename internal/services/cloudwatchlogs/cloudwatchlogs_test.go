@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -231,5 +232,114 @@ func TestPutLogEvents_StreamNotFound(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- GetLogEvents ---
+
+func TestGetLogEvents(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app", "logStreamName": "s"})
+	cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+		"logEvents": []map[string]interface{}{
+			{"timestamp": 1000, "message": "alpha"},
+			{"timestamp": 2000, "message": "beta"},
+		},
+	})
+
+	w := cwlReq(t, svc, "GetLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := decode(t, w)
+	events := body["events"].([]interface{})
+	if len(events) != 2 {
+		t.Errorf("expected 2 events, got %d", len(events))
+	}
+}
+
+func TestGetLogEvents_TimeFilter(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app", "logStreamName": "s"})
+	cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+		"logEvents": []map[string]interface{}{
+			{"timestamp": 1000, "message": "early"},
+			{"timestamp": 5000, "message": "mid"},
+			{"timestamp": 9000, "message": "late"},
+		},
+	})
+
+	w := cwlReq(t, svc, "GetLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+		"startTime":     2000,
+		"endTime":       8000,
+	})
+	body := decode(t, w)
+	events := body["events"].([]interface{})
+	if len(events) != 1 {
+		t.Errorf("expected 1 event in range, got %d", len(events))
+	}
+}
+
+// --- FilterLogEvents ---
+
+func TestFilterLogEvents(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app", "logStreamName": "s"})
+	cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+		"logEvents": []map[string]interface{}{
+			{"timestamp": 1000, "message": "ERROR something failed"},
+			{"timestamp": 2000, "message": "INFO request ok"},
+			{"timestamp": 3000, "message": "ERROR another failure"},
+		},
+	})
+
+	w := cwlReq(t, svc, "FilterLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"filterPattern": "ERROR",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := decode(t, w)
+	events := body["events"].([]interface{})
+	if len(events) != 2 {
+		t.Errorf("expected 2 ERROR events, got %d", len(events))
+	}
+}
+
+// --- Inspection handler ---
+
+func TestLogsHandler(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app/prod"})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app/prod", "logStreamName": "container"})
+	cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app/prod",
+		"logStreamName": "container",
+		"logEvents":     []map[string]interface{}{{"timestamp": 1000000, "message": "hello from container"}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_nimbus/logs/app/prod/container", nil)
+	w := httptest.NewRecorder()
+	svc.LogsHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "hello from container") {
+		t.Errorf("expected log message in output, got: %s", w.Body.String())
 	}
 }
