@@ -119,6 +119,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeCacheSubnetGroups(w, r)
 	case "DeleteCacheSubnetGroup":
 		s.deleteCacheSubnetGroup(w, r)
+	case "ModifyCacheSubnetGroup":
+		s.modifyCacheSubnetGroup(w, r)
 	// Parameter groups
 	case "CreateCacheParameterGroup":
 		s.createCacheParameterGroup(w, r)
@@ -239,6 +241,22 @@ func (s *Service) deleteCacheSubnetGroup(w http.ResponseWriter, r *http.Request)
 	delete(s.subnetGroups, name)
 	s.mu.Unlock()
 	writeXML(w, http.StatusOK, wrap("DeleteCacheSubnetGroup", ""))
+}
+
+func (s *Service) modifyCacheSubnetGroup(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("CacheSubnetGroupName")
+	s.mu.RLock()
+	sg := s.subnetGroups[name]
+	s.mu.RUnlock()
+	if sg == nil {
+		ecError(w, http.StatusNotFound, "CacheSubnetGroupNotFoundFault",
+			fmt.Sprintf("CacheSubnetGroup '%s' not found.", name))
+		return
+	}
+	writeXML(w, http.StatusOK, wrap("ModifyCacheSubnetGroup", fmt.Sprintf(`
+    <ModifyCacheSubnetGroupResult>
+      <CacheSubnetGroup>%s</CacheSubnetGroup>
+    </ModifyCacheSubnetGroupResult>`, subnetGroupXML(sg.name, sg.description, sg.arn))))
 }
 
 func subnetGroupXML(name, desc, arn string) string {

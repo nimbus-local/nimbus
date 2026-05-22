@@ -6,11 +6,12 @@
 package cloudwatchmetrics
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,10 @@ import (
 )
 
 const (
-	accountID = "000000000000"
-	cwNS      = "https://monitoring.amazonaws.com/doc/2010-08-01/"
-	cwVersion = "2010-08-01"
-	maxPoints = 10_000
+	accountID  = "000000000000"
+	cwTarget   = "GraniteServiceVersion20100801."
+	cwCBORPath = "/service/GraniteServiceVersion20100801/operation/"
+	maxPoints  = 10_000
 )
 
 // Service implements the AWS CloudWatch Metrics emulator.
@@ -78,19 +79,19 @@ func New(region string) *Service {
 func (s *Service) Name() string { return "cloudwatchmetrics" }
 
 func (s *Service) Detect(r *http.Request) bool {
-	if !strings.Contains(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
-		return false
-	}
-	_ = r.ParseForm()
-	return r.FormValue("Version") == cwVersion
+	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), cwTarget) ||
+		strings.HasPrefix(r.URL.Path, cwCBORPath)
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		cwError(w, http.StatusBadRequest, "InvalidParameterValue", "cannot parse request body")
+	// TF provider v6 uses smithy-rpc-v2-cbor: action is in the URL path.
+	if strings.HasPrefix(r.URL.Path, cwCBORPath) {
+		s.serveCBOR(w, r)
 		return
 	}
-	switch r.FormValue("Action") {
+	// AWS CLI uses awsJson1.0: action is in the X-Amz-Target header.
+	action := strings.TrimPrefix(r.Header.Get("X-Amz-Target"), cwTarget)
+	switch action {
 	case "PutMetricData":
 		s.putMetricData(w, r)
 	case "ListMetrics":
@@ -107,27 +108,37 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeAlarmsForMetric(w, r)
 	case "DeleteAlarms":
 		s.deleteAlarms(w, r)
-	case "SetAlarmState":
-		writeXML(w, http.StatusOK, wrap("SetAlarmState", ""))
-	case "EnableAlarmActions", "DisableAlarmActions":
-		writeXML(w, http.StatusOK, wrap(r.FormValue("Action"), ""))
+	case "SetAlarmState", "EnableAlarmActions", "DisableAlarmActions":
+		writeJSON(w, http.StatusOK, map[string]interface{}{})
 	case "ListTagsForResource":
 		s.listTagsForResource(w, r)
 	case "TagResource":
 		s.tagResource(w, r)
 	case "UntagResource":
-		writeXML(w, http.StatusOK, wrap("UntagResource", ""))
+		s.untagResource(w, r)
 	default:
 		cwError(w, http.StatusBadRequest, "InvalidAction",
-			fmt.Sprintf("Action %s is not supported.", r.FormValue("Action")))
+			fmt.Sprintf("Action %s is not supported.", action))
 	}
 }
 
 // ── PutMetricData ─────────────────────────────────────────────────────────────
 
 func (s *Service) putMetricData(w http.ResponseWriter, r *http.Request) {
-	namespace := r.FormValue("Namespace")
-	if namespace == "" {
+	var req struct {
+		Namespace  string `json:"Namespace"`
+		MetricData []struct {
+			MetricName string `json:"MetricName"`
+			Dimensions []struct {
+				Name  string `json:"Name"`
+				Value string `json:"Value"`
+			} `json:"Dimensions"`
+			Timestamp string  `json:"Timestamp"`
+			Value     float64 `json:"Value"`
+			Unit      string  `json:"Unit"`
+		} `json:"MetricData"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Namespace == "" {
 		cwError(w, http.StatusBadRequest, "MissingParameter", "Namespace is required")
 		return
 	}
@@ -135,330 +146,409 @@ func (s *Service) putMetricData(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i := 1; ; i++ {
-		prefix := fmt.Sprintf("MetricData.member.%d.", i)
-		metricName := r.FormValue(prefix + "MetricName")
-		if metricName == "" {
-			break
+	for _, md := range req.MetricData {
+		dims := make(map[string]string)
+		for _, d := range md.Dimensions {
+			dims[d.Name] = d.Value
 		}
-
-		dims := parseDimensions(r, prefix+"Dimensions.member.")
-		value, _ := strconv.ParseFloat(r.FormValue(prefix+"Value"), 64)
-
-		tsStr := r.FormValue(prefix + "Timestamp")
 		var ts time.Time
-		if tsStr != "" {
-			ts, _ = time.Parse(time.RFC3339, tsStr)
+		if md.Timestamp != "" {
+			ts, _ = time.Parse(time.RFC3339, md.Timestamp)
 		}
 		if ts.IsZero() {
 			ts = time.Now().UTC()
 		}
-
-		unit := r.FormValue(prefix + "Unit")
+		unit := md.Unit
 		if unit == "" {
 			unit = "None"
 		}
-
-		series := s.findOrCreate(namespace, metricName, dims)
-		series.points = append(series.points, dataPoint{timestamp: ts, value: value, unit: unit})
+		series := s.findOrCreate(req.Namespace, md.MetricName, dims)
+		series.points = append(series.points, dataPoint{timestamp: ts, value: md.Value, unit: unit})
 		if len(series.points) > maxPoints {
 			series.points = series.points[len(series.points)-maxPoints:]
 		}
 	}
 
-	writeXML(w, http.StatusOK, wrap("PutMetricData", ""))
+	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
 // ── ListMetrics ───────────────────────────────────────────────────────────────
 
 func (s *Service) listMetrics(w http.ResponseWriter, r *http.Request) {
-	nsFilter := r.FormValue("Namespace")
-	nameFilter := r.FormValue("MetricName")
-	dimFilter := parseDimensions(r, "Dimensions.member.")
+	var req struct {
+		Namespace  string `json:"Namespace"`
+		MetricName string `json:"MetricName"`
+		Dimensions []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"Dimensions"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	dimFilter := make(map[string]string)
+	for _, d := range req.Dimensions {
+		dimFilter[d.Name] = d.Value
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var items []string
+	type metricJSON struct {
+		Namespace  string              `json:"Namespace"`
+		MetricName string              `json:"MetricName"`
+		Dimensions []map[string]string `json:"Dimensions"`
+	}
+
+	var metrics []metricJSON
 	for _, seriesList := range s.metrics {
 		for _, series := range seriesList {
-			if nsFilter != "" && series.namespace != nsFilter {
+			if req.Namespace != "" && series.namespace != req.Namespace {
 				continue
 			}
-			if nameFilter != "" && series.metricName != nameFilter {
+			if req.MetricName != "" && series.metricName != req.MetricName {
 				continue
 			}
 			if !matchDims(series.dimensions, dimFilter) {
 				continue
 			}
-			items = append(items, metricXML(series))
+			var dims []map[string]string
+			for k, v := range series.dimensions {
+				dims = append(dims, map[string]string{"Name": k, "Value": v})
+			}
+			if dims == nil {
+				dims = []map[string]string{}
+			}
+			metrics = append(metrics, metricJSON{
+				Namespace:  series.namespace,
+				MetricName: series.metricName,
+				Dimensions: dims,
+			})
 		}
 	}
+	if metrics == nil {
+		metrics = []metricJSON{}
+	}
 
-	writeXML(w, http.StatusOK, wrap("ListMetrics", fmt.Sprintf(`
-  <ListMetricsResult>
-    <Metrics>%s</Metrics>
-  </ListMetricsResult>`, strings.Join(items, ""))))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"Metrics":   metrics,
+		"NextToken": "",
+	})
 }
 
 // ── GetMetricStatistics ───────────────────────────────────────────────────────
 
 func (s *Service) getMetricStatistics(w http.ResponseWriter, r *http.Request) {
-	namespace := r.FormValue("Namespace")
-	metricName := r.FormValue("MetricName")
-	dims := parseDimensions(r, "Dimensions.member.")
+	var req struct {
+		Namespace  string `json:"Namespace"`
+		MetricName string `json:"MetricName"`
+		Dimensions []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"Dimensions"`
+		StartTime  string   `json:"StartTime"`
+		EndTime    string   `json:"EndTime"`
+		Period     int      `json:"Period"`
+		Statistics []string `json:"Statistics"`
+		Unit       string   `json:"Unit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
 
-	startStr := r.FormValue("StartTime")
-	endStr := r.FormValue("EndTime")
-	periodStr := r.FormValue("Period")
-
+	dims := make(map[string]string)
+	for _, d := range req.Dimensions {
+		dims[d.Name] = d.Value
+	}
 	var start, end time.Time
-	start, _ = time.Parse(time.RFC3339, startStr)
-	end, _ = time.Parse(time.RFC3339, endStr)
-	period, _ := strconv.Atoi(periodStr)
+	start, _ = time.Parse(time.RFC3339, req.StartTime)
+	end, _ = time.Parse(time.RFC3339, req.EndTime)
+	period := req.Period
 	if period <= 0 {
 		period = 60
 	}
 
-	// Collect requested stats
-	var wantedStats []string
-	for i := 1; ; i++ {
-		s := r.FormValue(fmt.Sprintf("Statistics.member.%d", i))
-		if s == "" {
-			break
-		}
-		wantedStats = append(wantedStats, s)
-	}
-	unit := r.FormValue("Unit")
-
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	series := s.find(namespace, metricName, dims)
-	if series == nil {
-		writeXML(w, http.StatusOK, wrap("GetMetricStatistics", `
-  <GetMetricStatisticsResult>
-    <Label>`+metricName+`</Label>
-    <Datapoints/>
-  </GetMetricStatisticsResult>`))
-		return
+	type datapointJSON struct {
+		Timestamp   string  `json:"Timestamp"`
+		SampleCount float64 `json:"SampleCount"`
+		Average     float64 `json:"Average,omitempty"`
+		Sum         float64 `json:"Sum,omitempty"`
+		Minimum     float64 `json:"Minimum,omitempty"`
+		Maximum     float64 `json:"Maximum,omitempty"`
+		Unit        string  `json:"Unit"`
 	}
 
-	buckets := aggregateToBuckets(series.points, start, end, period, unit)
-	var dpXML []string
-	for _, b := range buckets {
-		dpXML = append(dpXML, b.toXML(wantedStats))
+	var datapoints []datapointJSON
+	if series := s.find(req.Namespace, req.MetricName, dims); series != nil {
+		for _, b := range aggregateToBuckets(series.points, start, end, period, req.Unit) {
+			dp := datapointJSON{
+				Timestamp:   b.start.UTC().Format(time.RFC3339),
+				SampleCount: b.count,
+				Unit:        b.unit,
+			}
+			for _, stat := range req.Statistics {
+				switch stat {
+				case "Average":
+					dp.Average = b.average()
+				case "Sum":
+					dp.Sum = b.sum
+				case "Minimum":
+					dp.Minimum = b.min
+				case "Maximum":
+					dp.Maximum = b.max
+				}
+			}
+			datapoints = append(datapoints, dp)
+		}
+	}
+	if datapoints == nil {
+		datapoints = []datapointJSON{}
 	}
 
-	writeXML(w, http.StatusOK, wrap("GetMetricStatistics", fmt.Sprintf(`
-  <GetMetricStatisticsResult>
-    <Label>%s</Label>
-    <Datapoints>%s</Datapoints>
-  </GetMetricStatisticsResult>`, metricName, strings.Join(dpXML, ""))))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"Label":      req.MetricName,
+		"Datapoints": datapoints,
+	})
 }
 
 // ── GetMetricData ─────────────────────────────────────────────────────────────
 
 func (s *Service) getMetricData(w http.ResponseWriter, r *http.Request) {
-	startStr := r.FormValue("StartTime")
-	endStr := r.FormValue("EndTime")
+	var req struct {
+		StartTime         string `json:"StartTime"`
+		EndTime           string `json:"EndTime"`
+		MetricDataQueries []struct {
+			Id         string `json:"Id"`
+			MetricStat struct {
+				Metric struct {
+					Namespace  string `json:"Namespace"`
+					MetricName string `json:"MetricName"`
+					Dimensions []struct {
+						Name  string `json:"Name"`
+						Value string `json:"Value"`
+					} `json:"Dimensions"`
+				} `json:"Metric"`
+				Period int    `json:"Period"`
+				Stat   string `json:"Stat"`
+			} `json:"MetricStat"`
+		} `json:"MetricDataQueries"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
 	var start, end time.Time
-	start, _ = time.Parse(time.RFC3339, startStr)
-	end, _ = time.Parse(time.RFC3339, endStr)
+	start, _ = time.Parse(time.RFC3339, req.StartTime)
+	end, _ = time.Parse(time.RFC3339, req.EndTime)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var resultXML []string
-	for i := 1; ; i++ {
-		qPrefix := fmt.Sprintf("MetricDataQueries.member.%d.", i)
-		queryID := r.FormValue(qPrefix + "Id")
-		if queryID == "" {
-			break
-		}
+	type resultJSON struct {
+		Id         string    `json:"Id"`
+		Label      string    `json:"Label"`
+		Timestamps []string  `json:"Timestamps"`
+		Values     []float64 `json:"Values"`
+		StatusCode string    `json:"StatusCode"`
+	}
 
-		namespace := r.FormValue(qPrefix + "MetricStat.Metric.Namespace")
-		metricName := r.FormValue(qPrefix + "MetricStat.Metric.MetricName")
-		dims := parseDimensions(r, qPrefix+"MetricStat.Metric.Dimensions.member.")
-		periodStr := r.FormValue(qPrefix + "MetricStat.Period")
-		stat := r.FormValue(qPrefix + "MetricStat.Stat")
-		period, _ := strconv.Atoi(periodStr)
+	var results []resultJSON
+	for _, q := range req.MetricDataQueries {
+		dims := make(map[string]string)
+		for _, d := range q.MetricStat.Metric.Dimensions {
+			dims[d.Name] = d.Value
+		}
+		period := q.MetricStat.Period
 		if period <= 0 {
 			period = 60
 		}
-
-		series := s.find(namespace, metricName, dims)
-		var timestamps, values []string
-		if series != nil {
-			buckets := aggregateToBuckets(series.points, start, end, period, "")
-			for _, b := range buckets {
-				v := b.statValue(stat)
-				timestamps = append(timestamps, b.start.UTC().Format(time.RFC3339))
-				values = append(values, strconv.FormatFloat(v, 'f', -1, 64))
+		res := resultJSON{
+			Id:         q.Id,
+			Label:      q.MetricStat.Metric.MetricName,
+			Timestamps: []string{},
+			Values:     []float64{},
+			StatusCode: "Complete",
+		}
+		if series := s.find(q.MetricStat.Metric.Namespace, q.MetricStat.Metric.MetricName, dims); series != nil {
+			for _, b := range aggregateToBuckets(series.points, start, end, period, "") {
+				res.Timestamps = append(res.Timestamps, b.start.UTC().Format(time.RFC3339))
+				res.Values = append(res.Values, b.statValue(q.MetricStat.Stat))
 			}
 		}
-
-		var tsXML, valXML []string
-		for _, t := range timestamps {
-			tsXML = append(tsXML, "<member>"+t+"</member>")
-		}
-		for _, v := range values {
-			valXML = append(valXML, "<member>"+v+"</member>")
-		}
-
-		resultXML = append(resultXML, fmt.Sprintf(`
-    <member>
-      <Id>%s</Id>
-      <Label>%s</Label>
-      <StatusCode>Complete</StatusCode>
-      <Timestamps>%s</Timestamps>
-      <Values>%s</Values>
-    </member>`, queryID, metricName, strings.Join(tsXML, ""), strings.Join(valXML, "")))
+		results = append(results, res)
+	}
+	if results == nil {
+		results = []resultJSON{}
 	}
 
-	writeXML(w, http.StatusOK, wrap("GetMetricData", fmt.Sprintf(`
-  <GetMetricDataResult>
-    <MetricDataResults>%s</MetricDataResults>
-  </GetMetricDataResult>`, strings.Join(resultXML, ""))))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"MetricDataResults": results,
+		"Messages":          []interface{}{},
+	})
 }
 
 // ── Alarms ────────────────────────────────────────────────────────────────────
 
 func (s *Service) putMetricAlarm(w http.ResponseWriter, r *http.Request) {
-	name := r.FormValue("AlarmName")
-	if name == "" {
+	var req struct {
+		AlarmName          string  `json:"AlarmName"`
+		AlarmDescription   string  `json:"AlarmDescription"`
+		Namespace          string  `json:"Namespace"`
+		MetricName         string  `json:"MetricName"`
+		ComparisonOperator string  `json:"ComparisonOperator"`
+		Threshold          float64 `json:"Threshold"`
+		EvaluationPeriods  int     `json:"EvaluationPeriods"`
+		Period             int     `json:"Period"`
+		Statistic          string  `json:"Statistic"`
+		Unit               string  `json:"Unit"`
+		Dimensions         []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"Dimensions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AlarmName == "" {
 		cwError(w, http.StatusBadRequest, "MissingParameter", "AlarmName is required")
 		return
 	}
-	threshold, _ := strconv.ParseFloat(r.FormValue("Threshold"), 64)
-	evalPeriods, _ := strconv.Atoi(r.FormValue("EvaluationPeriods"))
-	period, _ := strconv.Atoi(r.FormValue("Period"))
-	dims := parseDimensions(r, "Dimensions.member.")
-	arn := s.alarmARN(name)
+
+	dims := make(map[string]string)
+	for _, d := range req.Dimensions {
+		dims[d.Name] = d.Value
+	}
 
 	s.mu.Lock()
-	s.alarms[name] = &alarm{
-		name:               name,
-		arn:                arn,
-		namespace:          r.FormValue("Namespace"),
-		metricName:         r.FormValue("MetricName"),
-		comparisonOperator: r.FormValue("ComparisonOperator"),
-		threshold:          threshold,
-		evaluationPeriods:  evalPeriods,
-		period:             period,
-		statistic:          r.FormValue("Statistic"),
-		unit:               r.FormValue("Unit"),
-		description:        r.FormValue("AlarmDescription"),
+	s.alarms[req.AlarmName] = &alarm{
+		name:               req.AlarmName,
+		arn:                s.alarmARN(req.AlarmName),
+		namespace:          req.Namespace,
+		metricName:         req.MetricName,
+		comparisonOperator: req.ComparisonOperator,
+		threshold:          req.Threshold,
+		evaluationPeriods:  req.EvaluationPeriods,
+		period:             req.Period,
+		statistic:          req.Statistic,
+		unit:               req.Unit,
+		description:        req.AlarmDescription,
 		createdAt:          time.Now().UTC(),
 		dimensions:         dims,
 	}
 	s.mu.Unlock()
 
-	writeXML(w, http.StatusOK, wrap("PutMetricAlarm", ""))
+	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
 func (s *Service) describeAlarms(w http.ResponseWriter, r *http.Request) {
-	stateFilter := r.FormValue("StateValue") // OK | ALARM | INSUFFICIENT_DATA
+	var req struct {
+		AlarmNames []string `json:"AlarmNames"`
+		StateValue string   `json:"StateValue"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Collect requested alarm names (optional filter)
-	var nameFilter []string
-	for i := 1; ; i++ {
-		n := r.FormValue(fmt.Sprintf("AlarmNames.member.%d", i))
-		if n == "" {
-			break
-		}
-		nameFilter = append(nameFilter, n)
-	}
-
-	var items []string
+	var alarms []map[string]interface{}
 	for _, a := range s.alarms {
-		if len(nameFilter) > 0 && !containsStr(nameFilter, a.name) {
+		if len(req.AlarmNames) > 0 && !containsStr(req.AlarmNames, a.name) {
 			continue
 		}
-		if stateFilter != "" && stateFilter != "OK" {
-			continue // all alarms are always OK
+		if req.StateValue != "" && req.StateValue != "OK" {
+			continue
 		}
-		items = append(items, s.alarmXML(a))
+		alarms = append(alarms, s.alarmMap(a))
+	}
+	if alarms == nil {
+		alarms = []map[string]interface{}{}
 	}
 
-	writeXML(w, http.StatusOK, wrap("DescribeAlarms", fmt.Sprintf(`
-  <DescribeAlarmsResult>
-    <MetricAlarms>%s</MetricAlarms>
-  </DescribeAlarmsResult>`, strings.Join(items, ""))))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"MetricAlarms":    alarms,
+		"CompositeAlarms": []interface{}{},
+	})
 }
 
 func (s *Service) describeAlarmsForMetric(w http.ResponseWriter, r *http.Request) {
-	namespace := r.FormValue("Namespace")
-	metricName := r.FormValue("MetricName")
-	dims := parseDimensions(r, "Dimensions.member.")
+	var req struct {
+		Namespace  string `json:"Namespace"`
+		MetricName string `json:"MetricName"`
+		Dimensions []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"Dimensions"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	dims := make(map[string]string)
+	for _, d := range req.Dimensions {
+		dims[d.Name] = d.Value
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var items []string
+	var alarms []map[string]interface{}
 	for _, a := range s.alarms {
-		if a.namespace != namespace || a.metricName != metricName {
+		if a.namespace != req.Namespace || a.metricName != req.MetricName {
 			continue
 		}
 		if !matchDims(a.dimensions, dims) {
 			continue
 		}
-		items = append(items, s.alarmXML(a))
+		alarms = append(alarms, s.alarmMap(a))
+	}
+	if alarms == nil {
+		alarms = []map[string]interface{}{}
 	}
 
-	writeXML(w, http.StatusOK, wrap("DescribeAlarmsForMetric", fmt.Sprintf(`
-  <DescribeAlarmsForMetricResult>
-    <MetricAlarms>%s</MetricAlarms>
-  </DescribeAlarmsForMetricResult>`, strings.Join(items, ""))))
+	writeJSON(w, http.StatusOK, map[string]interface{}{"MetricAlarms": alarms})
 }
 
 func (s *Service) deleteAlarms(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AlarmNames []string `json:"AlarmNames"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
 	s.mu.Lock()
-	for i := 1; ; i++ {
-		name := r.FormValue(fmt.Sprintf("AlarmNames.member.%d", i))
-		if name == "" {
-			break
-		}
+	for _, name := range req.AlarmNames {
 		delete(s.alarms, name)
 	}
 	s.mu.Unlock()
-	writeXML(w, http.StatusOK, wrap("DeleteAlarms", ""))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
-func (s *Service) alarmXML(a *alarm) string {
-	var dimXML []string
+func (s *Service) alarmMap(a *alarm) map[string]interface{} {
+	var dims []map[string]string
 	for k, v := range a.dimensions {
-		dimXML = append(dimXML, fmt.Sprintf(`<member><Name>%s</Name><Value>%s</Value></member>`, k, v))
+		dims = append(dims, map[string]string{"Name": k, "Value": v})
 	}
-	return fmt.Sprintf(`
-    <member>
-      <AlarmName>%s</AlarmName>
-      <AlarmArn>%s</AlarmArn>
-      <AlarmDescription>%s</AlarmDescription>
-      <Namespace>%s</Namespace>
-      <MetricName>%s</MetricName>
-      <ComparisonOperator>%s</ComparisonOperator>
-      <Threshold>%g</Threshold>
-      <EvaluationPeriods>%d</EvaluationPeriods>
-      <Period>%d</Period>
-      <Statistic>%s</Statistic>
-      <StateValue>OK</StateValue>
-      <StateReason>Nimbus local emulator — state is always OK</StateReason>
-      <StateUpdatedTimestamp>%s</StateUpdatedTimestamp>
-      <AlarmConfigurationUpdatedTimestamp>%s</AlarmConfigurationUpdatedTimestamp>
-      <ActionsEnabled>true</ActionsEnabled>
-      <OKActions/>
-      <AlarmActions/>
-      <InsufficientDataActions/>
-      <Dimensions>%s</Dimensions>
-    </member>`,
-		a.name, a.arn, a.description, a.namespace, a.metricName,
-		a.comparisonOperator, a.threshold, a.evaluationPeriods, a.period, a.statistic,
-		a.createdAt.UTC().Format(time.RFC3339), a.createdAt.UTC().Format(time.RFC3339),
-		strings.Join(dimXML, ""))
+	if dims == nil {
+		dims = []map[string]string{}
+	}
+	ts := a.createdAt.UTC().Format(time.RFC3339)
+	return map[string]interface{}{
+		"AlarmName":                          a.name,
+		"AlarmArn":                           a.arn,
+		"AlarmDescription":                   a.description,
+		"AlarmConfigurationUpdatedTimestamp": ts,
+		"ActionsEnabled":                     true,
+		"OKActions":                          []string{},
+		"AlarmActions":                       []string{},
+		"InsufficientDataActions":            []string{},
+		"StateValue":                         "OK",
+		"StateReason":                        "Nimbus local emulator — state is always OK",
+		"StateReasonData":                    "",
+		"StateUpdatedTimestamp":              ts,
+		"MetricName":                         a.metricName,
+		"Namespace":                          a.namespace,
+		"Statistic":                          a.statistic,
+		"Dimensions":                         dims,
+		"Period":                             a.period,
+		"EvaluationPeriods":                  a.evaluationPeriods,
+		"DatapointsToAlarm":                  a.evaluationPeriods,
+		"Threshold":                          a.threshold,
+		"ComparisonOperator":                 a.comparisonOperator,
+		"TreatMissingData":                   "missing",
+	}
 }
 
 func (s *Service) alarmARN(name string) string {
@@ -468,36 +558,64 @@ func (s *Service) alarmARN(name string) string {
 // ── Tags ──────────────────────────────────────────────────────────────────────
 
 func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
-	arn := r.FormValue("ResourceARN")
+	var req struct {
+		ResourceARN string `json:"ResourceARN"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
 	s.mu.RLock()
-	tags := s.tags[arn]
+	tags := s.tags[req.ResourceARN]
 	s.mu.RUnlock()
 
-	var items []string
+	var tagList []map[string]string
 	for k, v := range tags {
-		items = append(items, fmt.Sprintf(`<member><Key>%s</Key><Value>%s</Value></member>`, k, v))
+		tagList = append(tagList, map[string]string{"Key": k, "Value": v})
 	}
-	writeXML(w, http.StatusOK, wrap("ListTagsForResource", fmt.Sprintf(`
-  <ListTagsForResourceResult>
-    <Tags>%s</Tags>
-  </ListTagsForResourceResult>`, strings.Join(items, ""))))
+	if tagList == nil {
+		tagList = []map[string]string{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"Tags": tagList})
 }
 
 func (s *Service) tagResource(w http.ResponseWriter, r *http.Request) {
-	arn := r.FormValue("ResourceARN")
-	s.mu.Lock()
-	if s.tags[arn] == nil {
-		s.tags[arn] = map[string]string{}
+	var req struct {
+		ResourceARN string `json:"ResourceARN"`
+		Tags        []struct {
+			Key   string `json:"Key"`
+			Value string `json:"Value"`
+		} `json:"Tags"`
 	}
-	for i := 1; ; i++ {
-		k := r.FormValue(fmt.Sprintf("Tags.member.%d.Key", i))
-		if k == "" {
-			break
-		}
-		s.tags[arn][k] = r.FormValue(fmt.Sprintf("Tags.member.%d.Value", i))
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if s.tags[req.ResourceARN] == nil {
+		s.tags[req.ResourceARN] = map[string]string{}
+	}
+	for _, t := range req.Tags {
+		s.tags[req.ResourceARN][t.Key] = t.Value
 	}
 	s.mu.Unlock()
-	writeXML(w, http.StatusOK, wrap("TagResource", ""))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) untagResource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ResourceARN string   `json:"ResourceARN"`
+		TagKeys     []string `json:"TagKeys"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if tags, ok := s.tags[req.ResourceARN]; ok {
+		for _, k := range req.TagKeys {
+			delete(tags, k)
+		}
+	}
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
 // ── Inspection endpoint ───────────────────────────────────────────────────────
@@ -507,29 +625,37 @@ func (s *Service) MetricsHandler(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, `{"metrics":[`)
-	first := true
+	type metricEntry struct {
+		Namespace  string `json:"namespace"`
+		MetricName string `json:"metricName"`
+		Points     int    `json:"points"`
+	}
+	type alarmEntry struct {
+		Name  string `json:"name"`
+		ARN   string `json:"arn"`
+		State string `json:"state"`
+	}
+
+	var metrics []metricEntry
 	for _, seriesList := range s.metrics {
 		for _, series := range seriesList {
-			if !first {
-				fmt.Fprint(w, ",")
-			}
-			fmt.Fprintf(w, `{"namespace":%q,"metricName":%q,"points":%d}`,
-				series.namespace, series.metricName, len(series.points))
-			first = false
+			metrics = append(metrics, metricEntry{
+				Namespace:  series.namespace,
+				MetricName: series.metricName,
+				Points:     len(series.points),
+			})
 		}
 	}
-	fmt.Fprint(w, `],"alarms":[`)
-	first = true
+	var alarms []alarmEntry
 	for _, a := range s.alarms {
-		if !first {
-			fmt.Fprint(w, ",")
-		}
-		fmt.Fprintf(w, `{"name":%q,"arn":%q,"state":"OK"}`, a.name, a.arn)
-		first = false
+		alarms = append(alarms, alarmEntry{Name: a.name, ARN: a.arn, State: "OK"})
 	}
-	fmt.Fprint(w, `]}`)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"metrics": metrics,
+		"alarms":  alarms,
+	})
 }
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
@@ -541,18 +667,13 @@ func (s *Service) findOrCreate(namespace, metricName string, dims map[string]str
 			return series
 		}
 	}
-	series := &metricSeries{
-		namespace:  namespace,
-		metricName: metricName,
-		dimensions: dims,
-	}
+	series := &metricSeries{namespace: namespace, metricName: metricName, dimensions: dims}
 	s.metrics[key] = append(s.metrics[key], series)
 	return series
 }
 
 func (s *Service) find(namespace, metricName string, dims map[string]string) *metricSeries {
-	key := namespace + "/" + metricName
-	for _, series := range s.metrics[key] {
+	for _, series := range s.metrics[namespace+"/"+metricName] {
 		if matchDims(series.dimensions, dims) {
 			return series
 		}
@@ -572,7 +693,6 @@ func dimsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// matchDims checks that all dims in filter are present in target.
 func matchDims(target, filter map[string]string) bool {
 	for k, v := range filter {
 		if target[k] != v {
@@ -617,23 +737,6 @@ func (b *bucket) statValue(stat string) float64 {
 	}
 }
 
-func (b *bucket) toXML(stats []string) string {
-	var parts []string
-	for _, stat := range stats {
-		parts = append(parts, fmt.Sprintf("<%s>%g</%s>", stat, b.statValue(stat), stat))
-	}
-	if len(stats) == 0 {
-		parts = append(parts, fmt.Sprintf("<Average>%g</Average>", b.average()))
-	}
-	return fmt.Sprintf(`
-    <member>
-      <Timestamp>%s</Timestamp>
-      <SampleCount>%g</SampleCount>
-      <Unit>%s</Unit>
-      %s
-    </member>`, b.start.UTC().Format(time.RFC3339), b.count, b.unit, strings.Join(parts, ""))
-}
-
 func aggregateToBuckets(points []dataPoint, start, end time.Time, period int, unitFilter string) []bucket {
 	if start.IsZero() {
 		start = time.Now().Add(-time.Hour)
@@ -648,18 +751,13 @@ func aggregateToBuckets(points []dataPoint, start, end time.Time, period int, un
 		if p.timestamp.Before(start) || p.timestamp.After(end) {
 			continue
 		}
-		if unitFilter != "" && p.unit != unitFilter && unitFilter != "None" {
+		if unitFilter != "" && unitFilter != "None" && p.unit != unitFilter {
 			continue
 		}
 		slot := p.timestamp.Truncate(dur).Unix()
 		b := bucketMap[slot]
 		if b == nil {
-			b = &bucket{
-				start: p.timestamp.Truncate(dur),
-				min:   math.MaxFloat64,
-				max:   -math.MaxFloat64,
-				unit:  p.unit,
-			}
+			b = &bucket{start: p.timestamp.Truncate(dur), min: math.MaxFloat64, max: -math.MaxFloat64, unit: p.unit}
 			bucketMap[slot] = b
 		}
 		b.sum += p.value
@@ -685,32 +783,7 @@ func aggregateToBuckets(points []dataPoint, start, end time.Time, period int, un
 	return result
 }
 
-// ── Form parsing helpers ──────────────────────────────────────────────────────
-
-func parseDimensions(r *http.Request, prefix string) map[string]string {
-	dims := map[string]string{}
-	for i := 1; ; i++ {
-		name := r.FormValue(fmt.Sprintf("%s%d.Name", prefix, i))
-		if name == "" {
-			break
-		}
-		dims[name] = r.FormValue(fmt.Sprintf("%s%d.Value", prefix, i))
-	}
-	return dims
-}
-
-func metricXML(series *metricSeries) string {
-	var dimXML []string
-	for k, v := range series.dimensions {
-		dimXML = append(dimXML, fmt.Sprintf(`<member><Name>%s</Name><Value>%s</Value></member>`, k, v))
-	}
-	return fmt.Sprintf(`
-    <member>
-      <Namespace>%s</Namespace>
-      <MetricName>%s</MetricName>
-      <Dimensions>%s</Dimensions>
-    </member>`, series.namespace, series.metricName, strings.Join(dimXML, ""))
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func containsStr(slice []string, s string) bool {
 	for _, v := range slice {
@@ -721,23 +794,463 @@ func containsStr(slice []string, s string) bool {
 	return false
 }
 
-// ── XML helpers ───────────────────────────────────────────────────────────────
-
-func wrap(action, body string) string {
-	return fmt.Sprintf(`<%sResponse xmlns=%q>%s<ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></%sResponse>`,
-		action, cwNS, body, uid.New(), action)
-}
-
-func writeXML(w http.ResponseWriter, status int, body string) {
-	w.Header().Set("Content-Type", "text/xml")
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 	w.Header().Set("x-amzn-requestid", uid.New())
 	w.WriteHeader(status)
-	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`)
-	fmt.Fprint(w, body)
+	json.NewEncoder(w).Encode(v)
 }
 
 func cwError(w http.ResponseWriter, status int, code, msg string) {
-	writeXML(w, status, fmt.Sprintf(
-		`<ErrorResponse xmlns=%q><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error><RequestId>%s</RequestId></ErrorResponse>`,
-		cwNS, code, msg, uid.New()))
+	writeJSON(w, status, map[string]string{"__type": code, "message": msg})
+}
+
+// ── smithy-rpc-v2-cbor handlers (TF provider v6) ─────────────────────────────
+// The AWS SDK Go v2 uses smithy-rpc-v2-cbor for CloudWatch. Requests arrive
+// at /service/GraniteServiceVersion20100801/operation/{Action} with CBOR
+// bodies and smithy-protocol: rpc-v2-cbor request header. Responses must also
+// be CBOR with that header set.
+
+func (s *Service) serveCBOR(w http.ResponseWriter, r *http.Request) {
+	action := strings.TrimPrefix(r.URL.Path, cwCBORPath)
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.cborError(w, http.StatusBadRequest, "InvalidRequest", "cannot read body")
+		return
+	}
+
+	var params map[string]interface{}
+	if len(body) > 0 {
+		params, err = cborDecode(body)
+		if err != nil {
+			s.cborError(w, http.StatusBadRequest, "InvalidRequest", "cannot decode CBOR body")
+			return
+		}
+	} else {
+		params = map[string]interface{}{}
+	}
+
+	switch action {
+	case "PutMetricData":
+		s.cborPutMetricData(w, params)
+	case "ListMetrics":
+		s.cborListMetrics(w, params)
+	case "GetMetricStatistics":
+		s.cborGetMetricStatistics(w, params)
+	case "GetMetricData":
+		s.cborGetMetricData(w, params)
+	case "PutMetricAlarm":
+		s.cborPutMetricAlarm(w, params)
+	case "DescribeAlarms":
+		s.cborDescribeAlarms(w, params)
+	case "DescribeAlarmsForMetric":
+		s.cborDescribeAlarmsForMetric(w, params)
+	case "DeleteAlarms":
+		s.cborDeleteAlarms(w, params)
+	case "SetAlarmState", "EnableAlarmActions", "DisableAlarmActions":
+		s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+	case "ListTagsForResource":
+		s.cborListTagsForResource(w, params)
+	case "TagResource":
+		s.cborTagResource(w, params)
+	case "UntagResource":
+		s.cborUntagResource(w, params)
+	default:
+		s.cborError(w, http.StatusBadRequest, "InvalidAction",
+			fmt.Sprintf("Action %s is not supported.", action))
+	}
+}
+
+func (s *Service) cborPutMetricData(w http.ResponseWriter, params map[string]interface{}) {
+	ns := mapStr(params, "Namespace")
+	if ns == "" {
+		s.cborError(w, http.StatusBadRequest, "MissingParameter", "Namespace is required")
+		return
+	}
+	mdRaw, _ := params["MetricData"].([]interface{})
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, item := range mdRaw {
+		md, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name := mapStr(md, "MetricName")
+		dims := mapDims(md, "Dimensions")
+		val := mapFloat(md, "Value")
+		unit := mapStr(md, "Unit")
+		if unit == "" {
+			unit = "None"
+		}
+		var ts time.Time
+		if tsStr := mapStr(md, "Timestamp"); tsStr != "" {
+			ts, _ = time.Parse(time.RFC3339, tsStr)
+		}
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		series := s.findOrCreate(ns, name, dims)
+		series.points = append(series.points, dataPoint{timestamp: ts, value: val, unit: unit})
+		if len(series.points) > maxPoints {
+			series.points = series.points[len(series.points)-maxPoints:]
+		}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) cborListMetrics(w http.ResponseWriter, params map[string]interface{}) {
+	ns := mapStr(params, "Namespace")
+	mn := mapStr(params, "MetricName")
+	dimFilter := mapDims(params, "Dimensions")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var metrics []interface{}
+	for _, seriesList := range s.metrics {
+		for _, series := range seriesList {
+			if ns != "" && series.namespace != ns {
+				continue
+			}
+			if mn != "" && series.metricName != mn {
+				continue
+			}
+			if !matchDims(series.dimensions, dimFilter) {
+				continue
+			}
+			var dims []interface{}
+			for k, v := range series.dimensions {
+				dims = append(dims, map[string]interface{}{"Name": k, "Value": v})
+			}
+			if dims == nil {
+				dims = []interface{}{}
+			}
+			metrics = append(metrics, map[string]interface{}{
+				"Namespace":  series.namespace,
+				"MetricName": series.metricName,
+				"Dimensions": dims,
+			})
+		}
+	}
+	if metrics == nil {
+		metrics = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{
+		"Metrics":   metrics,
+		"NextToken": "",
+	})
+}
+
+func (s *Service) cborGetMetricStatistics(w http.ResponseWriter, params map[string]interface{}) {
+	ns := mapStr(params, "Namespace")
+	mn := mapStr(params, "MetricName")
+	dims := mapDims(params, "Dimensions")
+	var start, end time.Time
+	if ts := mapStr(params, "StartTime"); ts != "" {
+		start, _ = time.Parse(time.RFC3339, ts)
+	}
+	if ts := mapStr(params, "EndTime"); ts != "" {
+		end, _ = time.Parse(time.RFC3339, ts)
+	}
+	period := mapInt(params, "Period")
+	if period <= 0 {
+		period = 60
+	}
+	statsRaw := mapStrList(params, "Statistics")
+	unitFilter := mapStr(params, "Unit")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var datapoints []interface{}
+	if series := s.find(ns, mn, dims); series != nil {
+		for _, b := range aggregateToBuckets(series.points, start, end, period, unitFilter) {
+			dp := map[string]interface{}{
+				"Timestamp":   b.start.UTC().Format(time.RFC3339),
+				"SampleCount": b.count,
+				"Unit":        b.unit,
+			}
+			for _, stat := range statsRaw {
+				switch stat {
+				case "Average":
+					dp["Average"] = b.average()
+				case "Sum":
+					dp["Sum"] = b.sum
+				case "Minimum":
+					dp["Minimum"] = b.min
+				case "Maximum":
+					dp["Maximum"] = b.max
+				}
+			}
+			datapoints = append(datapoints, dp)
+		}
+	}
+	if datapoints == nil {
+		datapoints = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{
+		"Label":      mn,
+		"Datapoints": datapoints,
+	})
+}
+
+func (s *Service) cborGetMetricData(w http.ResponseWriter, params map[string]interface{}) {
+	var start, end time.Time
+	if ts := mapStr(params, "StartTime"); ts != "" {
+		start, _ = time.Parse(time.RFC3339, ts)
+	}
+	if ts := mapStr(params, "EndTime"); ts != "" {
+		end, _ = time.Parse(time.RFC3339, ts)
+	}
+
+	queriesRaw, _ := params["MetricDataQueries"].([]interface{})
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var results []interface{}
+	for _, qRaw := range queriesRaw {
+		q, ok := qRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id := mapStr(q, "Id")
+		msRaw, _ := q["MetricStat"].(map[string]interface{})
+		metricRaw, _ := msRaw["Metric"].(map[string]interface{})
+		qNS := mapStr(metricRaw, "Namespace")
+		qMN := mapStr(metricRaw, "MetricName")
+		qDims := mapDims(metricRaw, "Dimensions")
+		period := mapInt(msRaw, "Period")
+		if period <= 0 {
+			period = 60
+		}
+		stat := mapStr(msRaw, "Stat")
+
+		res := map[string]interface{}{
+			"Id":         id,
+			"Label":      qMN,
+			"Timestamps": []interface{}{},
+			"Values":     []interface{}{},
+			"StatusCode": "Complete",
+		}
+		if series := s.find(qNS, qMN, qDims); series != nil {
+			var ts []interface{}
+			var vals []interface{}
+			for _, b := range aggregateToBuckets(series.points, start, end, period, "") {
+				ts = append(ts, b.start.UTC().Format(time.RFC3339))
+				vals = append(vals, b.statValue(stat))
+			}
+			if ts != nil {
+				res["Timestamps"] = ts
+				res["Values"] = vals
+			}
+		}
+		results = append(results, res)
+	}
+	if results == nil {
+		results = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{
+		"MetricDataResults": results,
+		"Messages":          []interface{}{},
+	})
+}
+
+func (s *Service) cborPutMetricAlarm(w http.ResponseWriter, params map[string]interface{}) {
+	name := mapStr(params, "AlarmName")
+	if name == "" {
+		s.cborError(w, http.StatusBadRequest, "MissingParameter", "AlarmName is required")
+		return
+	}
+	dims := mapDims(params, "Dimensions")
+
+	s.mu.Lock()
+	s.alarms[name] = &alarm{
+		name:               name,
+		arn:                s.alarmARN(name),
+		namespace:          mapStr(params, "Namespace"),
+		metricName:         mapStr(params, "MetricName"),
+		comparisonOperator: mapStr(params, "ComparisonOperator"),
+		threshold:          mapFloat(params, "Threshold"),
+		evaluationPeriods:  mapInt(params, "EvaluationPeriods"),
+		period:             mapInt(params, "Period"),
+		statistic:          mapStr(params, "Statistic"),
+		unit:               mapStr(params, "Unit"),
+		description:        mapStr(params, "AlarmDescription"),
+		createdAt:          time.Now().UTC(),
+		dimensions:         dims,
+	}
+	// Store tags if provided
+	tags := mapKVList(params, "Tags", "Key", "Value")
+	if len(tags) > 0 {
+		arn := s.alarmARN(name)
+		if s.tags[arn] == nil {
+			s.tags[arn] = map[string]string{}
+		}
+		for k, v := range tags {
+			s.tags[arn][k] = v
+		}
+	}
+	s.mu.Unlock()
+
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) cborDescribeAlarms(w http.ResponseWriter, params map[string]interface{}) {
+	alarmNames := mapStrList(params, "AlarmNames")
+	stateValue := mapStr(params, "StateValue")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var alarms []interface{}
+	for _, a := range s.alarms {
+		if len(alarmNames) > 0 && !containsStr(alarmNames, a.name) {
+			continue
+		}
+		if stateValue != "" && stateValue != "OK" {
+			continue
+		}
+		alarms = append(alarms, s.cborAlarmMap(a))
+	}
+	if alarms == nil {
+		alarms = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{
+		"MetricAlarms":    alarms,
+		"CompositeAlarms": []interface{}{},
+	})
+}
+
+func (s *Service) cborDescribeAlarmsForMetric(w http.ResponseWriter, params map[string]interface{}) {
+	ns := mapStr(params, "Namespace")
+	mn := mapStr(params, "MetricName")
+	dims := mapDims(params, "Dimensions")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var alarms []interface{}
+	for _, a := range s.alarms {
+		if a.namespace != ns || a.metricName != mn {
+			continue
+		}
+		if !matchDims(a.dimensions, dims) {
+			continue
+		}
+		alarms = append(alarms, s.cborAlarmMap(a))
+	}
+	if alarms == nil {
+		alarms = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{"MetricAlarms": alarms})
+}
+
+func (s *Service) cborDeleteAlarms(w http.ResponseWriter, params map[string]interface{}) {
+	names := mapStrList(params, "AlarmNames")
+	s.mu.Lock()
+	for _, name := range names {
+		delete(s.alarms, name)
+	}
+	s.mu.Unlock()
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) cborListTagsForResource(w http.ResponseWriter, params map[string]interface{}) {
+	arn := mapStr(params, "ResourceARN")
+	s.mu.RLock()
+	tags := s.tags[arn]
+	s.mu.RUnlock()
+
+	var tagList []interface{}
+	for k, v := range tags {
+		tagList = append(tagList, map[string]interface{}{"Key": k, "Value": v})
+	}
+	if tagList == nil {
+		tagList = []interface{}{}
+	}
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{"Tags": tagList})
+}
+
+func (s *Service) cborTagResource(w http.ResponseWriter, params map[string]interface{}) {
+	arn := mapStr(params, "ResourceARN")
+	tags := mapKVList(params, "Tags", "Key", "Value")
+	s.mu.Lock()
+	if s.tags[arn] == nil {
+		s.tags[arn] = map[string]string{}
+	}
+	for k, v := range tags {
+		s.tags[arn][k] = v
+	}
+	s.mu.Unlock()
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) cborUntagResource(w http.ResponseWriter, params map[string]interface{}) {
+	arn := mapStr(params, "ResourceARN")
+	keys := mapStrList(params, "TagKeys")
+	s.mu.Lock()
+	if tags, ok := s.tags[arn]; ok {
+		for _, k := range keys {
+			delete(tags, k)
+		}
+	}
+	s.mu.Unlock()
+	s.writeCBOR(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) cborAlarmMap(a *alarm) map[string]interface{} {
+	var dims []interface{}
+	for k, v := range a.dimensions {
+		dims = append(dims, map[string]interface{}{"Name": k, "Value": v})
+	}
+	if dims == nil {
+		dims = []interface{}{}
+	}
+	epoch := CborEpochTime(a.createdAt.Unix())
+	return map[string]interface{}{
+		"AlarmName":                          a.name,
+		"AlarmArn":                           a.arn,
+		"AlarmDescription":                   a.description,
+		"AlarmConfigurationUpdatedTimestamp": epoch,
+		"ActionsEnabled":                     true,
+		"OKActions":                          []interface{}{},
+		"AlarmActions":                       []interface{}{},
+		"InsufficientDataActions":            []interface{}{},
+		"StateValue":                         "OK",
+		"StateReason":                        "Nimbus local emulator — state is always OK",
+		"StateUpdatedTimestamp":              epoch,
+		"MetricName":                         a.metricName,
+		"Namespace":                          a.namespace,
+		"Statistic":                          a.statistic,
+		"Dimensions":                         dims,
+		"Period":                             a.period,
+		"EvaluationPeriods":                  a.evaluationPeriods,
+		"DatapointsToAlarm":                  a.evaluationPeriods,
+		"Threshold":                          a.threshold,
+		"ComparisonOperator":                 a.comparisonOperator,
+		"TreatMissingData":                   "missing",
+	}
+}
+
+func (s *Service) writeCBOR(w http.ResponseWriter, status int, v map[string]interface{}) {
+	w.Header().Set("Content-Type", "application/cbor")
+	w.Header().Set("smithy-protocol", "rpc-v2-cbor")
+	w.Header().Set("x-amzn-requestid", uid.New())
+	w.WriteHeader(status)
+	w.Write(cborEncodeMap(v)) //nolint:errcheck
+}
+
+func (s *Service) cborError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/cbor")
+	w.Header().Set("smithy-protocol", "rpc-v2-cbor")
+	w.Header().Set("x-amzn-requestid", uid.New())
+	// Smithy rpc-v2-cbor errors also set X-Amzn-Errortype
+	w.Header().Set("X-Amzn-Errortype", code)
+	w.WriteHeader(status)
+	errMap := map[string]interface{}{"__type": code, "message": msg}
+	w.Write(cborEncodeMap(errMap)) //nolint:errcheck
 }
