@@ -29,5 +29,6 @@ provider "aws" {
     cloudwatchlogs = var.nimbus_endpoint
     scheduler      = var.nimbus_endpoint
     cloudfront     = var.nimbus_endpoint
+    elbv2          = var.nimbus_endpoint
   }
 }

@@ -388,6 +388,72 @@ try "delete-distribution" \
     --id "$CF_ID" \
     --if-match "dummy"
 
+# ── ALB ───────────────────────────────────────────────────────────────────────
+
+section "ALB"
+LB_ARN=$($CLI elbv2 describe-load-balancers --names "$PREFIX" \
+  --query "LoadBalancers[0].LoadBalancerArn" --output text 2>/dev/null)
+if [ -n "${LB_ARN:-}" ] && [ "$LB_ARN" != "None" ]; then
+  try "describe-load-balancers finds LB" true
+  try_match "LB state active" "active" \
+    $CLI elbv2 describe-load-balancers --load-balancer-arns "$LB_ARN" \
+      --query "LoadBalancers[0].State.Code" --output text
+  try_match "describe-load-balancer-attributes" "deletion_protection.enabled" \
+    $CLI elbv2 describe-load-balancer-attributes --load-balancer-arn "$LB_ARN" \
+      --query "Attributes[].Key" --output text
+else
+  fail "describe-load-balancers (LB not found — run 'make apply' first)"
+  LB_ARN=""
+fi
+
+TG_ARN=$($CLI elbv2 describe-target-groups --names "$PREFIX" \
+  --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null)
+if [ -n "${TG_ARN:-}" ] && [ "$TG_ARN" != "None" ]; then
+  try "describe-target-groups finds TG" true
+  try_match "describe-target-group-attributes" "deregistration_delay" \
+    $CLI elbv2 describe-target-group-attributes --target-group-arn "$TG_ARN" \
+      --query "Attributes[].Key" --output text
+  # Register a target and verify health
+  try "register-targets" \
+    $CLI elbv2 register-targets --target-group-arn "$TG_ARN" \
+      --targets Id=10.0.1.1,Port=80
+  try_match "describe-target-health healthy" "healthy" \
+    $CLI elbv2 describe-target-health --target-group-arn "$TG_ARN" \
+      --query "TargetHealthDescriptions[0].TargetHealth.State" --output text
+  try "deregister-targets" \
+    $CLI elbv2 deregister-targets --target-group-arn "$TG_ARN" \
+      --targets Id=10.0.1.1,Port=80
+else
+  fail "describe-target-groups (TG not found — run 'make apply' first)"
+  TG_ARN=""
+fi
+
+if [ -n "${LB_ARN:-}" ]; then
+  LISTENER_ARN=$($CLI elbv2 describe-listeners --load-balancer-arn "$LB_ARN" \
+    --query "Listeners[0].ListenerArn" --output text 2>/dev/null)
+  if [ -n "${LISTENER_ARN:-}" ] && [ "$LISTENER_ARN" != "None" ]; then
+    try "describe-listeners finds listener" true
+    try_match "listener port 80" "80" \
+      $CLI elbv2 describe-listeners --listener-arns "$LISTENER_ARN" \
+        --query "Listeners[0].Port" --output text
+    try_match "describe-rules finds default rule" "default" \
+      $CLI elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
+        --query "Rules[?IsDefault==\`true\`].Priority" --output text
+    try_match "describe-rules finds path-pattern rule" "100" \
+      $CLI elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
+        --query "Rules[].Priority" --output text
+  else
+    fail "describe-listeners (listener not found — run 'make apply' first)"
+  fi
+fi
+
+try_match "/_nimbus/alb/loadbalancers inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/alb/loadbalancers"
+try_match "/_nimbus/alb/targetgroups inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/alb/targetgroups"
+try_match "/_nimbus/alb/listeners inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/alb/listeners"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

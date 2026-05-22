@@ -10,6 +10,7 @@ import (
 
 	"github.com/nimbus-local/nimbus/internal/config"
 	"github.com/nimbus-local/nimbus/internal/router"
+	"github.com/nimbus-local/nimbus/internal/services/alb"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
 	"github.com/nimbus-local/nimbus/internal/services/cloudfront"
 	"github.com/nimbus-local/nimbus/internal/services/cloudwatchlogs"
@@ -83,6 +84,8 @@ func main() {
 	r.Register(snsSvc)
 	schedSvc := scheduler.New(cfg.DefaultRegion, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port))
 	r.Register(schedSvc)
+	albSvc := alb.New(cfg.DefaultRegion)
+	r.Register(albSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
@@ -124,6 +127,11 @@ func main() {
 
 	// CloudFront inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/cloudfront/distributions", cfSvc.DistributionsHandler)
+
+	// ALB inspection endpoints — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/alb/loadbalancers", albSvc.LoadBalancersHandler)
+	mux.HandleFunc("/_nimbus/alb/targetgroups", albSvc.TargetGroupsHandler)
+	mux.HandleFunc("/_nimbus/alb/listeners", albSvc.ListenersHandler)
 
 	// Scheduler inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/scheduler/schedules", schedSvc.SchedulesHandler)
