@@ -516,9 +516,9 @@ EC_SUBNET=$($CLI elasticache describe-cache-subnet-groups --cache-subnet-group-n
   --query "CacheSubnetGroups[0].CacheSubnetGroupName" --output text 2>/dev/null)
 if [ -n "${EC_SUBNET:-}" ] && [ "$EC_SUBNET" != "None" ]; then
   try "describe-cache-subnet-groups finds group" true
-  try_match "cache subnet group status Complete" "Complete" \
+  try_match "cache subnet group vpc set" "vpc-" \
     $CLI elasticache describe-cache-subnet-groups --cache-subnet-group-name "$PREFIX" \
-      --query "CacheSubnetGroups[0].SubnetGroupStatus" --output text
+      --query "CacheSubnetGroups[0].VpcId" --output text
 else
   fail "describe-cache-subnet-groups (subnet group not found — run 'make apply' first)"
 fi

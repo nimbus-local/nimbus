@@ -246,7 +246,6 @@ func subnetGroupXML(name, desc, arn string) string {
         <ARN>%s</ARN>
         <CacheSubnetGroupDescription>%s</CacheSubnetGroupDescription>
         <CacheSubnetGroupName>%s</CacheSubnetGroupName>
-        <SubnetGroupStatus>Complete</SubnetGroupStatus>
         <VpcId>vpc-00000000000000001</VpcId>
         <Subnets/>`, arn, desc, name)
 }
