@@ -32,15 +32,13 @@ services:
   dynamodb-local:
     image: amazon/dynamodb-local:latest
     container_name: nimbus-dynamodb-local
-    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
+    command: "-jar DynamoDBLocal.jar -inMemory -sharedDb"
     ports:
       - "8000:8000" # Expose directly for DynamoDB admin tools
-    volumes:
-      - dynamodb_data:/data
     networks:
       - nimbus-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000 || exit 1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 -o /dev/null"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -64,8 +62,6 @@ services:
 
 volumes:
   nimbus_data:
-    driver: local
-  dynamodb_data:
     driver: local
 
 networks:

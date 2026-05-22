@@ -79,6 +79,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeLogGroups(w, r)
 	case "CreateLogStream":
 		s.createLogStream(w, r)
+	case "DeleteLogStream":
+		s.deleteLogStream(w, r)
 	case "DescribeLogStreams":
 		s.describeLogStreams(w, r)
 	case "PutLogEvents":
@@ -213,6 +215,22 @@ func (s *Service) createLogStream(w http.ResponseWriter, r *http.Request) {
 		createdAt:           nowMS(),
 		uploadSequenceToken: token,
 	}
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) deleteLogStream(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName  string `json:"logGroupName"`
+		LogStreamName string `json:"logStreamName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	g, ok := s.groups[req.LogGroupName]
+	if ok {
+		delete(g.streams, req.LogStreamName)
+	}
+	s.mu.Unlock()
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
 }
 

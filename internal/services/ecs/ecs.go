@@ -726,7 +726,8 @@ func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
 		svc.status = "INACTIVE"
 		svc.desiredCount = 0
 		svc.runningCount = 0
-		delete(s.services, svc.arn)
+		// Keep the service in the map as INACTIVE so the v6 provider's
+		// delete waiter can poll DescribeServices and observe the final state.
 		if c, cok := s.resolveCluster(req.Cluster); cok {
 			c.activeServicesCount--
 		}
@@ -781,6 +782,9 @@ func (s *Service) listServices(w http.ResponseWriter, r *http.Request) {
 	arns := []string{}
 	for _, svc := range s.services {
 		if clusterArn != "" && svc.clusterArn != clusterArn {
+			continue
+		}
+		if svc.status == "INACTIVE" {
 			continue
 		}
 		arns = append(arns, svc.arn)

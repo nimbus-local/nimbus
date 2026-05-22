@@ -1,6 +1,6 @@
 # ECS
 
-ECS/Fargate control-plane emulator. All state is in-memory. No containers are actually started — tasks are simulated as immediately `RUNNING`. A `default` cluster is created automatically on startup.
+ECS/Fargate control-plane emulator. All state is in-memory. `RunTask` shells out to the `docker` CLI (`os/exec`) and starts real containers via `docker run -d`; tasks transition `PENDING → RUNNING → STOPPED` via a 5 s polling goroutine that calls `docker inspect`. Services are kept at `desiredCount` by a 10 s reconciliation loop that restarts exited containers. `StopTask` calls `docker stop` + `docker rm -f`. A `default` cluster is created automatically on startup. Spawned containers join the `nimbus-net` Docker network so they can reach each other and Nimbus.
 
 Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
@@ -29,8 +29,8 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| RunTask | Tasks start immediately as `RUNNING`; `count` defaults to 1; `launchType` defaults to `FARGATE` |
-| StopTask | Sets `lastStatus` and `desiredStatus` to `STOPPED`; accepts full ARN or short UUID |
+| RunTask | Runs `docker run -d`; task transitions `PENDING → RUNNING` once the container starts; `count` defaults to 1; `launchType` defaults to `FARGATE` |
+| StopTask | Runs `docker stop` + `docker rm -f`; accepts full ARN or short UUID |
 | DescribeTasks | Accepts list of ARNs; missing tasks are silently omitted |
 | ListTasks | Filterable by `cluster`, `desiredStatus`, and `serviceName` |
 
@@ -38,7 +38,7 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateService | Creates service and spawns `desiredCount` simulated backing tasks in group `service:<name>` |
+| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s |
 | UpdateService | Updates `desiredCount` and/or `taskDefinition` |
 | DeleteService | Removes service; `desiredCount` and `runningCount` set to 0 |
 | DescribeServices | Filterable by cluster; accepts name or ARN |
@@ -51,6 +51,12 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 | TagResource | Adds or replaces tags on any resource ARN |
 | UntagResource | Removes tags by key |
 | ListTagsForResource | Returns all tags for the given ARN |
+
+## Inspection endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /_nimbus/ecs/tasks/{id}/logs` | Streams the last 200 lines of stdout/stderr from all containers in the task |
 
 ## ARN formats
 
