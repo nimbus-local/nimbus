@@ -319,6 +319,28 @@ try_match "filter-log-events pattern match" "nimbus-cwl-probe" \
 try_match "/_nimbus/logs inspection endpoint" "nimbus-cwl-probe" \
   curl -sf "$NIMBUS/_nimbus/logs/nimbus/$PREFIX/app/container"
 
+# ── EventBridge Scheduler ────────────────────────────────────────────────────
+
+section "EventBridge Scheduler"
+try_match "list-schedule-groups finds group" "$PREFIX" \
+  $CLI scheduler list-schedule-groups \
+    --query "ScheduleGroups[].Name" --output text
+try_match "get-schedule-group returns ACTIVE" "ACTIVE" \
+  $CLI scheduler get-schedule-group \
+    --name "$PREFIX" \
+    --query State --output text
+try_match "get-schedule returns rate expression" "rate(5 minutes)" \
+  $CLI scheduler get-schedule \
+    --name "$PREFIX" \
+    --group-name "$PREFIX" \
+    --query ScheduleExpression --output text
+try_match "list-schedules finds schedule" "$PREFIX" \
+  $CLI scheduler list-schedules \
+    --group-name "$PREFIX" \
+    --query "Schedules[].Name" --output text
+try_match "/_nimbus/scheduler/schedules inspection" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/scheduler/schedules"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
