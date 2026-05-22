@@ -129,26 +129,26 @@ ship output to Nimbus instead of real CloudWatch.
 
 **Unblocks Cron constructs.** Separate service from EventBridge Events.
 
-### Part 1 — Schedule + group CRUD (no firing)
+### Part 1 — Schedule + group CRUD (no firing) ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateSchedule` / `GetSchedule` / `UpdateSchedule` / `DeleteSchedule` / `ListSchedules` | |
-| `CreateScheduleGroup` / `GetScheduleGroup` / `DeleteScheduleGroup` / `ListScheduleGroups` | |
+| `CreateSchedule` / `GetSchedule` / `UpdateSchedule` / `DeleteSchedule` / `ListSchedules` | ✅ |
+| `CreateScheduleGroup` / `GetScheduleGroup` / `DeleteScheduleGroup` / `ListScheduleGroups` | ✅ |
 
-### Part 2 — Expression parsing + ticker
+### Part 2 — Expression parsing + ticker ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| Cron / rate expression parser — evaluate next-fire time | |
-| In-memory ticker — fires schedules at the right time | |
+| Cron / rate expression parser — evaluate next-fire time | ✅ `rate(N unit)` + `cron(min hour dom month dow year)` with ranges, steps, name aliases |
+| In-memory ticker — fires schedules at the right time | ✅ 5 s tick; advances nextFire past now to handle bursts |
 
 ### Part 3 — Target invocation + inspection
 
 | Work item | Status |
 |-----------|--------|
 | Target invocation — HTTP POST to Lambda/ECS ARN endpoint | |
-| `/_nimbus/scheduler/schedules` inspection endpoint | |
+| `/_nimbus/scheduler/schedules` inspection endpoint | ✅ (shipped in Part 1; shows NextFire + LastFired since Part 2) |
 
 ---
 
