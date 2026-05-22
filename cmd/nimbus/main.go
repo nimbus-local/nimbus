@@ -10,6 +10,7 @@ import (
 
 	"github.com/nimbus-local/nimbus/internal/config"
 	"github.com/nimbus-local/nimbus/internal/router"
+	"github.com/nimbus-local/nimbus/internal/services/acm"
 	"github.com/nimbus-local/nimbus/internal/services/alb"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
 	"github.com/nimbus-local/nimbus/internal/services/cloudfront"
@@ -64,6 +65,8 @@ func main() {
 	r := router.New(logger)
 
 	// Register services — order matters: more specific detectors first
+	acmSvc := acm.New(cfg.DefaultRegion)
+	r.Register(acmSvc)
 	cfSvc := cloudfront.New(cfg.DefaultRegion)
 	r.Register(cfSvc)
 	r.Register(iam.New())
@@ -130,6 +133,9 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// ACM inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/acm/certs/", acmSvc.CertHandler)
 
 	// CloudFront inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/cloudfront/distributions", cfSvc.DistributionsHandler)
