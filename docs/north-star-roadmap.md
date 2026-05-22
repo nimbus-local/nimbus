@@ -304,29 +304,31 @@ Mostly needed so Terraform plans succeed. Local DNS resolution is a stretch goal
 
 ---
 
-## Phase 11 — CloudWatch Metrics
+## Phase 11 — CloudWatch Metrics ✅ shipped
 
 Accept metrics from apps and SDKs.
 
-### Part 1 — Ingest + list
+### Part 1 — Ingest + list ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `PutMetricData` — store time series in-memory | |
-| `ListMetrics` | |
+| `PutMetricData` — store time series in-memory (capped at 10,000 pts/series) | ✅ |
+| `ListMetrics` — filter by namespace, metric name, dimensions | ✅ |
 
-### Part 2 — Retrieval
-
-| Work item | Status |
-|-----------|--------|
-| `GetMetricData` / `GetMetricStatistics` — basic aggregation (Sum, Average, Max, Min) | |
-
-### Part 3 — Alarms + inspection
+### Part 2 — Retrieval ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `PutMetricAlarm` / `DescribeAlarms` — stub, always return `OK` | |
-| `/_nimbus/metrics` inspection endpoint | |
+| `GetMetricStatistics` — Sum, Average, Min, Max, SampleCount per period bucket | ✅ |
+| `GetMetricData` — multi-metric query with `MetricStat` queries | ✅ |
+
+### Part 3 — Alarms + inspection ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `PutMetricAlarm` / `DescribeAlarms` / `DescribeAlarmsForMetric` / `DeleteAlarms` — state always `OK` | ✅ |
+| Tag support: `ListTagsForResource` / `TagResource` / `UntagResource` | ✅ |
+| `/_nimbus/metrics` inspection endpoint | ✅ |
 
 ---
 

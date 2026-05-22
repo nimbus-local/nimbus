@@ -135,6 +135,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeLoadBalancers(w, r)
 	case "DeleteLoadBalancer":
 		s.deleteLoadBalancer(w, r)
+	case "SetSubnets":
+		s.setSubnets(w, r)
 	case "DescribeLoadBalancerAttributes":
 		s.describeLoadBalancerAttributes(w, r)
 	case "ModifyLoadBalancerAttributes":
@@ -172,6 +174,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeTargetGroups(w, r)
 	case "DeleteTargetGroup":
 		s.deleteTargetGroup(w, r)
+	case "ModifyTargetGroup":
+		s.modifyTargetGroup(w, r)
 	case "DescribeTargetGroupAttributes":
 		s.describeTargetGroupAttributes(w, r)
 	case "ModifyTargetGroupAttributes":
@@ -351,6 +355,19 @@ func (s *Service) deleteLoadBalancer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	elbOK(w, "DeleteLoadBalancerResponse", "DeleteLoadBalancerResult", "")
+}
+
+func (s *Service) setSubnets(w http.ResponseWriter, r *http.Request) {
+	lbARN := r.FormValue("LoadBalancerArn")
+	s.mu.RLock()
+	l := s.lbs[lbARN]
+	s.mu.RUnlock()
+	if l == nil {
+		elbError(w, http.StatusBadRequest, "LoadBalancerNotFound", "The specified load balancer does not exist.")
+		return
+	}
+	elbOK(w, "SetSubnetsResponse", "SetSubnetsResult",
+		`<AvailabilityZones><member><ZoneName>us-east-1a</ZoneName><SubnetId>subnet-00000000000000001</SubnetId><LoadBalancerAddresses/></member></AvailabilityZones>`)
 }
 
 func (s *Service) describeLoadBalancerAttributes(w http.ResponseWriter, _ *http.Request) {
@@ -729,6 +746,19 @@ func (s *Service) deleteTargetGroup(w http.ResponseWriter, r *http.Request) {
 	delete(s.targetGroups, arn)
 	s.mu.Unlock()
 	elbOK(w, "DeleteTargetGroupResponse", "DeleteTargetGroupResult", "")
+}
+
+func (s *Service) modifyTargetGroup(w http.ResponseWriter, r *http.Request) {
+	arn := r.FormValue("TargetGroupArn")
+	s.mu.RLock()
+	tg := s.targetGroups[arn]
+	s.mu.RUnlock()
+	if tg == nil {
+		elbError(w, http.StatusBadRequest, "TargetGroupNotFound", "The specified target group does not exist.")
+		return
+	}
+	elbOK(w, "ModifyTargetGroupResponse", "ModifyTargetGroupResult",
+		"<TargetGroups>"+tgMember(tg)+"</TargetGroups>")
 }
 
 func (s *Service) describeTargetGroupAttributes(w http.ResponseWriter, _ *http.Request) {

@@ -119,6 +119,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeDBSubnetGroups(w, r)
 	case "DeleteDBSubnetGroup":
 		s.deleteDBSubnetGroup(w, r)
+	case "ModifyDBSubnetGroup":
+		s.modifyDBSubnetGroup(w, r)
 	// Cluster parameter groups
 	case "CreateDBClusterParameterGroup":
 		s.createDBClusterParameterGroup(w, r)
@@ -250,6 +252,22 @@ func (s *Service) deleteDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
 	delete(s.subnetGroups, name)
 	s.mu.Unlock()
 	writeXML(w, http.StatusOK, wrap("DeleteDBSubnetGroup", ""))
+}
+
+func (s *Service) modifyDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("DBSubnetGroupName")
+	s.mu.RLock()
+	sg := s.subnetGroups[name]
+	s.mu.RUnlock()
+	if sg == nil {
+		rdsError(w, http.StatusNotFound, "DBSubnetGroupNotFoundFault",
+			fmt.Sprintf("DBSubnetGroup '%s' not found.", name))
+		return
+	}
+	writeXML(w, http.StatusOK, wrap("ModifyDBSubnetGroup", fmt.Sprintf(`
+    <ModifyDBSubnetGroupResult>
+      <DBSubnetGroup>%s</DBSubnetGroup>
+    </ModifyDBSubnetGroupResult>`, s.subnetGroupXML(sg))))
 }
 
 func (s *Service) subnetGroupXML(sg *dbSubnetGroup) string {
