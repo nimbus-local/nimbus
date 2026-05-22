@@ -11,6 +11,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/config"
 	"github.com/nimbus-local/nimbus/internal/router"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
+	"github.com/nimbus-local/nimbus/internal/services/cloudfront"
 	"github.com/nimbus-local/nimbus/internal/services/cloudwatchlogs"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/ecr"
@@ -60,6 +61,8 @@ func main() {
 	r := router.New(logger)
 
 	// Register services — order matters: more specific detectors first
+	cfSvc := cloudfront.New(cfg.DefaultRegion)
+	r.Register(cfSvc)
 	r.Register(iam.New())
 	cwlSvc := cloudwatchlogs.New(cfg.DefaultRegion)
 	r.Register(cwlSvc)
@@ -118,6 +121,9 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// CloudFront inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/cloudfront/distributions", cfSvc.DistributionsHandler)
 
 	// Scheduler inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/scheduler/schedules", schedSvc.SchedulesHandler)

@@ -402,13 +402,25 @@ func TestDeleteService(t *testing.T) {
 		"cluster": "default",
 		"service": "job-service",
 	})
+	// DescribeServices returns INACTIVE services when named explicitly (AWS behavior).
+	// ListServices filters them out.
 	res := do(t, svc, "DescribeServices", map[string]interface{}{
 		"cluster":  "default",
 		"services": []string{"job-service"},
 	})
 	services := res["services"].([]interface{})
-	if len(services) != 0 {
-		t.Errorf("expected 0 services after delete, got %d", len(services))
+	if len(services) != 1 {
+		t.Fatalf("expected 1 INACTIVE service after delete, got %d", len(services))
+	}
+	status := services[0].(map[string]interface{})["status"].(string)
+	if status != "INACTIVE" {
+		t.Errorf("expected status INACTIVE, got %s", status)
+	}
+
+	listRes := do(t, svc, "ListServices", map[string]interface{}{"cluster": "default"})
+	arns := listRes["serviceArns"].([]interface{})
+	if len(arns) != 0 {
+		t.Errorf("expected 0 arns in ListServices after delete, got %d", len(arns))
 	}
 }
 

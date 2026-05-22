@@ -28,5 +28,6 @@ provider "aws" {
     sts            = var.nimbus_endpoint
     cloudwatchlogs = var.nimbus_endpoint
     scheduler      = var.nimbus_endpoint
+    cloudfront     = var.nimbus_endpoint
   }
 }

@@ -107,6 +107,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.deleteInstanceProfile(w, r)
 	case "ListInstanceProfiles":
 		s.listInstanceProfiles(w, r)
+	case "ListInstanceProfilesForRole":
+		s.listInstanceProfilesForRole(w, r)
 	case "AddRoleToInstanceProfile":
 		s.addRoleToInstanceProfile(w, r)
 	case "RemoveRoleFromInstanceProfile":
@@ -117,6 +119,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getPolicy(w, r)
 	case "GetPolicyVersion":
 		s.getPolicyVersion(w, r)
+	case "ListPolicyVersions":
+		s.listPolicyVersions(w, r)
 	case "DeletePolicy":
 		s.deletePolicy(w, r)
 	case "ListPolicies":
@@ -371,6 +375,24 @@ func (s *Service) listInstanceProfiles(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, http.StatusOK, iamWrap("ListInstanceProfiles", result))
 }
 
+func (s *Service) listInstanceProfilesForRole(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var buf strings.Builder
+	for _, p := range s.instanceProfiles {
+		if p.roleName != roleName {
+			continue
+		}
+		buf.WriteString("<member>")
+		buf.WriteString(s.renderProfile(p))
+		buf.WriteString("</member>")
+	}
+	result := fmt.Sprintf("<InstanceProfiles>%s</InstanceProfiles><IsTruncated>false</IsTruncated>",
+		buf.String())
+	writeXML(w, http.StatusOK, iamWrap("ListInstanceProfilesForRole", result))
+}
+
 func (s *Service) addRoleToInstanceProfile(w http.ResponseWriter, r *http.Request) {
 	profileName := r.FormValue("InstanceProfileName")
 	roleName := r.FormValue("RoleName")
@@ -467,6 +489,16 @@ func (s *Service) getPolicyVersion(w http.ResponseWriter, r *http.Request) {
     <CreateDate>%s</CreateDate>
   </PolicyVersion>`, url.QueryEscape(doc), time.Now().UTC().Format(time.RFC3339))
 	writeXML(w, http.StatusOK, iamWrap("GetPolicyVersion", result))
+}
+
+func (s *Service) listPolicyVersions(w http.ResponseWriter, r *http.Request) {
+	version := fmt.Sprintf(`<member>
+    <VersionId>v1</VersionId>
+    <IsDefaultVersion>true</IsDefaultVersion>
+    <CreateDate>%s</CreateDate>
+  </member>`, time.Now().UTC().Format(time.RFC3339))
+	result := fmt.Sprintf("<Versions>%s</Versions><IsTruncated>false</IsTruncated>", version)
+	writeXML(w, http.StatusOK, iamWrap("ListPolicyVersions", result))
 }
 
 func (s *Service) deletePolicy(w http.ResponseWriter, r *http.Request) {

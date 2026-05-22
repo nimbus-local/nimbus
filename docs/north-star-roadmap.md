@@ -95,6 +95,7 @@ Needed for `aws_iam_instance_profile` and tag-based resources.
 | `CreateInstanceProfile` / `GetInstanceProfile` / `DeleteInstanceProfile` / `ListInstanceProfiles` | ✅ |
 | `AddRoleToInstanceProfile` / `RemoveRoleFromInstanceProfile` | ✅ |
 | `TagRole` / `UntagRole` / `ListRoleTags` / `UpdateRole` | ✅ |
+| `ListInstanceProfilesForRole` / `ListPolicyVersions` — required by provider v6 delete path | ✅ |
 
 ---
 
@@ -108,7 +109,7 @@ ship output to Nimbus instead of real CloudWatch.
 | Work item | Status |
 |-----------|--------|
 | `CreateLogGroup` / `DeleteLogGroup` / `DescribeLogGroups` | ✅ |
-| `CreateLogStream` / `DescribeLogStreams` | ✅ |
+| `CreateLogStream` / `DeleteLogStream` / `DescribeLogStreams` | ✅ |
 
 ### Part 2 — Log ingestion ✅ shipped
 
@@ -152,18 +153,24 @@ ship output to Nimbus instead of real CloudWatch.
 
 ---
 
-## Phase 5 — CloudFront
+## Phase 5 — CloudFront ✅ shipped
 
-**Unblocks StaticSite / NextjsSite constructs.** Complex surface.
+**Unblocks StaticSite / NextjsSite constructs.**
 
-### Part 1 — Distribution CRUD (no proxy)
+### Part 1 — Distribution CRUD + inspection ✅ shipped
 
-Returns `localhost`-based `DomainName`; status always `Deployed`.
+Returns `localhost`-based `DomainName`; status always `Deployed`. Verified against
+AWS Terraform provider v6.
 
 | Work item | Status |
 |-----------|--------|
-| `CreateDistribution` / `GetDistribution` / `UpdateDistribution` / `DeleteDistribution` | |
-| `ListDistributions` | |
+| `CreateDistribution` / `GetDistribution` / `UpdateDistribution` / `DeleteDistribution` | ✅ |
+| `ListDistributions` | ✅ |
+| `ListTagsForResource` / `AddTagsToResource` — required by provider v6 read path | ✅ |
+| `/_nimbus/cloudfront/distributions` inspection endpoint | ✅ |
+| Echo back verbatim `<DistributionConfig>` — prevents nil-pointer panics in provider v6 flatten | ✅ |
+| Inject `<OriginGroups>` / `<LastModifiedTime>` if absent — required by provider v6 SDK | ✅ |
+| Normalise `<DistributionConfigWithTags>` → `<DistributionConfig>` on create | ✅ |
 
 ### Part 2 — Invalidations
 
@@ -171,13 +178,12 @@ Returns `localhost`-based `DomainName`; status always `Deployed`.
 |-----------|--------|
 | `CreateInvalidation` / `GetInvalidation` / `ListInvalidations` — complete immediately | |
 
-### Part 3 — Origin proxy + inspection
+### Part 3 — Origin proxy
 
 | Work item | Status |
 |-----------|--------|
 | Origin routing — proxy requests to configured S3 or ALB origin | |
 | Cache behaviour matching — path-pattern → behaviour lookup | |
-| `/_nimbus/cloudfront/distributions` inspection endpoint | |
 
 ---
 

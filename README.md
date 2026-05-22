@@ -70,6 +70,7 @@ volumes:
 | [SNS](docs/services/sns.md) | ✅ Core | `AmazonSimpleNotificationService.*` target or `Action` param | CreateTopic, Subscribe (all protocols, auto-confirmed), Publish, PublishBatch — messages captured in memory, never delivered |
 | [EventBridge](docs/services/eventbridge.md) | ✅ Core | `AmazonEventBridge.*` target | PutEvents (captured in memory), event buses (CRUD), rules (CRUD, enable/disable), targets (put/remove/list) |
 | [EventBridge Scheduler](docs/services/scheduler.md) | ✅ Core | `/2020-11-23/` path prefix | Schedule groups (CRUD), schedules (CRUD) — expressions stored; firing added in Part 2 |
+| [CloudFront](docs/services/cloudfront.md) | ✅ Core | `/2020-05-31/` path prefix | Distribution CRUD — `localhost`-based `DomainName`, status always `Deployed`, ETag per distribution |
 
 ---
 

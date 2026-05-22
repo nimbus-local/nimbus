@@ -37,3 +37,7 @@ coverage.html
 
 # OS
 Thumbs.db
+
+# Terraform state (only tracked under infra/terraform/ via its own .gitignore)
+/terraform.tfstate
+/terraform.tfstate.backup

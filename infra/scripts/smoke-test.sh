@@ -305,7 +305,7 @@ try "put-log-events" \
   $CLI logs put-log-events \
     --log-group-name "/nimbus/$PREFIX/app" \
     --log-stream-name "container" \
-    --log-events "[{\"timestamp\":$(date +%s%3N),\"message\":\"nimbus-cwl-probe-$$\"}]"
+    --log-events "[{\"timestamp\":$(( $(date +%s) * 1000 )),\"message\":\"nimbus-cwl-probe-$$\"}]"
 try_match "get-log-events returns event" "nimbus-cwl-probe" \
   $CLI logs get-log-events \
     --log-group-name "/nimbus/$PREFIX/app" \
@@ -340,6 +340,53 @@ try_match "list-schedules finds schedule" "$PREFIX" \
     --query "Schedules[].Name" --output text
 try_match "/_nimbus/scheduler/schedules inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/scheduler/schedules"
+
+# ── CloudFront ────────────────────────────────────────────────────────────────
+
+section "CloudFront"
+CF_DIST_CONFIG="{
+  \"CallerReference\":\"nimbus-smoke-$$\",
+  \"Comment\":\"$PREFIX-dist\",
+  \"Enabled\":true,
+  \"Origins\":{\"Quantity\":1,\"Items\":[{\"Id\":\"o1\",\"DomainName\":\"nimbus.localhost\",\"CustomOriginConfig\":{\"HTTPPort\":80,\"HTTPSPort\":443,\"OriginProtocolPolicy\":\"http-only\",\"OriginSslProtocols\":{\"Quantity\":1,\"Items\":[\"TLSv1.2\"]}}}]},
+  \"DefaultCacheBehavior\":{\"TargetOriginId\":\"o1\",\"ViewerProtocolPolicy\":\"allow-all\",\"ForwardedValues\":{\"QueryString\":false,\"Cookies\":{\"Forward\":\"none\"}},\"TrustedSigners\":{\"Enabled\":false,\"Quantity\":0},\"MinTTL\":0},
+  \"CacheBehaviors\":{\"Quantity\":0},
+  \"CustomErrorResponses\":{\"Quantity\":0},
+  \"Restrictions\":{\"GeoRestriction\":{\"RestrictionType\":\"none\",\"Quantity\":0}},
+  \"ViewerCertificate\":{\"CloudFrontDefaultCertificate\":true}
+}"
+CF_ID=$($CLI cloudfront create-distribution \
+    --distribution-config "$CF_DIST_CONFIG" \
+    --query "Distribution.Id" --output text 2>/dev/null) && ok "create-distribution" || { fail "create-distribution"; CF_ID=""; }
+
+try_match "get-distribution returns Deployed" "Deployed" \
+  $CLI cloudfront get-distribution \
+    --id "$CF_ID" \
+    --query "Distribution.Status" --output text
+try_match "list-distributions finds distribution" "$CF_ID" \
+  $CLI cloudfront list-distributions \
+    --query "DistributionList.Items[].Id" --output text
+try "update-distribution" \
+  $CLI cloudfront update-distribution \
+    --id "$CF_ID" \
+    --if-match "dummy" \
+    --distribution-config "{
+      \"CallerReference\":\"nimbus-smoke-$$\",
+      \"Comment\":\"$PREFIX-dist-updated\",
+      \"Enabled\":true,
+      \"Origins\":{\"Quantity\":1,\"Items\":[{\"Id\":\"o1\",\"DomainName\":\"nimbus.localhost\",\"CustomOriginConfig\":{\"HTTPPort\":80,\"HTTPSPort\":443,\"OriginProtocolPolicy\":\"http-only\",\"OriginSslProtocols\":{\"Quantity\":1,\"Items\":[\"TLSv1.2\"]}}}]},
+      \"DefaultCacheBehavior\":{\"TargetOriginId\":\"o1\",\"ViewerProtocolPolicy\":\"allow-all\",\"ForwardedValues\":{\"QueryString\":false,\"Cookies\":{\"Forward\":\"none\"}},\"TrustedSigners\":{\"Enabled\":false,\"Quantity\":0},\"MinTTL\":0},
+      \"CacheBehaviors\":{\"Quantity\":0},
+      \"CustomErrorResponses\":{\"Quantity\":0},
+      \"Restrictions\":{\"GeoRestriction\":{\"RestrictionType\":\"none\",\"Quantity\":0}},
+      \"ViewerCertificate\":{\"CloudFrontDefaultCertificate\":true}
+    }"
+try_match "/_nimbus/cloudfront/distributions inspection" "$CF_ID" \
+  curl -sf "$NIMBUS/_nimbus/cloudfront/distributions"
+try "delete-distribution" \
+  $CLI cloudfront delete-distribution \
+    --id "$CF_ID" \
+    --if-match "dummy"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
