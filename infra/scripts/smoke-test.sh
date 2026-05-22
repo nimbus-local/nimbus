@@ -526,6 +526,39 @@ fi
 try_match "/_nimbus/elasticache/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/elasticache/clusters"
 
+# ── ACM ───────────────────────────────────────────────────────────────────────
+
+section "ACM"
+
+ACM_ARN=$($CLI acm request-certificate \
+  --domain-name "$PREFIX.nimbus.local" \
+  --subject-alternative-names "*.$PREFIX.nimbus.local" \
+  --validation-method DNS \
+  --query "CertificateArn" --output text)
+if echo "$ACM_ARN" | grep -q "arn:aws:acm:"; then
+  ok "RequestCertificate returns ARN"
+else
+  fail "RequestCertificate returns ARN" "got: $ACM_ARN"
+fi
+
+try_match "DescribeCertificate status ISSUED" "ISSUED" \
+  $CLI acm describe-certificate --certificate-arn "$ACM_ARN" \
+    --query "Certificate.Status" --output text
+
+try_match "ListCertificates includes new cert" "$PREFIX" \
+  $CLI acm list-certificates --query "CertificateSummaryList[*].DomainName" --output text
+
+try_match "ListTagsForCertificate empty" "" \
+  $CLI acm list-tags-for-certificate --certificate-arn "$ACM_ARN" \
+    --query "Tags" --output text
+
+try_match "/_nimbus/acm/certs/ downloads PEM" "BEGIN CERTIFICATE" \
+  curl -sf "$NIMBUS/_nimbus/acm/certs/$ACM_ARN"
+
+$CLI acm delete-certificate --certificate-arn "$ACM_ARN" 2>/dev/null
+try_match "DeleteCertificate removes cert" "" \
+  $CLI acm list-certificates --query "CertificateSummaryList[?DomainName=='$PREFIX.nimbus.local'].DomainName" --output text
+
 # ── Route 53 ─────────────────────────────────────────────────────────────────
 
 section "Route 53"

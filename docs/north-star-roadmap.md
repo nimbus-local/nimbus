@@ -275,19 +275,16 @@ Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
 Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates — no DNS or email challenge.
 
-### Part 1 — Certificate CRUD
+### Part 1 — Certificate CRUD + inspection ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `RequestCertificate` — generate real self-signed cert | |
-| `DescribeCertificate` — return `ISSUED` immediately | |
-| `ListCertificates` / `DeleteCertificate` | |
-
-### Part 2 — Inspection endpoint
-
-| Work item | Status |
-|-----------|--------|
-| `/_nimbus/acm/certs/{arn}` — download cert for local trust | |
+| `RequestCertificate` — generate real self-signed cert (RSA 2048, crypto/x509) | ✅ |
+| `DescribeCertificate` — return `ISSUED` immediately | ✅ |
+| `ListCertificates` / `DeleteCertificate` | ✅ |
+| `GetCertificate` — return cert PEM + chain | ✅ |
+| `AddTagsToCertificate` / `RemoveTagsFromCertificate` / `ListTagsForCertificate` | ✅ |
+| `/_nimbus/acm/certs/{arn}` — download cert PEM for local trust | ✅ |
 
 ---
 

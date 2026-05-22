@@ -74,6 +74,7 @@ volumes:
 | [ALB](docs/services/alb.md) | ✅ Core | form-encoded body, `Version=2015-12-01` | Load balancer, target group, listener, and rule CRUD — `localhost`-based `DNSName`, state always `active`; listeners start a real reverse proxy that routes requests to registered IP targets |
 | [RDS / Aurora](docs/services/rds.md) | ✅ Core | form-encoded body, `Version=2014-10-31` | Subnet group, parameter group, cluster, and instance CRUD — cluster endpoint resolves to a real Postgres sidecar; status always `available` |
 | [ElastiCache](docs/services/elasticache.md) | ✅ Core | form-encoded body, `Version=2015-02-02` | Subnet group, parameter group, cache cluster, and replication group CRUD — endpoints resolve to a real Valkey sidecar; status always `available` |
+| [ACM](docs/services/acm.md) | ✅ Core | `X-Amz-Target: CertificateManager.*` | Certificate CRUD — `RequestCertificate` generates a real self-signed cert; status always `ISSUED`; PEM downloadable via `/_nimbus/acm/certs/{arn}` |
 | [Route 53](docs/services/route53.md) | ✅ Core | `/2013-04-01/` path prefix | Hosted zone and record set CRUD — `GetChange` always returns `INSYNC`; no DNS resolution |
 
 ---
