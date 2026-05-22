@@ -31,6 +31,11 @@ type logGroup struct {
 	streams   map[string]*logStream // streamName -> stream
 }
 
+type logEvent struct {
+	timestamp int64
+	message   string
+}
+
 type logStream struct {
 	name                string
 	arn                 string
@@ -39,7 +44,10 @@ type logStream struct {
 	lastEventTimestamp  *int64
 	lastIngestionTime   *int64
 	uploadSequenceToken string
+	events              []logEvent // capped at maxEvents
 }
+
+const maxEvents = 10_000
 
 func New(region string) *Service {
 	if region == "" {
@@ -73,6 +81,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.createLogStream(w, r)
 	case "DescribeLogStreams":
 		s.describeLogStreams(w, r)
+	case "PutLogEvents":
+		s.putLogEvents(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
 			fmt.Sprintf("Action %s is not supported.", action))
@@ -238,6 +248,65 @@ func (s *Service) describeLogStreams(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"logStreams": results,
+	})
+}
+
+// --- Log events ---
+
+func (s *Service) putLogEvents(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName  string `json:"logGroupName"`
+		LogStreamName string `json:"logStreamName"`
+		LogEvents     []struct {
+			Timestamp int64  `json:"timestamp"`
+			Message   string `json:"message"`
+		} `json:"logEvents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.LogGroupName == "" || req.LogStreamName == "" {
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName, logStreamName, and logEvents are required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+	st, ok := g.streams[req.LogStreamName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log stream %s not found.", req.LogStreamName))
+		return
+	}
+
+	now := nowMS()
+	for _, e := range req.LogEvents {
+		st.events = append(st.events, logEvent{timestamp: e.Timestamp, message: e.Message})
+		if st.firstEventTimestamp == nil || e.Timestamp < *st.firstEventTimestamp {
+			ts := e.Timestamp
+			st.firstEventTimestamp = &ts
+		}
+		if st.lastEventTimestamp == nil || e.Timestamp > *st.lastEventTimestamp {
+			ts := e.Timestamp
+			st.lastEventTimestamp = &ts
+		}
+	}
+	// Cap to maxEvents, keeping the most recent
+	if len(st.events) > maxEvents {
+		st.events = st.events[len(st.events)-maxEvents:]
+	}
+	st.lastIngestionTime = &now
+	token := uid.New()
+	st.uploadSequenceToken = token
+
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"nextSequenceToken": token,
 	})
 }
 

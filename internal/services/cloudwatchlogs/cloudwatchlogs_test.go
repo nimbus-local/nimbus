@@ -184,3 +184,52 @@ func TestDescribeLogStreams_GroupNotFound(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+// --- PutLogEvents ---
+
+func TestPutLogEvents(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app", "logStreamName": "s"})
+
+	w := cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "s",
+		"logEvents": []map[string]interface{}{
+			{"timestamp": 1000, "message": "hello"},
+			{"timestamp": 2000, "message": "world"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := decode(t, w)
+	if body["nextSequenceToken"] == "" {
+		t.Error("expected non-empty nextSequenceToken")
+	}
+}
+
+func TestPutLogEvents_GroupNotFound(t *testing.T) {
+	svc := newSvc()
+	w := cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/missing",
+		"logStreamName": "s",
+		"logEvents":     []map[string]interface{}{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestPutLogEvents_StreamNotFound(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	w := cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"logStreamName": "missing",
+		"logEvents":     []map[string]interface{}{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
