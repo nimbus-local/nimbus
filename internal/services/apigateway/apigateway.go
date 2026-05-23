@@ -42,13 +42,24 @@ func New(region string, lambda LambdaInvoker) *Service {
 func (s *Service) Name() string { return "apigateway" }
 
 // Detect claims /restapis/* (REST API v1) and /apis/* (HTTP API v2).
+// AWS SDK Go v2 (used by Pulumi) prefixes HTTP API paths with /v2/.
 func (s *Service) Detect(r *http.Request) bool {
 	p := r.URL.Path
 	return p == "/restapis" || strings.HasPrefix(p, "/restapis/") ||
-		p == "/apis" || strings.HasPrefix(p, "/apis/")
+		p == "/apis" || strings.HasPrefix(p, "/apis/") ||
+		p == "/v2/apis" || strings.HasPrefix(p, "/v2/apis/")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Strip /v2 prefix — AWS SDK Go v2 sends /v2/apis/... instead of /apis/...
+	if strings.HasPrefix(r.URL.Path, "/v2/") {
+		r2 := *r
+		u2 := *r.URL
+		u2.Path = r.URL.Path[3:]
+		r2.URL = &u2
+		r = &r2
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/apis") {
 		s.serveV2(w, r)
 		return

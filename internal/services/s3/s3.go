@@ -43,6 +43,10 @@ func (s *Service) Detect(r *http.Request) bool {
 	if strings.Contains(host, ".s3.") {
 		return true
 	}
+	// Virtual hosted without s3 prefix: bucket.localhost or bucket.127.0.0.1
+	if strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".127.0.0.1") {
+		return true
+	}
 
 	// SQS uses numeric account ID in path and Action params
 	// DynamoDB uses X-Amz-Target header
@@ -131,6 +135,17 @@ func parsePath(r *http.Request) (bucket, key string) {
 	if strings.Contains(host, ".s3.") {
 		parts := strings.SplitN(host, ".s3.", 2)
 		bucket = parts[0]
+		key = strings.TrimPrefix(r.URL.Path, "/")
+		return
+	}
+	// Virtual hosted without s3 prefix: bucket.localhost or bucket.127.0.0.1
+	if strings.HasSuffix(host, ".localhost") {
+		bucket = strings.TrimSuffix(host, ".localhost")
+		key = strings.TrimPrefix(r.URL.Path, "/")
+		return
+	}
+	if strings.HasSuffix(host, ".127.0.0.1") {
+		bucket = strings.TrimSuffix(host, ".127.0.0.1")
 		key = strings.TrimPrefix(r.URL.Path, "/")
 		return
 	}

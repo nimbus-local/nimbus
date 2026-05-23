@@ -12,16 +12,77 @@ import (
 func TestV2DetectAndRoute(t *testing.T) {
 	svc, _ := newTestService()
 
-	// /apis should be detected
-	r := httptest.NewRequest(http.MethodGet, "/apis", nil)
-	if !svc.Detect(r) {
-		t.Fatal("Detect should match /apis")
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/apis", true},
+		{"/apis/abc123", true},
+		{"/restapis", true},
+		{"/restapis/abc123", true},
+		{"/v2/apis", true},
+		{"/v2/apis/abc123", true},
+		{"/v2/apis/abc123/routes", true},
+		{"/other", false},
+	}
+	for _, tc := range cases {
+		r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		if got := svc.Detect(r); got != tc.want {
+			t.Errorf("Detect(%q): want %v, got %v", tc.path, tc.want, got)
+		}
+	}
+}
+
+// TestV2PrefixCreateAndGet exercises the /v2/apis prefix used by AWS SDK Go v2 (Pulumi).
+func TestV2PrefixCreateAndGet(t *testing.T) {
+	svc, _ := newTestService()
+
+	// CreateApi via /v2/apis
+	w := do(svc, http.MethodPost, "/v2/apis", map[string]string{
+		"name":         "pulumi-api",
+		"protocolType": "HTTP",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateApi via /v2/apis: want 201, got %d — %s", w.Code, w.Body)
+	}
+	var api HTTPApi
+	json.NewDecoder(w.Body).Decode(&api)
+	if api.ApiId == "" {
+		t.Fatal("expected non-empty apiId")
 	}
 
-	// /restapis should still be detected
-	r2 := httptest.NewRequest(http.MethodGet, "/restapis", nil)
-	if !svc.Detect(r2) {
-		t.Fatal("Detect should still match /restapis")
+	// GetApi via /v2/apis/{id}
+	w2 := do(svc, http.MethodGet, "/v2/apis/"+api.ApiId, nil)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GetApi via /v2/apis/{id}: want 200, got %d", w2.Code)
+	}
+
+	// GetApis via /v2/apis — should list the API created above
+	w3 := do(svc, http.MethodGet, "/v2/apis", nil)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("GetApis via /v2/apis: want 200, got %d", w3.Code)
+	}
+	var list map[string]any
+	json.NewDecoder(w3.Body).Decode(&list)
+	if len(list["items"].([]any)) != 1 {
+		t.Fatalf("want 1 API, got %d", len(list["items"].([]any)))
+	}
+
+	// CreateRoute via /v2/apis/{id}/routes
+	w4 := do(svc, http.MethodPost, "/v2/apis/"+api.ApiId+"/routes",
+		map[string]string{"routeKey": "GET /hello"})
+	if w4.Code != http.StatusCreated {
+		t.Fatalf("CreateRoute via /v2/: want 201, got %d — %s", w4.Code, w4.Body)
+	}
+
+	// DeleteApi via /v2/apis/{id}
+	w5 := do(svc, http.MethodDelete, "/v2/apis/"+api.ApiId, nil)
+	if w5.Code != http.StatusNoContent {
+		t.Fatalf("DeleteApi via /v2/apis/{id}: want 204, got %d", w5.Code)
+	}
+	w6 := do(svc, http.MethodGet, "/v2/apis/"+api.ApiId, nil)
+	if w6.Code != http.StatusNotFound {
+		t.Fatalf("GetApi after delete via /v2/: want 404, got %d", w6.Code)
 	}
 }
 

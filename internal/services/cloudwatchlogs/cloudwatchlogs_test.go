@@ -323,6 +323,60 @@ func TestFilterLogEvents(t *testing.T) {
 
 // --- Inspection handler ---
 
+// --- Retention policy ---
+
+func TestPutRetentionPolicy(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app/test"})
+	w := cwlReq(t, svc, "PutRetentionPolicy", map[string]interface{}{
+		"logGroupName":    "/app/test",
+		"retentionInDays": 7,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	svc.mu.RLock()
+	days := svc.groups["/app/test"].retentionInDays
+	svc.mu.RUnlock()
+	if days != 7 {
+		t.Errorf("expected retentionInDays=7, got %d", days)
+	}
+}
+
+func TestPutRetentionPolicy_GroupNotFound(t *testing.T) {
+	svc := newSvc()
+	w := cwlReq(t, svc, "PutRetentionPolicy", map[string]interface{}{
+		"logGroupName":    "/no/such",
+		"retentionInDays": 7,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	body := decode(t, w)
+	if !strings.Contains(body["__type"].(string), "ResourceNotFoundException") {
+		t.Errorf("unexpected error type: %v", body["__type"])
+	}
+}
+
+func TestDeleteRetentionPolicy(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app/test"})
+	cwlReq(t, svc, "PutRetentionPolicy", map[string]interface{}{
+		"logGroupName":    "/app/test",
+		"retentionInDays": 14,
+	})
+	w := cwlReq(t, svc, "DeleteRetentionPolicy", map[string]string{"logGroupName": "/app/test"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	svc.mu.RLock()
+	days := svc.groups["/app/test"].retentionInDays
+	svc.mu.RUnlock()
+	if days != 0 {
+		t.Errorf("expected retentionInDays=0 after delete, got %d", days)
+	}
+}
+
 func TestLogsHandler(t *testing.T) {
 	svc := newSvc()
 	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app/prod"})
