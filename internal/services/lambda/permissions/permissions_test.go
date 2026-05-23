@@ -104,6 +104,42 @@ func TestAddPermission_HappyPath(t *testing.T) {
 	}
 }
 
+func TestAddPermission_StatementResourceARN(t *testing.T) {
+	svc := newTestService("my-func")
+	resp := mustAddPermission(t, svc, "my-func", "stmt-arn")
+
+	var stmt map[string]any
+	json.Unmarshal([]byte(resp["Statement"].(string)), &stmt)
+
+	want := "arn:aws:lambda:us-east-1:000000000000:function:my-func"
+	if stmt["Resource"] != want {
+		t.Errorf("Resource: want %q, got %q", want, stmt["Resource"])
+	}
+}
+
+func TestAddPermission_StatementResourceARNWithQualifier(t *testing.T) {
+	svc := newTestService("my-func")
+	body := map[string]any{
+		"Action":      "lambda:InvokeFunction",
+		"Principal":   "apigateway.amazonaws.com",
+		"StatementId": "stmt-qual",
+	}
+	w := doJSONWithQuery(t, http.MethodPost, "/policy", "Qualifier=prod", body,
+		func(rw http.ResponseWriter, r *http.Request) { svc.AddPermission(rw, r, "my-func") })
+	if w.Code != http.StatusCreated {
+		t.Fatalf("AddPermission with qualifier: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stmt map[string]any
+	resp := decodeMap(t, w)
+	json.Unmarshal([]byte(resp["Statement"].(string)), &stmt)
+
+	want := "arn:aws:lambda:us-east-1:000000000000:function:my-func:prod"
+	if stmt["Resource"] != want {
+		t.Errorf("Resource with qualifier: want %q, got %q", want, stmt["Resource"])
+	}
+}
+
 func TestAddPermission_FunctionNotFound(t *testing.T) {
 	svc := newTestService() // no functions registered
 	body := map[string]any{

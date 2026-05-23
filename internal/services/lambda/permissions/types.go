@@ -6,6 +6,7 @@ type Statement struct {
 	Effect    string                       `json:"Effect"`
 	Principal any                          `json:"Principal"` // string or {"Service": "..."} etc.
 	Action    string                       `json:"Action"`
+	Resource  string                       `json:"Resource,omitempty"`
 	Condition map[string]map[string]string `json:"Condition,omitempty"`
 }
 
