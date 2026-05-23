@@ -460,7 +460,9 @@ func TestDetect(t *testing.T) {
 	}{
 		{"plain localhost", "localhost:4566", "", "", true},
 		{"s3 host prefix", "s3.us-east-1.amazonaws.com", "", "", true},
-		{"virtual hosted", "my-bucket.s3.localhost:4566", "", "", true},
+		{"virtual hosted s3", "my-bucket.s3.localhost:4566", "", "", true},
+		{"virtual hosted bucket.localhost", "my-bucket.localhost:4566", "", "", true},
+		{"virtual hosted bucket.127.0.0.1", "my-bucket.127.0.0.1:4566", "", "", true},
 		{"dynamodb target - not s3", "localhost:4566", "DynamoDB_20120810.ListTables", "", false},
 		{"sqs action - not s3", "localhost:4566", "", "CreateQueue", false},
 	}
@@ -483,5 +485,39 @@ func TestDetect(t *testing.T) {
 				t.Errorf("Detect(%q): expected %v, got %v", tc.name, tc.expected, got)
 			}
 		})
+	}
+}
+
+func TestVirtualHostedBucketLocalhost(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	// CreateBucket via virtual-hosted style: bucket.localhost:4566
+	req := httptest.NewRequest(http.MethodPut, "/", nil)
+	req.Host = "test-bucket.localhost:4566"
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateBucket virtual-hosted: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// PutObject
+	req = httptest.NewRequest(http.MethodPut, "/mykey", strings.NewReader("hello"))
+	req.Host = "test-bucket.localhost:4566"
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PutObject virtual-hosted: expected 200, got %d", w.Code)
+	}
+
+	// GetObject
+	req = httptest.NewRequest(http.MethodGet, "/mykey", nil)
+	req.Host = "test-bucket.localhost:4566"
+	w = httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetObject virtual-hosted: expected 200, got %d", w.Code)
+	}
+	if got := w.Body.String(); got != "hello" {
+		t.Errorf("GetObject virtual-hosted: expected body %q, got %q", "hello", got)
 	}
 }

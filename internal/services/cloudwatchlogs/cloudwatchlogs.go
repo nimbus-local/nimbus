@@ -24,11 +24,12 @@ type Service struct {
 }
 
 type logGroup struct {
-	name      string
-	arn       string
-	createdAt int64 // unix ms
-	tags      map[string]string
-	streams   map[string]*logStream // streamName -> stream
+	name            string
+	arn             string
+	createdAt       int64 // unix ms
+	tags            map[string]string
+	retentionInDays int
+	streams         map[string]*logStream // streamName -> stream
 }
 
 type logEvent struct {
@@ -89,6 +90,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getLogEvents(w, r)
 	case "FilterLogEvents":
 		s.filterLogEvents(w, r)
+	case "PutRetentionPolicy":
+		s.putRetentionPolicy(w, r)
+	case "DeleteRetentionPolicy":
+		s.deleteRetentionPolicy(w, r)
 	case "ListTagsForResource", "ListTagsLogGroup":
 		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{"tags": map[string]string{}})
 	default:
@@ -464,6 +469,42 @@ func toOutputEvents(events []logEvent) []outputEvent {
 		out[i] = outputEvent{Timestamp: e.timestamp, Message: e.message, IngestionTime: now}
 	}
 	return out
+}
+
+// --- Retention policy ---
+
+func (s *Service) putRetentionPolicy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName    string `json:"logGroupName"`
+		RetentionInDays int    `json:"retentionInDays"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LogGroupName == "" {
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException", "logGroupName is required")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+	g.retentionInDays = req.RetentionInDays
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) deleteRetentionPolicy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName string `json:"logGroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	s.mu.Lock()
+	if g, ok := s.groups[req.LogGroupName]; ok {
+		g.retentionInDays = 0
+	}
+	s.mu.Unlock()
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
 }
 
 // LogsHandler serves /_nimbus/logs/{group}/{stream} — streams recent events as plain text.
