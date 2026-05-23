@@ -64,11 +64,17 @@ func (s *Service) AddPermission(w http.ResponseWriter, r *http.Request, function
 		return
 	}
 
+	resource := fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.region, s.account, functionName)
+	if req.Qualifier != "" {
+		resource += ":" + req.Qualifier
+	}
+
 	stmt := &Statement{
 		Sid:       req.StatementId,
 		Effect:    "Allow",
 		Principal: req.Principal,
 		Action:    req.Action,
+		Resource:  resource,
 	}
 
 	if s.functionPolicies[functionName] == nil {
