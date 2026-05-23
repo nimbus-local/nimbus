@@ -9,6 +9,7 @@ import (
 
 // DELETE /2015-03-31/functions/{FunctionName}/policy/{StatementId}
 func (s *Service) RemovePermission(w http.ResponseWriter, r *http.Request, functionName, statementId string) {
+	functionName = resolveFunctionName(functionName)
 	revisionId := r.URL.Query().Get("RevisionId")
 
 	if !s.checker.FunctionExists(functionName) {

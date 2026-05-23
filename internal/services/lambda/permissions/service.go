@@ -1,10 +1,29 @@
 package permissions
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/nimbus-local/nimbus/internal/uid"
 )
+
+// resolveFunctionName extracts the bare function name from a plain name,
+// a name:qualifier pair, or a full Lambda ARN.
+func resolveFunctionName(s string) string {
+	if strings.HasPrefix(s, "arn:") {
+		// arn:aws:lambda:region:account:function:name[:qualifier]
+		parts := strings.Split(s, ":")
+		if len(parts) >= 7 {
+			return parts[6]
+		}
+		return s
+	}
+	// name or name:qualifier — strip qualifier
+	if idx := strings.Index(s, ":"); idx != -1 {
+		return s[:idx]
+	}
+	return s
+}
 
 // FunctionChecker allows the permissions service to verify that a function exists
 // without importing the function_crud package directly.

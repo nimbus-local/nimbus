@@ -10,6 +10,8 @@ import (
 
 // GET /2015-03-31/functions/{FunctionName}/policy
 func (s *Service) GetPolicy(w http.ResponseWriter, r *http.Request, functionName string) {
+	functionName = resolveFunctionName(functionName)
+
 	if !s.checker.FunctionExists(functionName) {
 		jsonhttp.Error(w, http.StatusNotFound, "ResourceNotFoundException",
 			fmt.Sprintf("Function not found: %s", functionName))

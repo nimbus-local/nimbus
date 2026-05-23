@@ -140,6 +140,48 @@ func TestAddPermission_StatementResourceARNWithQualifier(t *testing.T) {
 	}
 }
 
+func TestAddPermission_FullARN(t *testing.T) {
+	svc := newTestService("my-func")
+	body := map[string]any{
+		"Action":      "lambda:InvokeFunction",
+		"Principal":   "sns.amazonaws.com",
+		"StatementId": "stmt-arn",
+	}
+	w := doJSON(t, http.MethodPost, "/policy", body,
+		func(rw http.ResponseWriter, r *http.Request) {
+			svc.AddPermission(rw, r, "arn:aws:lambda:us-east-1:000000000000:function:my-func")
+		})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("AddPermission via full ARN: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetPolicy_FullARN(t *testing.T) {
+	svc := newTestService("my-func")
+	mustAddPermission(t, svc, "my-func", "stmt-1")
+
+	w := doJSON(t, http.MethodGet, "/policy", nil,
+		func(rw http.ResponseWriter, r *http.Request) {
+			svc.GetPolicy(rw, r, "arn:aws:lambda:us-east-1:000000000000:function:my-func")
+		})
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetPolicy via full ARN: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRemovePermission_FullARN(t *testing.T) {
+	svc := newTestService("my-func")
+	mustAddPermission(t, svc, "my-func", "stmt-1")
+
+	w := doJSON(t, http.MethodDelete, "/policy/stmt-1", nil,
+		func(rw http.ResponseWriter, r *http.Request) {
+			svc.RemovePermission(rw, r, "arn:aws:lambda:us-east-1:000000000000:function:my-func", "stmt-1")
+		})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("RemovePermission via full ARN: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestAddPermission_FunctionNotFound(t *testing.T) {
 	svc := newTestService() // no functions registered
 	body := map[string]any{

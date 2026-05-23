@@ -37,6 +37,8 @@ func (r *addPermissionRequest) Validate() error {
 
 // POST /2015-03-31/functions/{FunctionName}/policy
 func (s *Service) AddPermission(w http.ResponseWriter, r *http.Request, functionName string) {
+	functionName = resolveFunctionName(functionName)
+
 	req, ok := jsonhttp.Decode[addPermissionRequest](w, r)
 	if !ok {
 		return
