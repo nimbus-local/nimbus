@@ -191,6 +191,28 @@ func TestCreate_StripQualifier(t *testing.T) {
 	}
 }
 
+func TestCreate_FullARN(t *testing.T) {
+	svc := newTestService("my-func")
+	w := doCreate(t, svc, map[string]any{
+		"FunctionName":   "arn:aws:lambda:us-east-1:000000000000:function:my-func",
+		"EventSourceArn": "arn:aws:sqs:us-east-1:000000000000:my-queue",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for full ARN, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreate_FullARNWithQualifier(t *testing.T) {
+	svc := newTestService("my-func")
+	w := doCreate(t, svc, map[string]any{
+		"FunctionName":   "arn:aws:lambda:us-east-1:000000000000:function:my-func:prod",
+		"EventSourceArn": "arn:aws:sqs:us-east-1:000000000000:my-queue",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for ARN with qualifier, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
 func TestCreate_InvalidBatchSize(t *testing.T) {
 	svc := newTestService("fn")
 	w := doCreate(t, svc, map[string]any{
