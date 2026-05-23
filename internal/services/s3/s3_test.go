@@ -488,6 +488,116 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+// --- CopyObject tests ---
+
+func TestCopyObject(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/src-bucket", nil, nil)
+	do(t, svc, http.MethodPut, "/dst-bucket", nil, nil)
+
+	content := []byte("copy me")
+	do(t, svc, http.MethodPut, "/src-bucket/original.txt", content,
+		map[string]string{"Content-Type": "text/plain"})
+
+	// Copy to a different bucket and key
+	w := do(t, svc, http.MethodPut, "/dst-bucket/copy.txt", nil,
+		map[string]string{"x-amz-copy-source": "/src-bucket/original.txt"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CopyObject: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	// Response must include CopyObjectResult XML with ETag and LastModified
+	body := w.Body.String()
+	if !strings.Contains(body, "CopyObjectResult") {
+		t.Errorf("CopyObject: expected CopyObjectResult in body: %s", body)
+	}
+	if !strings.Contains(body, "ETag") {
+		t.Errorf("CopyObject: expected ETag in body: %s", body)
+	}
+	if !strings.Contains(body, "LastModified") {
+		t.Errorf("CopyObject: expected LastModified in body: %s", body)
+	}
+
+	// Destination object must be retrievable and have the same content
+	gw := do(t, svc, http.MethodGet, "/dst-bucket/copy.txt", nil, nil)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("GetObject after copy: expected 200, got %d", gw.Code)
+	}
+	if !bytes.Equal(gw.Body.Bytes(), content) {
+		t.Errorf("CopyObject: destination content mismatch: got %q, want %q",
+			gw.Body.Bytes(), content)
+	}
+	if ct := gw.Header().Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("CopyObject: expected Content-Type preserved as text/plain, got %q", ct)
+	}
+}
+
+func TestCopyObject_WithinBucket(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/my-bucket", nil, nil)
+	do(t, svc, http.MethodPut, "/my-bucket/orig.json", []byte(`{"k":"v"}`),
+		map[string]string{"Content-Type": "application/json"})
+
+	w := do(t, svc, http.MethodPut, "/my-bucket/archive/orig.json", nil,
+		map[string]string{"x-amz-copy-source": "/my-bucket/orig.json"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CopyObject within bucket: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	gw := do(t, svc, http.MethodGet, "/my-bucket/archive/orig.json", nil, nil)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("GetObject after within-bucket copy: expected 200, got %d", gw.Code)
+	}
+	if gw.Body.String() != `{"k":"v"}` {
+		t.Errorf("within-bucket copy: content mismatch: %s", gw.Body.String())
+	}
+}
+
+func TestCopyObject_SourceNotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/my-bucket", nil, nil)
+
+	w := do(t, svc, http.MethodPut, "/my-bucket/dest.txt", nil,
+		map[string]string{"x-amz-copy-source": "/my-bucket/no-such-key.txt"})
+	if w.Code != http.StatusNotFound {
+		t.Errorf("CopyObject missing source key: expected 404, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "NoSuchKey") {
+		t.Errorf("expected NoSuchKey error: %s", w.Body.String())
+	}
+}
+
+func TestCopyObject_SourceBucketNotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/dst-bucket", nil, nil)
+
+	w := do(t, svc, http.MethodPut, "/dst-bucket/dest.txt", nil,
+		map[string]string{"x-amz-copy-source": "/no-such-bucket/key.txt"})
+	if w.Code != http.StatusNotFound {
+		t.Errorf("CopyObject missing source bucket: expected 404, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "NoSuchBucket") {
+		t.Errorf("expected NoSuchBucket error: %s", w.Body.String())
+	}
+}
+
+func TestCopyObject_URLEncodedSource(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/my-bucket", nil, nil)
+	do(t, svc, http.MethodPut, "/my-bucket/path/to/file.txt", []byte("encoded"), nil)
+
+	// gocloud.dev sends URL-encoded copy-source
+	w := do(t, svc, http.MethodPut, "/my-bucket/dest.txt", nil,
+		map[string]string{"x-amz-copy-source": "/my-bucket/path%2Fto%2Ffile.txt"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CopyObject URL-encoded source: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	gw := do(t, svc, http.MethodGet, "/my-bucket/dest.txt", nil, nil)
+	if gw.Body.String() != "encoded" {
+		t.Errorf("URL-encoded copy: content mismatch: %s", gw.Body.String())
+	}
+}
+
 func TestVirtualHostedBucketLocalhost(t *testing.T) {
 	svc, _ := newTestService(t)
 
