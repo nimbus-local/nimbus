@@ -27,6 +27,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/rds"
 	"github.com/nimbus-local/nimbus/internal/services/route53"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
+	"github.com/nimbus-local/nimbus/internal/services/s3control"
 	"github.com/nimbus-local/nimbus/internal/services/scheduler"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
 	"github.com/nimbus-local/nimbus/internal/services/ses"
@@ -102,6 +103,7 @@ func main() {
 	r.Register(ecSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
+	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
 	// Standard endpoints
