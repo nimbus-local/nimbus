@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -108,6 +109,83 @@ func (s *Service) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	w.Header().Set("ETag", tag)
 	w.WriteHeader(http.StatusOK)
+}
+
+// CopyObject — PUT /:destBucket/:destKey with x-amz-copy-source header.
+// Pulumi's state backend (gocloud.dev) uses CopyObject to archive stack
+// checkpoints: it copies the live state file into the history directory.
+func (s *Service) copyObject(w http.ResponseWriter, r *http.Request, destBucket, destKey string) {
+	// x-amz-copy-source is "/srcBucket/srcKey" or "srcBucket/srcKey", possibly URL-encoded
+	src, _ := url.PathUnescape(r.Header.Get("x-amz-copy-source"))
+	src = strings.TrimPrefix(src, "/")
+	idx := strings.Index(src, "/")
+	if idx < 0 {
+		s.xmlError(w, http.StatusBadRequest, "InvalidArgument",
+			"x-amz-copy-source must be in the form /bucket/key")
+		return
+	}
+	srcBucket, srcKey := src[:idx], src[idx+1:]
+
+	if !s.bucketExists(srcBucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
+			"source bucket does not exist: "+srcBucket)
+		return
+	}
+	if !s.bucketExists(destBucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
+			"destination bucket does not exist: "+destBucket)
+		return
+	}
+
+	data, err := os.ReadFile(s.objectPath(srcBucket, srcKey))
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.xmlError(w, http.StatusNotFound, "NoSuchKey",
+				"source key does not exist: "+srcKey)
+			return
+		}
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
+	srcMeta, _ := s.loadMeta(srcBucket, srcKey)
+
+	destPath := s.objectPath(destBucket, destKey)
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
+
+	now := time.Now().UTC()
+	tag := etag(data)
+	ct := srcMeta.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	if err := s.saveMeta(destBucket, objectMeta{
+		Key:           destKey,
+		ContentType:   ct,
+		ContentLength: int64(len(data)),
+		ETag:          tag,
+		LastModified:  now,
+		UserMetadata:  srcMeta.UserMetadata,
+	}); err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
+
+	type result struct {
+		XMLName      xml.Name `xml:"CopyObjectResult"`
+		ETag         string   `xml:"ETag"`
+		LastModified string   `xml:"LastModified"`
+	}
+	xmlWrite(w, http.StatusOK, result{
+		ETag:         tag,
+		LastModified: now.Format(time.RFC3339Nano),
+	})
 }
 
 // GetObject — GET /:bucket/:key

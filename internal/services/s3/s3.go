@@ -104,6 +104,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && bucket != "" && key != "" && r.URL.Query().Has("uploadId"):
 		s.abortMultipartUpload(w, r, bucket, key)
 
+	case r.Method == http.MethodPut && bucket != "" && key != "" && r.Header.Get("x-amz-copy-source") != "":
+		s.copyObject(w, r, bucket, key)
+
 	case r.Method == http.MethodPut && bucket != "" && key != "":
 		s.putObject(w, r, bucket, key)
 
