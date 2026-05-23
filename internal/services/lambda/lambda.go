@@ -132,6 +132,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name, suffix, _ := strings.Cut(rest, "/")
+	name = resolveFunctionName(name) // accept bare name, name:qualifier, or full ARN
 	if name == "" {
 		jsonhttp.Error(w, http.StatusBadRequest, "ValidationException", "FunctionName is required")
 		return
@@ -307,6 +308,22 @@ func (s *Service) routeCodeSigning(w http.ResponseWriter, r *http.Request, path 
 		jsonhttp.Error(w, http.StatusNotFound, "ResourceNotFoundException",
 			"Unknown operation for path: "+r.URL.Path)
 	}
+}
+
+// resolveFunctionName normalises a Lambda function identifier to a bare name.
+// It handles: bare name, name:qualifier, and full ARN (arn:aws:lambda:...:function:name[:qualifier]).
+func resolveFunctionName(s string) string {
+	if strings.HasPrefix(s, "arn:") {
+		parts := strings.Split(s, ":")
+		if len(parts) >= 7 {
+			return parts[6]
+		}
+		return s
+	}
+	if idx := strings.Index(s, ":"); idx != -1 {
+		return s[:idx]
+	}
+	return s
 }
 
 // routeLayers handles /layers and /layers/{layerName}/versions[/{n}[/policy[/{sid}]]]
