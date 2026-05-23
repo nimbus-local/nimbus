@@ -51,6 +51,24 @@ func (r *createRequest) Validate() error {
 	return nil
 }
 
+// resolveFunctionName extracts the bare function name from a plain name,
+// a name:qualifier pair, or a full Lambda ARN.
+func resolveFunctionName(s string) string {
+	if strings.HasPrefix(s, "arn:") {
+		// arn:aws:lambda:region:account:function:name[:qualifier]
+		parts := strings.Split(s, ":")
+		if len(parts) >= 7 {
+			return parts[6]
+		}
+		return s
+	}
+	// name or name:qualifier — strip qualifier
+	if idx := strings.Index(s, ":"); idx != -1 {
+		return s[:idx]
+	}
+	return s
+}
+
 // POST /2015-03-31/event-source-mappings
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	req, ok := jsonhttp.Decode[createRequest](w, r)
@@ -58,13 +76,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strip qualifier (e.g. "name:alias") for existence check.
-	baseName := req.FunctionName
-	if idx := strings.Index(baseName, ":"); idx != -1 {
-		baseName = baseName[:idx]
-	}
-
-	if !s.checker.FunctionExists(baseName) {
+	if !s.checker.FunctionExists(resolveFunctionName(req.FunctionName)) {
 		jsonhttp.Error(w, http.StatusNotFound, "ResourceNotFoundException",
 			"Function not found: "+req.FunctionName)
 		return
