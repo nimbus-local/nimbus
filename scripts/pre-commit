@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+echo "pre-commit: running gofmt..."
+gofmt -w .
+
+echo "pre-commit: running go vet..."
+go vet ./...
+
+echo "pre-commit: running tests..."
+go test ./... -short
+
+echo "pre-commit: all checks passed"

@@ -57,6 +57,14 @@ Link the service name to its doc file. Match the status badge used by comparable
 
 ## Running locally
 
+**Install git hooks (run once after cloning):**
+
+```bash
+sh scripts/install-hooks.sh
+```
+
+This installs a pre-commit hook that runs `gofmt`, `go vet`, and `go test ./... -short` before every commit.
+
 **Unit tests (fast, no Docker required):**
 
 ```bash
