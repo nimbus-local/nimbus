@@ -200,7 +200,11 @@ func (s *Service) getBucketLifecycle(w http.ResponseWriter, r *http.Request, buc
 			"The lifecycle configuration does not exist.")
 		return
 	}
+	// The Pulumi/TF AWS provider v5.44+ waiter polls GetBucketLifecycleConfiguration
+	// and checks the x-amz-transition-default-minimum-object-size response header.
+	// AWS sets this header server-side; without it the waiter times out after 3 min.
 	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("x-amz-transition-default-minimum-object-size", "all_storage_classes_128K")
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
