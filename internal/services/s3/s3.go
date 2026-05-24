@@ -68,15 +68,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && bucket == "" && key == "":
 		s.listBuckets(w, r)
 
-	case r.Method == http.MethodPut && bucket != "" && key == "":
-		s.createBucket(w, r, bucket)
-
-	case r.Method == http.MethodDelete && bucket != "" && key == "":
-		s.deleteBucket(w, r, bucket)
-
-	case r.Method == http.MethodHead && bucket != "" && key == "":
-		s.headBucket(w, r, bucket)
-
+	// Bucket sub-resources (query-param dispatch) — must precede generic bucket cases
 	case r.Method == http.MethodGet && bucket != "" && key == "" && r.URL.Query().Has("policy"):
 		s.getBucketPolicy(w, r, bucket)
 
@@ -85,6 +77,25 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodDelete && bucket != "" && key == "" && r.URL.Query().Has("policy"):
 		w.WriteHeader(http.StatusNoContent)
+
+	case r.Method == http.MethodGet && bucket != "" && key == "" && r.URL.Query().Has("lifecycle"):
+		s.getBucketLifecycle(w, r, bucket)
+
+	case r.Method == http.MethodPut && bucket != "" && key == "" && r.URL.Query().Has("lifecycle"):
+		s.putBucketLifecycle(w, r, bucket)
+
+	case r.Method == http.MethodDelete && bucket != "" && key == "" && r.URL.Query().Has("lifecycle"):
+		s.deleteBucketLifecycle(w, r, bucket)
+
+	// Generic bucket CRUD
+	case r.Method == http.MethodPut && bucket != "" && key == "":
+		s.createBucket(w, r, bucket)
+
+	case r.Method == http.MethodDelete && bucket != "" && key == "":
+		s.deleteBucket(w, r, bucket)
+
+	case r.Method == http.MethodHead && bucket != "" && key == "":
+		s.headBucket(w, r, bucket)
 
 	case r.Method == http.MethodGet && bucket != "" && key == "":
 		s.listObjects(w, r, bucket)

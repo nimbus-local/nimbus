@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -184,6 +185,55 @@ func (s *Service) getBucketPolicy(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 	s.xmlError(w, http.StatusNotFound, "NoSuchBucketPolicy", "The bucket policy does not exist.")
+}
+
+func (s *Service) lifecyclePath(bucket string) string {
+	return filepath.Join(s.bucketDir(bucket), ".nimbus-lifecycle.xml")
+}
+
+// getBucketLifecycle — GET /:bucket?lifecycle
+func (s *Service) getBucketLifecycle(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	data, err := os.ReadFile(s.lifecyclePath(bucket))
+	if err != nil {
+		s.xmlError(w, http.StatusNotFound, "NoSuchLifecycleConfiguration",
+			"The lifecycle configuration does not exist.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+// putBucketLifecycle — PUT /:bucket?lifecycle
+func (s *Service) putBucketLifecycle(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", "failed to read request body")
+		return
+	}
+	if err := os.WriteFile(s.lifecyclePath(bucket), body, 0644); err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", "failed to store lifecycle config")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// deleteBucketLifecycle — DELETE /:bucket?lifecycle
+func (s *Service) deleteBucketLifecycle(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	os.Remove(s.lifecyclePath(bucket))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // validBucketName enforces S3 bucket naming rules

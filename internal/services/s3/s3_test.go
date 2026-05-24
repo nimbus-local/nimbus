@@ -631,3 +631,66 @@ func TestVirtualHostedBucketLocalhost(t *testing.T) {
 		t.Errorf("GetObject virtual-hosted: expected body %q, got %q", "hello", got)
 	}
 }
+
+// --- Lifecycle tests ---
+
+const sampleLifecycleXML = `<?xml version="1.0" encoding="UTF-8"?>
+<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Rule>
+    <ID>expire-old</ID>
+    <Status>Enabled</Status>
+    <Expiration><Days>90</Days></Expiration>
+  </Rule>
+</LifecycleConfiguration>`
+
+func TestPutGetBucketLifecycle(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/lc-bucket", nil, nil)
+
+	// PUT lifecycle
+	w := do(t, svc, http.MethodPut, "/lc-bucket?lifecycle",
+		[]byte(sampleLifecycleXML),
+		map[string]string{"Content-Type": "application/xml"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PutBucketLifecycle: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// GET lifecycle — must return the same XML
+	w = do(t, svc, http.MethodGet, "/lc-bucket?lifecycle", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetBucketLifecycle: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != sampleLifecycleXML {
+		t.Errorf("GetBucketLifecycle: body mismatch\ngot:  %q\nwant: %q", got, sampleLifecycleXML)
+	}
+}
+
+func TestGetBucketLifecycle_NotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/lc-bucket2", nil, nil)
+
+	w := do(t, svc, http.MethodGet, "/lc-bucket2?lifecycle", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GetBucketLifecycle (no config): expected 404, got %d", w.Code)
+	}
+}
+
+func TestDeleteBucketLifecycle(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/lc-bucket3", nil, nil)
+
+	do(t, svc, http.MethodPut, "/lc-bucket3?lifecycle",
+		[]byte(sampleLifecycleXML),
+		map[string]string{"Content-Type": "application/xml"})
+
+	w := do(t, svc, http.MethodDelete, "/lc-bucket3?lifecycle", nil, nil)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteBucketLifecycle: expected 204, got %d", w.Code)
+	}
+
+	// GET after delete must return 404
+	w = do(t, svc, http.MethodGet, "/lc-bucket3?lifecycle", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GetBucketLifecycle after delete: expected 404, got %d", w.Code)
+	}
+}
