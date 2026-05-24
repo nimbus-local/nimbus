@@ -655,13 +655,18 @@ func TestPutGetBucketLifecycle(t *testing.T) {
 		t.Fatalf("PutBucketLifecycle: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// GET lifecycle — must return the same XML
+	// GET lifecycle — must return the same XML and the Pulumi waiter header.
 	w = do(t, svc, http.MethodGet, "/lc-bucket?lifecycle", nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetBucketLifecycle: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if got := w.Body.String(); got != sampleLifecycleXML {
 		t.Errorf("GetBucketLifecycle: body mismatch\ngot:  %q\nwant: %q", got, sampleLifecycleXML)
+	}
+	// The Pulumi/TF AWS provider v5.44+ waiter reads TransitionDefaultMinimumObjectSize
+	// from this response header. It must be present or deploys time out after 3 minutes.
+	if got := w.Header().Get("x-amz-transition-default-minimum-object-size"); got == "" {
+		t.Error("GetBucketLifecycle: missing x-amz-transition-default-minimum-object-size header")
 	}
 }
 

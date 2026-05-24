@@ -105,6 +105,34 @@ Without these, `terraform apply` on an already-provisioned environment returns 4
 
 Provider v6 reads `WarmThroughput.Status` from `DescribeTable`. DynamoDB Local omits this field. Fix: intercept the response with a `captureWriter`, parse JSON, inject `"WarmThroughput":{"Status":"ACTIVE","ReadUnitsPerSecond":0,"WriteUnitsPerSecond":0}` before forwarding to the client.
 
+### S3 `GetBucketLifecycleConfiguration` — `x-amz-transition-default-minimum-object-size` response header
+
+The Pulumi/TF AWS provider v5.44+ includes a waiter after `PutBucketLifecycleConfiguration`. The waiter polls `GetBucketLifecycleConfiguration` with `ContinuousTargetOccurence: 2` (needs 2 consecutive successes) and checks whether the response sets the HTTP header:
+
+```
+x-amz-transition-default-minimum-object-size: all_storage_classes_128K
+```
+
+**Critical**: the AWS SDK v2 reads `TransitionDefaultMinimumObjectSize` from this HTTP response **header**, not from the XML body. See `deserializers.go` in `aws-sdk-go-v2/service/s3`:
+
+```go
+if headerValues := response.Header.Values("x-amz-transition-default-minimum-object-size"); len(headerValues) != 0 {
+    v.TransitionDefaultMinimumObjectSize = types.TransitionDefaultMinimumObjectSize(headerValues[0])
+}
+```
+
+If the header is absent, `TransitionDefaultMinimumObjectSize` is the empty string, the waiter evaluates `false` on every poll, and **the deploy times out after exactly 3 minutes** — a very misleading failure mode with no helpful error message.
+
+**Fix**: `getBucketLifecycle` in `internal/services/s3/bucket.go` sets this header unconditionally on success responses:
+
+```go
+w.Header().Set("x-amz-transition-default-minimum-object-size", "all_storage_classes_128K")
+```
+
+The value `all_storage_classes_128K` is the AWS server-side default for all lifecycle configurations created since November 2023. The waiter completes in ~25 seconds (two polls separated by the `minDelay`).
+
+Injecting the tag into the XML body has **no effect** — the SDK only reads the header.
+
 ## Implementation strategy — parts, not phases
 
 Every phase is split into numbered parts in the roadmap. **Each part is one working
