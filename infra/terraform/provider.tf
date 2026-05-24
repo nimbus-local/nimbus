@@ -31,5 +31,6 @@ provider "aws" {
     scheduler      = var.nimbus_endpoint
     cloudfront     = var.nimbus_endpoint
     elbv2          = var.nimbus_endpoint
+    cognitoidp     = var.nimbus_endpoint
   }
 }

@@ -150,6 +150,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.modifyReplicationGroup(w, r)
 	case "DeleteReplicationGroup":
 		s.deleteReplicationGroup(w, r)
+	case "IncreaseReplicaCount":
+		s.increaseReplicaCount(w, r)
+	case "DecreaseReplicaCount":
+		s.decreaseReplicaCount(w, r)
 	// Engine versions — stub
 	case "DescribeCacheEngineVersions":
 		s.describeCacheEngineVersions(w, r)
@@ -573,6 +577,38 @@ func (s *Service) deleteReplicationGroup(w http.ResponseWriter, r *http.Request)
     <DeleteReplicationGroupResult>
       <ReplicationGroup>%s</ReplicationGroup>
     </DeleteReplicationGroupResult>`, s.replGroupXML(rg))))
+}
+
+func (s *Service) increaseReplicaCount(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("ReplicationGroupId")
+	s.mu.RLock()
+	rg := s.replGroups[id]
+	s.mu.RUnlock()
+	if rg == nil {
+		ecError(w, http.StatusNotFound, "ReplicationGroupNotFoundFault",
+			fmt.Sprintf("ReplicationGroup '%s' not found.", id))
+		return
+	}
+	writeXML(w, http.StatusOK, wrap("IncreaseReplicaCount", fmt.Sprintf(`
+    <IncreaseReplicaCountResult>
+      <ReplicationGroup>%s</ReplicationGroup>
+    </IncreaseReplicaCountResult>`, s.replGroupXML(rg))))
+}
+
+func (s *Service) decreaseReplicaCount(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("ReplicationGroupId")
+	s.mu.RLock()
+	rg := s.replGroups[id]
+	s.mu.RUnlock()
+	if rg == nil {
+		ecError(w, http.StatusNotFound, "ReplicationGroupNotFoundFault",
+			fmt.Sprintf("ReplicationGroup '%s' not found.", id))
+		return
+	}
+	writeXML(w, http.StatusOK, wrap("DecreaseReplicaCount", fmt.Sprintf(`
+    <DecreaseReplicaCountResult>
+      <ReplicationGroup>%s</ReplicationGroup>
+    </DecreaseReplicaCountResult>`, s.replGroupXML(rg))))
 }
 
 func (s *Service) replGroupXML(rg *replicationGroup) string {

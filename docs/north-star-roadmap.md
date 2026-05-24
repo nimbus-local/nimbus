@@ -52,7 +52,7 @@ kept at `desiredCount` by a 10 s reconciliation loop.
 
 ---
 
-## Phase 2 — IAM (structural)
+## Phase 2 — IAM (structural) ✅ shipped
 
 **Unblocks all other constructs.** No enforcement — any `AssumeRole` call succeeds
 and returns fake credentials. Goal: Terraform `plan`/`apply` passes and ARNs are
@@ -126,7 +126,7 @@ ship output to Nimbus instead of real CloudWatch.
 
 ---
 
-## Phase 4 — EventBridge Scheduler
+## Phase 4 — EventBridge Scheduler ✅ shipped
 
 **Unblocks Cron constructs.** Separate service from EventBridge Events.
 
@@ -187,7 +187,7 @@ AWS Terraform provider v6.
 
 ---
 
-## Phase 6 — ALB (Application Load Balancer)
+## Phase 6 — ALB (Application Load Balancer) ✅ shipped
 
 **Unblocks Service constructs.** Routes external traffic to running ECS containers.
 
@@ -215,7 +215,7 @@ AWS Terraform provider v6.
 
 ---
 
-## Phase 7 — Aurora / RDS
+## Phase 7 — Aurora / RDS ✅ shipped
 
 Sidecar pattern: a real Postgres container alongside Nimbus. RDS API returns endpoints pointing to it.
 
@@ -244,7 +244,7 @@ Needed so `terraform plan` doesn't fail before the cluster exists.
 
 ---
 
-## Phase 8 — Valkey / ElastiCache
+## Phase 8 — Valkey / ElastiCache ✅ shipped
 
 Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
@@ -267,11 +267,17 @@ Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
 | Work item | Status |
 |-----------|--------|
-| `CreateReplicationGroup` / `DescribeReplicationGroups` / `DeleteReplicationGroup` | |
+| `CreateReplicationGroup` / `DescribeReplicationGroups` / `DeleteReplicationGroup` | ✅ |
+| `ModifyReplicationGroup` | ✅ |
+| `IncreaseReplicaCount` / `DecreaseReplicaCount` — stubbed (return existing group, don't actually change replica count) | stub |
+
+> **Note:** `IncreaseReplicaCount` and `DecreaseReplicaCount` are stubbed to unblock TF provider v6's
+> `aws_elasticache_replication_group` apply. A full implementation would track per-node-group shard/replica
+> topology. Only implement if Forge workloads need real multi-replica behaviour locally.
 
 ---
 
-## Phase 9 — ACM (Certificate Manager)
+## Phase 9 — ACM (Certificate Manager) ✅ shipped
 
 Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates — no DNS or email challenge.
 
@@ -288,7 +294,7 @@ Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates
 
 ---
 
-## Phase 10 — Route 53
+## Phase 10 — Route 53 ✅ shipped
 
 Mostly needed so Terraform plans succeed. Local DNS resolution is a stretch goal.
 
@@ -329,6 +335,60 @@ Accept metrics from apps and SDKs.
 | `PutMetricAlarm` / `DescribeAlarms` / `DescribeAlarmsForMetric` / `DeleteAlarms` — state always `OK` | ✅ |
 | Tag support: `ListTagsForResource` / `TagResource` / `UntagResource` | ✅ |
 | `/_nimbus/metrics` inspection endpoint | ✅ |
+
+---
+
+---
+
+## Phase 12 — Cognito User Pools 🚧 In Progress (Parts 1–2 shipped)
+
+Enables Forge to test full authentication flows locally without hitting real AWS. Forge uses Cognito User Pools to protect web apps it deploys, so the emulator needs both the infrastructure layer (for Terraform) and the auth layer (for app sign-in and JWT verification).
+
+### Part 1 — User pool and client CRUD ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateUserPool` / `DescribeUserPool` / `UpdateUserPool` / `DeleteUserPool` / `ListUserPools` | ✅ |
+| `CreateUserPoolClient` / `DescribeUserPoolClient` / `UpdateUserPoolClient` / `DeleteUserPoolClient` / `ListUserPoolClients` | ✅ |
+| `ListTagsForResource` / `TagResource` / `UntagResource` | ✅ |
+| `DeleteUserPool` cascade-deletes all pool clients | ✅ |
+| `cognitoidp` endpoint in `provider.tf` | ✅ |
+| Terraform fixture (`cognito.tf`) — user pool + client | ✅ |
+| Smoke tests | ✅ |
+
+### Part 2 — JWT issuance + auth flows ✅ shipped
+
+JWT signing makes locally-issued tokens verifiable by app backends — the critical piece for Forge.
+
+| Work item | Status |
+|-----------|--------|
+| RSA-2048 key pair generated at service startup (in-memory) | ✅ |
+| JWKS endpoint: `GET /{userPoolId}/.well-known/jwks.json` | ✅ |
+| `InitiateAuth` — `USER_PASSWORD_AUTH` flow → real RS256 access + id + refresh tokens | ✅ |
+| `AdminInitiateAuth` — `ADMIN_USER_PASSWORD_AUTH` / `ADMIN_NO_SRP_AUTH` | ✅ |
+| `GetUser` — validate access token, return user attributes | ✅ |
+| `GlobalSignOut` / `RevokeToken` — invalidate tokens | ✅ |
+| `AdminCreateUser` / `AdminSetUserPassword` — user creation needed for auth flows | ✅ |
+| `GetUserPoolMfaConfig` / `SetUserPoolMfaConfig` — required by TF provider v6 read path | ✅ |
+
+### Part 3 — User management
+
+`AdminCreateUser` and `AdminSetUserPassword` shipped early in Part 2 (required to make auth flows testable). This part adds the remaining management operations.
+
+| Work item | Status |
+|-----------|--------|
+| `AdminGetUser` / `AdminDeleteUser` | |
+| `AdminUpdateUserAttributes` / `AdminGetUserAttributes` | |
+| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | |
+| `ListUsers` / `AdminListUsers` — filter by status, attribute | |
+
+### Part 4 — Groups
+
+| Work item | Status |
+|-----------|--------|
+| `CreateGroup` / `DeleteGroup` / `GetGroup` / `ListGroups` | |
+| `AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminListGroupsForUser` | |
+| `cognito:groups` claim injected into id tokens | |
 
 ---
 
