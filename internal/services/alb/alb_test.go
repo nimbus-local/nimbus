@@ -31,7 +31,7 @@ func elbReq(t *testing.T, s *Service, action string, params map[string]string) *
 func createLB(t *testing.T, s *Service, name string) string {
 	t.Helper()
 	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
-		"Name":              name,
+		"Name":             name,
 		"Subnets.member.1": "subnet-aaa",
 	})
 	if w.Code != http.StatusOK {
@@ -61,10 +61,10 @@ func createTG(t *testing.T, s *Service, name string) string {
 func createListener(t *testing.T, s *Service, lbARN, tgARN, port string) string {
 	t.Helper()
 	w := elbReq(t, s, "CreateListener", map[string]string{
-		"LoadBalancerArn":                      lbARN,
-		"Protocol":                             "HTTP",
-		"Port":                                 port,
-		"DefaultActions.member.1.Type":         "forward",
+		"LoadBalancerArn":                        lbARN,
+		"Protocol":                               "HTTP",
+		"Port":                                   port,
+		"DefaultActions.member.1.Type":           "forward",
 		"DefaultActions.member.1.TargetGroupArn": tgARN,
 	})
 	if w.Code != http.StatusOK {
@@ -124,7 +124,7 @@ func TestDetect_Miss(t *testing.T) {
 func TestCreateLoadBalancer(t *testing.T) {
 	s := newSvc()
 	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
-		"Name":              "my-lb",
+		"Name":             "my-lb",
 		"Subnets.member.1": "subnet-aaa",
 	})
 	if w.Code != http.StatusOK {
@@ -217,7 +217,7 @@ func TestSetSubnets(t *testing.T) {
 	arn := createLB(t, s, "lb-subnets")
 
 	w := elbReq(t, s, "SetSubnets", map[string]string{
-		"LoadBalancerArn": arn,
+		"LoadBalancerArn":  arn,
 		"Subnets.member.1": "subnet-new",
 	})
 	if w.Code != http.StatusOK {
@@ -382,7 +382,7 @@ func TestRegisterAndDescribeTargets(t *testing.T) {
 	tgARN := createTG(t, s, "tg-targets")
 
 	w := elbReq(t, s, "RegisterTargets", map[string]string{
-		"TargetGroupArn":       tgARN,
+		"TargetGroupArn":        tgARN,
 		"Targets.member.1.Id":   "10.0.0.1",
 		"Targets.member.1.Port": "8080",
 	})
@@ -404,12 +404,12 @@ func TestDeregisterTargets(t *testing.T) {
 	tgARN := createTG(t, s, "tg-dereg")
 
 	elbReq(t, s, "RegisterTargets", map[string]string{
-		"TargetGroupArn":       tgARN,
+		"TargetGroupArn":        tgARN,
 		"Targets.member.1.Id":   "10.0.0.2",
 		"Targets.member.1.Port": "80",
 	})
 	w := elbReq(t, s, "DeregisterTargets", map[string]string{
-		"TargetGroupArn":       tgARN,
+		"TargetGroupArn":        tgARN,
 		"Targets.member.1.Id":   "10.0.0.2",
 		"Targets.member.1.Port": "80",
 	})
@@ -518,12 +518,12 @@ func TestCreateDescribeDeleteRule(t *testing.T) {
 	lARN := createListener(t, s, lbARN, tgARN, "49004")
 
 	w := elbReq(t, s, "CreateRule", map[string]string{
-		"ListenerArn": lARN,
-		"Priority":    "10",
-		"Conditions.member.1.Field":             "path-pattern",
-		"Conditions.member.1.Values.member.1":   "/api/*",
-		"Actions.member.1.Type":                 "forward",
-		"Actions.member.1.TargetGroupArn":        tgARN,
+		"ListenerArn":                         lARN,
+		"Priority":                            "10",
+		"Conditions.member.1.Field":           "path-pattern",
+		"Conditions.member.1.Values.member.1": "/api/*",
+		"Actions.member.1.Type":               "forward",
+		"Actions.member.1.TargetGroupArn":     tgARN,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateRule: expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -621,8 +621,8 @@ func TestAddRemoveDescribeTags(t *testing.T) {
 	}
 
 	w2 := elbReq(t, s, "RemoveTags", map[string]string{
-		"ResourceArns.member.1":  arn,
-		"TagKeys.member.1": "env",
+		"ResourceArns.member.1": arn,
+		"TagKeys.member.1":      "env",
 	})
 	if w2.Code != http.StatusOK {
 		t.Fatalf("RemoveTags: expected 200, got %d", w2.Code)
