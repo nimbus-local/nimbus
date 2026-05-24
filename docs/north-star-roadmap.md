@@ -52,7 +52,7 @@ kept at `desiredCount` by a 10 s reconciliation loop.
 
 ---
 
-## Phase 2 — IAM (structural)
+## Phase 2 — IAM (structural) ✅ shipped
 
 **Unblocks all other constructs.** No enforcement — any `AssumeRole` call succeeds
 and returns fake credentials. Goal: Terraform `plan`/`apply` passes and ARNs are
@@ -126,7 +126,7 @@ ship output to Nimbus instead of real CloudWatch.
 
 ---
 
-## Phase 4 — EventBridge Scheduler
+## Phase 4 — EventBridge Scheduler ✅ shipped
 
 **Unblocks Cron constructs.** Separate service from EventBridge Events.
 
@@ -187,7 +187,7 @@ AWS Terraform provider v6.
 
 ---
 
-## Phase 6 — ALB (Application Load Balancer)
+## Phase 6 — ALB (Application Load Balancer) ✅ shipped
 
 **Unblocks Service constructs.** Routes external traffic to running ECS containers.
 
@@ -215,7 +215,7 @@ AWS Terraform provider v6.
 
 ---
 
-## Phase 7 — Aurora / RDS
+## Phase 7 — Aurora / RDS ✅ shipped
 
 Sidecar pattern: a real Postgres container alongside Nimbus. RDS API returns endpoints pointing to it.
 
@@ -244,7 +244,7 @@ Needed so `terraform plan` doesn't fail before the cluster exists.
 
 ---
 
-## Phase 8 — Valkey / ElastiCache
+## Phase 8 — Valkey / ElastiCache ✅ shipped
 
 Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
@@ -277,7 +277,7 @@ Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
 ---
 
-## Phase 9 — ACM (Certificate Manager)
+## Phase 9 — ACM (Certificate Manager) ✅ shipped
 
 Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates — no DNS or email challenge.
 
@@ -294,7 +294,7 @@ Returns self-signed certificates. Needed for ALB HTTPS listeners. Auto-validates
 
 ---
 
-## Phase 10 — Route 53
+## Phase 10 — Route 53 ✅ shipped
 
 Mostly needed so Terraform plans succeed. Local DNS resolution is a stretch goal.
 
@@ -340,7 +340,7 @@ Accept metrics from apps and SDKs.
 
 ---
 
-## Phase 12 — Cognito User Pools
+## Phase 12 — Cognito User Pools 🚧 In Progress (Parts 1–2 shipped)
 
 Enables Forge to test full authentication flows locally without hitting real AWS. Forge uses Cognito User Pools to protect web apps it deploys, so the emulator needs both the infrastructure layer (for Terraform) and the auth layer (for app sign-in and JWT verification).
 
@@ -373,12 +373,14 @@ JWT signing makes locally-issued tokens verifiable by app backends — the criti
 
 ### Part 3 — User management
 
+`AdminCreateUser` and `AdminSetUserPassword` shipped early in Part 2 (required to make auth flows testable). This part adds the remaining management operations.
+
 | Work item | Status |
 |-----------|--------|
-| `AdminCreateUser` / `AdminSetUserPassword` / `AdminGetUser` / `AdminDeleteUser` | |
-| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | |
-| `ListUsers` / `AdminListUsers` | |
+| `AdminGetUser` / `AdminDeleteUser` | |
 | `AdminUpdateUserAttributes` / `AdminGetUserAttributes` | |
+| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | |
+| `ListUsers` / `AdminListUsers` — filter by status, attribute | |
 
 ### Part 4 — Groups
 
