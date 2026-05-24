@@ -124,7 +124,6 @@ if headerValues := response.Header.Values("x-amz-transition-default-minimum-obje
 If the header is absent, `TransitionDefaultMinimumObjectSize` is the empty string, the waiter evaluates `false` on every poll, and **the deploy times out after exactly 3 minutes** — a very misleading failure mode with no helpful error message.
 
 **Fix**: `getBucketLifecycle` in `internal/services/s3/bucket.go` sets this header unconditionally on success responses:
-
 ```go
 w.Header().Set("x-amz-transition-default-minimum-object-size", "all_storage_classes_128K")
 ```
@@ -132,6 +131,21 @@ w.Header().Set("x-amz-transition-default-minimum-object-size", "all_storage_clas
 The value `all_storage_classes_128K` is the AWS server-side default for all lifecycle configurations created since November 2023. The waiter completes in ~25 seconds (two polls separated by the `minDelay`).
 
 Injecting the tag into the XML body has **no effect** — the SDK only reads the header.
+
+### S3 sub-resource delete waiters — must return 404 after delete
+
+The TF AWS provider polls `GET /:bucket?<subresource>` after a delete until it receives 404. If GET keeps returning 200, the waiter times out after ~3 minutes with `found resource`.
+
+Affected sub-resources confirmed so far:
+
+| Sub-resource | Query param | 404 error code |
+|---|---|---|
+| Lifecycle configuration | `lifecycle` | `NoSuchLifecycleConfiguration` |
+| Public access block | `publicAccessBlock` | `NoSuchPublicAccessBlockConfiguration` |
+
+**Pattern**: implement GET/PUT/DELETE handlers that store the config to a `.nimbus-<name>.xml` sidecar file (same as lifecycle). GET returns 404 when the file is absent. DELETE removes the file.
+
+Do **not** rely on the generic sub-resource DELETE catch-all (`len(r.URL.Query()) > 0 → 204`) for sub-resources that have a provider-side delete waiter — it returns 204 but doesn't remove stored state, so subsequent GETs still return 200.
 
 ## Implementation strategy — parts, not phases
 

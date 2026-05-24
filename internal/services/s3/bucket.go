@@ -237,6 +237,55 @@ func (s *Service) deleteBucketLifecycle(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Service) publicAccessBlockPath(bucket string) string {
+	return filepath.Join(s.bucketDir(bucket), ".nimbus-public-access-block.xml")
+}
+
+// getPublicAccessBlock — GET /:bucket?publicAccessBlock
+func (s *Service) getPublicAccessBlock(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	data, err := os.ReadFile(s.publicAccessBlockPath(bucket))
+	if err != nil {
+		s.xmlError(w, http.StatusNotFound, "NoSuchPublicAccessBlockConfiguration",
+			"The public access block configuration was not found.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+// putPublicAccessBlock — PUT /:bucket?publicAccessBlock
+func (s *Service) putPublicAccessBlock(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", "failed to read request body")
+		return
+	}
+	if err := os.WriteFile(s.publicAccessBlockPath(bucket), body, 0644); err != nil {
+		s.xmlError(w, http.StatusInternalServerError, "InternalError", "failed to store public access block config")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// deletePublicAccessBlock — DELETE /:bucket?publicAccessBlock
+func (s *Service) deletePublicAccessBlock(w http.ResponseWriter, r *http.Request, bucket string) {
+	if !s.bucketExists(bucket) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist.")
+		return
+	}
+	os.Remove(s.publicAccessBlockPath(bucket))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // validBucketName enforces S3 bucket naming rules
 func validBucketName(name string) bool {
 	if len(name) < 3 || len(name) > 63 {
