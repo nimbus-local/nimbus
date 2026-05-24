@@ -52,8 +52,20 @@ func (s *Service) loadMeta(bucket, key string) (objectMeta, error) {
 	return meta, json.Unmarshal(data, &meta)
 }
 
+// isReservedKey returns true for keys that map to Nimbus internal root-level files.
+// Internal files (.nimbus-lifecycle.xml, .nimbus-bucket.json, etc.) live directly
+// inside the bucket directory, so only top-level keys starting with ".nimbus-" collide.
+func isReservedKey(key string) bool {
+	return strings.HasPrefix(key, ".nimbus-")
+}
+
 // PutObject — PUT /:bucket/:key
 func (s *Service) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if isReservedKey(key) {
+		s.xmlError(w, http.StatusBadRequest, "InvalidArgument",
+			fmt.Sprintf("key %q is reserved for internal use", key))
+		return
+	}
 	if !s.bucketExists(bucket) {
 		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
 			fmt.Sprintf("The specified bucket does not exist: %s", bucket))
@@ -126,6 +138,16 @@ func (s *Service) copyObject(w http.ResponseWriter, r *http.Request, destBucket,
 	}
 	srcBucket, srcKey := src[:idx], src[idx+1:]
 
+	if isReservedKey(srcKey) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchKey",
+			"source key does not exist: "+srcKey)
+		return
+	}
+	if isReservedKey(destKey) {
+		s.xmlError(w, http.StatusBadRequest, "InvalidArgument",
+			fmt.Sprintf("key %q is reserved for internal use", destKey))
+		return
+	}
 	if !s.bucketExists(srcBucket) {
 		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
 			"source bucket does not exist: "+srcBucket)
@@ -190,6 +212,11 @@ func (s *Service) copyObject(w http.ResponseWriter, r *http.Request, destBucket,
 
 // GetObject — GET /:bucket/:key
 func (s *Service) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if isReservedKey(key) {
+		s.xmlError(w, http.StatusNotFound, "NoSuchKey",
+			fmt.Sprintf("The specified key does not exist: %s", key))
+		return
+	}
 	if !s.bucketExists(bucket) {
 		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
 			fmt.Sprintf("The specified bucket does not exist: %s", bucket))
@@ -233,6 +260,10 @@ func (s *Service) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 // HeadObject — HEAD /:bucket/:key
 func (s *Service) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if isReservedKey(key) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	if !s.bucketExists(bucket) {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -262,6 +293,11 @@ func (s *Service) headObject(w http.ResponseWriter, r *http.Request, bucket, key
 
 // DeleteObject — DELETE /:bucket/:key
 func (s *Service) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if isReservedKey(key) {
+		// Treat as a no-op: S3 returns 204 even for non-existent keys
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if !s.bucketExists(bucket) {
 		s.xmlError(w, http.StatusNotFound, "NoSuchBucket",
 			fmt.Sprintf("The specified bucket does not exist: %s", bucket))
@@ -331,7 +367,7 @@ func (s *Service) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 			return nil
 		}
 		// Skip internal files
-		if d.Name() == ".nimbus-bucket.json" {
+		if strings.HasPrefix(d.Name(), ".nimbus-") {
 			return nil
 		}
 

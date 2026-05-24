@@ -695,6 +695,63 @@ func TestDeleteBucketLifecycle(t *testing.T) {
 	}
 }
 
+// TestReservedKeyBlocked verifies that .nimbus-* keys are blocked at the object API level
+// so internal sidecar files (lifecycle config, bucket metadata) are never exposed.
+func TestReservedKeyBlocked(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/rk-bucket", nil, nil)
+
+	// Seed lifecycle so .nimbus-lifecycle.xml exists on disk
+	do(t, svc, http.MethodPut, "/rk-bucket?lifecycle",
+		[]byte(sampleLifecycleXML),
+		map[string]string{"Content-Type": "application/xml"})
+
+	reservedKeys := []string{".nimbus-lifecycle.xml", ".nimbus-bucket.json", ".nimbus-anything"}
+
+	for _, key := range reservedKeys {
+		// GET must return 404 NoSuchKey
+		w := do(t, svc, http.MethodGet, "/rk-bucket/"+key, nil, nil)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s: expected 404, got %d", key, w.Code)
+		}
+
+		// HEAD must return 404
+		w = do(t, svc, http.MethodHead, "/rk-bucket/"+key, nil, nil)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("HEAD %s: expected 404, got %d", key, w.Code)
+		}
+
+		// PUT must return 400
+		w = do(t, svc, http.MethodPut, "/rk-bucket/"+key, []byte("data"), nil)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("PUT %s: expected 400, got %d", key, w.Code)
+		}
+
+		// DELETE must return 204 without touching the real file
+		w = do(t, svc, http.MethodDelete, "/rk-bucket/"+key, nil, nil)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("DELETE %s: expected 204, got %d", key, w.Code)
+		}
+	}
+
+	// After DELETE attempts, lifecycle config must still be intact
+	w := do(t, svc, http.MethodGet, "/rk-bucket?lifecycle", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Errorf("lifecycle config should survive DELETE of reserved key, got %d", w.Code)
+	}
+
+	// Reserved keys must not appear in ListObjectsV2
+	w = do(t, svc, http.MethodGet, "/rk-bucket?list-type=2", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListObjectsV2: expected 200, got %d", w.Code)
+	}
+	for _, key := range reservedKeys {
+		if strings.Contains(w.Body.String(), key) {
+			t.Errorf("ListObjectsV2 should not include reserved key %q", key)
+		}
+	}
+}
+
 // TestDeleteBucketSubResourceNoOp verifies that DELETE requests for unsupported bucket
 // sub-resources (publicAccessBlock, encryption, etc.) return 204 without deleting the bucket.
 func TestDeleteBucketSubResourceNoOp(t *testing.T) {
