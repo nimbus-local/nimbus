@@ -70,6 +70,16 @@ try_match "get-object matches body" "nimbus-s3-probe" \
 try     "list-objects-v2"     $CLI s3api list-objects-v2 --bucket "$PREFIX"
 try     "delete-object"       $CLI s3api delete-object --bucket "$PREFIX" --key probe.txt
 rm -f "$PROBE"
+# Lifecycle config round-trip
+LC_JSON='{"Rules":[{"ID":"smoke","Status":"Enabled","Expiration":{"Days":30},"Filter":{"Prefix":""}}]}'
+$CLI s3api put-bucket-lifecycle-configuration --bucket "$PREFIX" --lifecycle-configuration "$LC_JSON" 2>/dev/null \
+  && ok "put-bucket-lifecycle-configuration" || fail "put-bucket-lifecycle-configuration"
+LC_OUT=$($CLI s3api get-bucket-lifecycle-configuration --bucket "$PREFIX" --query 'Rules[0].ID' --output text 2>/dev/null)
+if [ "$LC_OUT" = "smoke" ]; then
+  ok "get-bucket-lifecycle-configuration"
+else
+  fail "get-bucket-lifecycle-configuration" "got: '$LC_OUT'"
+fi
 
 # ── SQS ───────────────────────────────────────────────────────────────────────
 
