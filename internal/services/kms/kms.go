@@ -16,6 +16,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
+
 const accountID = "000000000000"
 
 // Service implements the AWS KMS emulator.
@@ -24,9 +25,18 @@ const accountID = "000000000000"
 // decryptable — they are not forwarded to AWS.
 type Service struct {
 	mu      sync.RWMutex
-	keys    map[string]*cmk   // keyID -> key
-	aliases map[string]string // aliasName -> keyID
+	keys    map[string]*cmk     // keyID -> key
+	aliases map[string]string   // aliasName -> keyID
+	grants  map[string][]*grant // keyID -> grants
 	region  string
+}
+
+type grant struct {
+	GrantID          string   `json:"GrantId"`
+	GrantToken       string   `json:"GrantToken"`
+	KeyID            string   `json:"KeyId"`
+	GranteePrincipal string   `json:"GranteePrincipal"`
+	Operations       []string `json:"Operations"`
 }
 
 type cmk struct {
@@ -57,6 +67,7 @@ func New(region string) *Service {
 		region:  region,
 		keys:    map[string]*cmk{},
 		aliases: map[string]string{},
+		grants:  map[string][]*grant{},
 	}
 }
 
@@ -125,6 +136,14 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.disableKeyRotation(w, r)
 	case "GetKeyRotationStatus":
 		s.getKeyRotationStatus(w, r)
+	case "CreateGrant":
+		s.createGrant(w, r)
+	case "ListGrants":
+		s.listGrants(w, r)
+	case "RevokeGrant":
+		s.revokeGrant(w, r)
+	case "RetireGrant":
+		s.retireGrant(w, r)
 	default:
 		jsonError(w, http.StatusBadRequest, "UnsupportedOperationException",
 			fmt.Sprintf("Operation %s is not supported.", action))
@@ -675,6 +694,120 @@ func (s *Service) generateRandom(w http.ResponseWriter, r *http.Request) {
 	io.ReadFull(rand.Reader, b)
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{"Plaintext": b})
+}
+
+// --- Grants ---
+
+func (s *Service) createGrant(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		KeyID            string   `json:"KeyId"`
+		GranteePrincipal string   `json:"GranteePrincipal"`
+		Operations       []string `json:"Operations"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	key, err := s.resolveKey(req.KeyID)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "NotFoundException", err.Error())
+		return
+	}
+
+	g := &grant{
+		GrantID:          uid.New(),
+		GrantToken:       uid.New(),
+		KeyID:            key.id,
+		GranteePrincipal: req.GranteePrincipal,
+		Operations:       req.Operations,
+	}
+
+	s.mu.Lock()
+	s.grants[key.id] = append(s.grants[key.id], g)
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"GrantId":    g.GrantID,
+		"GrantToken": g.GrantToken,
+	})
+}
+
+func (s *Service) listGrants(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		KeyID   string `json:"KeyId"`
+		GrantID string `json:"GrantId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	key, err := s.resolveKey(req.KeyID)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "NotFoundException", err.Error())
+		return
+	}
+
+	s.mu.RLock()
+	all := s.grants[key.id]
+	s.mu.RUnlock()
+
+	result := make([]*grant, 0, len(all))
+	for _, g := range all {
+		if req.GrantID == "" || g.GrantID == req.GrantID {
+			result = append(result, g)
+		}
+	}
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Grants":    result,
+		"Truncated": false,
+	})
+}
+
+func (s *Service) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		KeyID   string `json:"KeyId"`
+		GrantID string `json:"GrantId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	key, err := s.resolveKey(req.KeyID)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "NotFoundException", err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	grants := s.grants[key.id]
+	filtered := grants[:0]
+	for _, g := range grants {
+		if g.GrantID != req.GrantID {
+			filtered = append(filtered, g)
+		}
+	}
+	s.grants[key.id] = filtered
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) retireGrant(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		GrantToken string `json:"GrantToken"`
+		KeyID      string `json:"KeyId"`
+		GrantID    string `json:"GrantId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	for keyID, grants := range s.grants {
+		filtered := grants[:0]
+		for _, g := range grants {
+			if g.GrantToken != req.GrantToken && g.GrantID != req.GrantID {
+				filtered = append(filtered, g)
+			}
+		}
+		s.grants[keyID] = filtered
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
 }
 
 // --- Key rotation ---
