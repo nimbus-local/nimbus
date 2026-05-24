@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -145,19 +146,15 @@ func (s *Service) deleteBucket(w http.ResponseWriter, r *http.Request, bucket st
 		return
 	}
 
-	// Check if bucket is empty (ignoring metadata files)
+	// Check if bucket is empty (ignoring Nimbus-internal metadata files/dirs)
 	entries, _ := os.ReadDir(s.bucketDir(bucket))
 	for _, e := range entries {
-		if !e.IsDir() && e.Name() != ".nimbus-bucket.json" {
-			s.xmlError(w, http.StatusConflict, "BucketNotEmpty",
-				"The bucket you tried to delete is not empty.")
-			return
+		if strings.HasPrefix(e.Name(), ".nimbus-") {
+			continue
 		}
-		if e.IsDir() && e.Name() != ".nimbus-meta" && e.Name() != ".nimbus-multipart" {
-			s.xmlError(w, http.StatusConflict, "BucketNotEmpty",
-				"The bucket you tried to delete is not empty.")
-			return
-		}
+		s.xmlError(w, http.StatusConflict, "BucketNotEmpty",
+			"The bucket you tried to delete is not empty.")
+		return
 	}
 
 	if err := os.RemoveAll(s.bucketDir(bucket)); err != nil {

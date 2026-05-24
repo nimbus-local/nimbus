@@ -87,6 +87,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && bucket != "" && key == "" && r.URL.Query().Has("lifecycle"):
 		s.deleteBucketLifecycle(w, r, bucket)
 
+	// Sub-resource DELETEs for features we don't store (encryption, public access block,
+	// versioning, cors, etc.) — acknowledge with 204 so Pulumi/Terraform can clean up
+	// without accidentally triggering the generic deleteBucket handler.
+	case r.Method == http.MethodDelete && bucket != "" && key == "" && len(r.URL.Query()) > 0:
+		w.WriteHeader(http.StatusNoContent)
+
 	// Generic bucket CRUD
 	case r.Method == http.MethodPut && bucket != "" && key == "":
 		s.createBucket(w, r, bucket)
