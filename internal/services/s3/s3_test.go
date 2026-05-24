@@ -694,3 +694,39 @@ func TestDeleteBucketLifecycle(t *testing.T) {
 		t.Errorf("GetBucketLifecycle after delete: expected 404, got %d", w.Code)
 	}
 }
+
+// TestDeleteBucketSubResourceNoOp verifies that DELETE requests for unsupported bucket
+// sub-resources (publicAccessBlock, encryption, etc.) return 204 without deleting the bucket.
+func TestDeleteBucketSubResourceNoOp(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/sub-bucket", nil, nil)
+
+	for _, query := range []string{"?publicAccessBlock", "?encryption", "?versioning", "?cors"} {
+		w := do(t, svc, http.MethodDelete, "/sub-bucket"+query, nil, nil)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("DELETE %s: expected 204, got %d", query, w.Code)
+		}
+		// Bucket must still exist
+		w = do(t, svc, http.MethodHead, "/sub-bucket", nil, nil)
+		if w.Code != http.StatusOK {
+			t.Errorf("HEAD after DELETE %s: bucket should still exist, got %d", query, w.Code)
+		}
+	}
+}
+
+// TestDeleteBucketWithLifecycleNotEmpty verifies that bucket deletion fails if lifecycle
+// config exists (lifecycle should be deleted first by Terraform/Pulumi dependency ordering).
+func TestDeleteBucketEmptyIgnoresNimbusMetadata(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/meta-bucket", nil, nil)
+	do(t, svc, http.MethodPut, "/meta-bucket?lifecycle",
+		[]byte(sampleLifecycleXML),
+		map[string]string{"Content-Type": "application/xml"})
+
+	// Delete lifecycle first, then bucket — should succeed
+	do(t, svc, http.MethodDelete, "/meta-bucket?lifecycle", nil, nil)
+	w := do(t, svc, http.MethodDelete, "/meta-bucket", nil, nil)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("DeleteBucket after lifecycle removed: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
