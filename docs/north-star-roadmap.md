@@ -332,6 +332,56 @@ Accept metrics from apps and SDKs.
 
 ---
 
+---
+
+## Phase 12 — Cognito User Pools
+
+Enables Forge to test full authentication flows locally without hitting real AWS. Forge uses Cognito User Pools to protect web apps it deploys, so the emulator needs both the infrastructure layer (for Terraform) and the auth layer (for app sign-in and JWT verification).
+
+### Part 1 — User pool and client CRUD ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateUserPool` / `DescribeUserPool` / `UpdateUserPool` / `DeleteUserPool` / `ListUserPools` | ✅ |
+| `CreateUserPoolClient` / `DescribeUserPoolClient` / `UpdateUserPoolClient` / `DeleteUserPoolClient` / `ListUserPoolClients` | ✅ |
+| `ListTagsForResource` / `TagResource` / `UntagResource` | ✅ |
+| `DeleteUserPool` cascade-deletes all pool clients | ✅ |
+| `cognitoidp` endpoint in `provider.tf` | ✅ |
+| Terraform fixture (`cognito.tf`) — user pool + client | ✅ |
+| Smoke tests | ✅ |
+
+### Part 2 — JWT issuance + auth flows
+
+JWT signing makes locally-issued tokens verifiable by app backends — the critical piece for Forge.
+
+| Work item | Status |
+|-----------|--------|
+| RSA-2048 key pair generated at service startup (in-memory) | |
+| JWKS endpoint: `GET /{userPoolId}/.well-known/jwks.json` | |
+| `InitiateAuth` — `USER_PASSWORD_AUTH` flow → real RS256 access + id + refresh tokens | |
+| `AdminInitiateAuth` — same as above, admin variant | |
+| `GetUser` — validate access token, return user attributes | |
+| `GlobalSignOut` / `RevokeToken` — invalidate tokens | |
+
+### Part 3 — User management
+
+| Work item | Status |
+|-----------|--------|
+| `AdminCreateUser` / `AdminSetUserPassword` / `AdminGetUser` / `AdminDeleteUser` | |
+| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | |
+| `ListUsers` / `AdminListUsers` | |
+| `AdminUpdateUserAttributes` / `AdminGetUserAttributes` | |
+
+### Part 4 — Groups
+
+| Work item | Status |
+|-----------|--------|
+| `CreateGroup` / `DeleteGroup` / `GetGroup` / `ListGroups` | |
+| `AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminListGroupsForUser` | |
+| `cognito:groups` claim injected into id tokens | |
+
+---
+
 ## Guiding principles
 
 - **Each part ships as one commit** — compile and `go vet` must pass before moving on.

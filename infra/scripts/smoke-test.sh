@@ -681,6 +681,55 @@ try_match "/_nimbus/metrics inspection endpoint" "RequestCount" \
 try "delete-alarms" \
   $CLI cloudwatch delete-alarms --alarm-names "$PREFIX-cpu"
 
+# ── Cognito ───────────────────────────────────────────────────────────────────
+
+section "Cognito"
+
+POOL_ID=$($CLI cognito-idp create-user-pool \
+  --pool-name "$PREFIX-nimbus-pool" \
+  --query "UserPool.Id" --output text)
+if echo "$POOL_ID" | grep -qE "^[a-z0-9-]+_[0-9a-f]+$"; then
+  ok "CreateUserPool returns pool ID"
+else
+  fail "CreateUserPool returns pool ID" "got: $POOL_ID"
+fi
+
+try_match "DescribeUserPool returns pool name" "$PREFIX-nimbus-pool" \
+  $CLI cognito-idp describe-user-pool --user-pool-id "$POOL_ID" \
+    --query "UserPool.Name" --output text
+
+try_match "ListUserPools includes new pool" "$PREFIX-nimbus-pool" \
+  $CLI cognito-idp list-user-pools --max-results 10 \
+    --query "UserPools[*].Name" --output text
+
+CLIENT_ID=$($CLI cognito-idp create-user-pool-client \
+  --user-pool-id "$POOL_ID" \
+  --client-name "$PREFIX-web-client" \
+  --explicit-auth-flows ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH \
+  --query "UserPoolClient.ClientId" --output text)
+if [ -n "$CLIENT_ID" ]; then
+  ok "CreateUserPoolClient returns client ID"
+else
+  fail "CreateUserPoolClient returns client ID" "empty"
+fi
+
+try_match "DescribeUserPoolClient returns client name" "$PREFIX-web-client" \
+  $CLI cognito-idp describe-user-pool-client \
+    --user-pool-id "$POOL_ID" --client-id "$CLIENT_ID" \
+    --query "UserPoolClient.ClientName" --output text
+
+try_match "ListUserPoolClients includes new client" "$PREFIX-web-client" \
+  $CLI cognito-idp list-user-pool-clients --user-pool-id "$POOL_ID" --max-results 10 \
+    --query "UserPoolClients[*].ClientName" --output text
+
+$CLI cognito-idp delete-user-pool-client \
+  --user-pool-id "$POOL_ID" --client-id "$CLIENT_ID" 2>/dev/null
+
+$CLI cognito-idp delete-user-pool --user-pool-id "$POOL_ID" 2>/dev/null
+try_match "DeleteUserPool removes pool" "" \
+  $CLI cognito-idp list-user-pools --max-results 10 \
+    --query "UserPools[?Name=='$PREFIX-nimbus-pool'].Name" --output text
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

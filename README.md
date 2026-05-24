@@ -78,6 +78,7 @@ volumes:
 | [ACM](docs/services/acm.md) | ✅ Core | `X-Amz-Target: CertificateManager.*` | Certificate CRUD — `RequestCertificate` generates a real self-signed cert; status always `ISSUED`; PEM downloadable via `/_nimbus/acm/certs/{arn}` |
 | [Route 53](docs/services/route53.md) | ✅ Core | `/2013-04-01/` path prefix | Hosted zone and record set CRUD — `GetChange` always returns `INSYNC`; no DNS resolution |
 | [CloudWatch Metrics](docs/services/cloudwatchmetrics.md) | ✅ Core | `X-Amz-Target: GraniteServiceVersion20100801.*` | PutMetricData, ListMetrics, GetMetricStatistics, GetMetricData, metric alarms (structural, always OK), tags |
+| [Cognito](docs/services/cognito.md) | ✅ Core | `X-Amz-Target: AWSCognitoIdentityProviderService.*` | User pool and client CRUD, tags — infra lifecycle for `terraform apply`; auth flows (JWT) in Phase 2 |
 
 ---
 
