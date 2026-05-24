@@ -844,3 +844,68 @@ func TestDeleteBucketEmptyIgnoresNimbusMetadata(t *testing.T) {
 		t.Errorf("DeleteBucket after lifecycle removed: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// --- Name ---
+
+func TestName(t *testing.T) {
+	svc, _ := newTestService(t)
+	if svc.Name() != "s3" {
+		t.Errorf("expected Name()=s3, got %s", svc.Name())
+	}
+}
+
+// --- getBucketPolicy ---
+
+func TestGetBucketPolicy_NoSuchBucket(t *testing.T) {
+	svc, _ := newTestService(t)
+	w := do(t, svc, http.MethodGet, "/nonexistent-bucket?policy", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "NoSuchBucket") {
+		t.Error("expected NoSuchBucket error")
+	}
+}
+
+func TestGetBucketPolicy_NoPolicy(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/policy-bucket", nil, nil)
+
+	w := do(t, svc, http.MethodGet, "/policy-bucket?policy", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 (no policy), got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "NoSuchBucketPolicy") {
+		t.Error("expected NoSuchBucketPolicy error")
+	}
+}
+
+// --- Presigned URL helpers ---
+
+func TestIsPresigned(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/?X-Amz-Signature=abc", nil)
+	if !isPresigned(req) {
+		t.Error("expected isPresigned=true for X-Amz-Signature")
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/?X-Amz-Security-Token=tok", nil)
+	if !isPresigned(req2) {
+		t.Error("expected isPresigned=true for X-Amz-Security-Token")
+	}
+	req3 := httptest.NewRequest(http.MethodGet, "/", nil)
+	if isPresigned(req3) {
+		t.Error("expected isPresigned=false for plain request")
+	}
+}
+
+func TestPresignedURL(t *testing.T) {
+	url := PresignedURL("http://localhost:4566", "my-bucket", "my-key", 3600)
+	if !strings.Contains(url, "my-bucket/my-key") {
+		t.Errorf("expected bucket/key in URL, got %s", url)
+	}
+	if !strings.Contains(url, "X-Amz-Expires=3600") {
+		t.Errorf("expected X-Amz-Expires in URL, got %s", url)
+	}
+	if !strings.Contains(url, "X-Amz-Signature=local") {
+		t.Errorf("expected X-Amz-Signature in URL, got %s", url)
+	}
+}

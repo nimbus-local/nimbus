@@ -518,6 +518,13 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestName(t *testing.T) {
+	svc := newSvc()
+	if svc.Name() != "ecs" {
+		t.Errorf("expected Name()=ecs, got %s", svc.Name())
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, substr string) bool {
