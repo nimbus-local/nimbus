@@ -16,7 +16,6 @@ import (
 	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
-
 const accountID = "000000000000"
 
 // Service implements the AWS KMS emulator.
