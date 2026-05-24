@@ -30,14 +30,15 @@ type Service struct {
 }
 
 type cmk struct {
-	id           string
-	arn          string
-	description  string
-	state        string // Enabled, Disabled, PendingDeletion
-	keyMaterial  []byte // 32 bytes — AES-256
-	createdAt    time.Time
-	deletionDate *time.Time
-	tags         map[string]string
+	id              string
+	arn             string
+	description     string
+	state           string // Enabled, Disabled, PendingDeletion
+	keyMaterial     []byte // 32 bytes — AES-256
+	createdAt       time.Time
+	deletionDate    *time.Time
+	tags            map[string]string
+	rotationEnabled bool
 }
 
 // ciphertextEnvelope is the structure stored inside a KMS CiphertextBlob.
@@ -118,6 +119,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getKeyPolicy(w, r)
 	case "PutKeyPolicy":
 		s.putKeyPolicy(w, r)
+	case "EnableKeyRotation":
+		s.enableKeyRotation(w, r)
+	case "DisableKeyRotation":
+		s.disableKeyRotation(w, r)
+	case "GetKeyRotationStatus":
+		s.getKeyRotationStatus(w, r)
 	default:
 		jsonError(w, http.StatusBadRequest, "UnsupportedOperationException",
 			fmt.Sprintf("Operation %s is not supported.", action))
@@ -668,6 +675,58 @@ func (s *Service) generateRandom(w http.ResponseWriter, r *http.Request) {
 	io.ReadFull(rand.Reader, b)
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{"Plaintext": b})
+}
+
+// --- Key rotation ---
+
+func (s *Service) enableKeyRotation(w http.ResponseWriter, r *http.Request) {
+	s.setKeyRotation(w, r, true)
+}
+
+func (s *Service) disableKeyRotation(w http.ResponseWriter, r *http.Request) {
+	s.setKeyRotation(w, r, false)
+}
+
+func (s *Service) setKeyRotation(w http.ResponseWriter, r *http.Request, enabled bool) {
+	var req struct {
+		KeyID string `json:"KeyId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	key, err := s.resolveKey(req.KeyID)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "NotFoundException", err.Error())
+		return
+	}
+	if err := s.checkKeyUsable(key); err != nil {
+		jsonError(w, http.StatusBadRequest, "DisabledException", err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	key.rotationEnabled = enabled
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) getKeyRotationStatus(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		KeyID string `json:"KeyId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	key, err := s.resolveKey(req.KeyID)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "NotFoundException", err.Error())
+		return
+	}
+
+	s.mu.RLock()
+	enabled := key.rotationEnabled
+	s.mu.RUnlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"KeyRotationEnabled": enabled})
 }
 
 // --- Key policy (stub — no real IAM enforcement) ---
