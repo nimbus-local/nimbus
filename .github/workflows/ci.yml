@@ -23,7 +23,7 @@ jobs:
 
       - name: gofmt
         run: |
-          files=$(gofmt -l ./...)
+          files=$(gofmt -l .)
           if [ -n "$files" ]; then
             echo "::error::The following files are not gofmt'd:"
             echo "$files"
