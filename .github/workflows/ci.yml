@@ -6,19 +6,42 @@ on:
   pull_request:
     branches: ["master"]
 
+permissions:
+  contents: read
+  pull-requests: write  # needed to post/update the results comment
+
 jobs:
-  test:
-    name: Test & Lint
+  lint:
+    name: Format & Lint
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: "go.mod"
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          files=$(gofmt -l ./...)
+          if [ -n "$files" ]; then
+            echo "::error::The following files are not gofmt'd:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
           cache: true
 
       - name: Verify dependencies
@@ -27,16 +50,165 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./... -v -race -timeout 60s
-
-      - name: Check formatting
+      - name: Unit tests
+        id: unit
         run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "The following files are not formatted:"
-            gofmt -l .
-            exit 1
-          fi
+          go test -json ./... -race -timeout 60s \
+            -coverprofile=coverage.out -covermode=atomic \
+            > test-output.json 2>&1
+        continue-on-error: true  # parse results even on failure
+
+      # ── parse results ─────────────────────────────────────────────────────────
+      - name: Parse results
+        id: report
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+
+          # ── test counts from go test -json output ─────────────────────────────
+          passed = failed = skipped = 0
+          try:
+              for line in open('test-output.json', errors='replace'):
+                  try:
+                      ev = json.loads(line)
+                  except ValueError:
+                      continue
+                  if not ev.get('Test'):  # skip package-level events
+                      continue
+                  action = ev.get('Action', '')
+                  if action == 'pass':     passed  += 1
+                  elif action == 'fail':   failed  += 1
+                  elif action == 'skip':   skipped += 1
+          except FileNotFoundError:
+              pass
+
+          # ── per-package coverage from coverage.out ────────────────────────────
+          pkg_stmts = {}
+          try:
+              for line in open('coverage.out').readlines()[1:]:  # skip "mode:" line
+                  m = re.match(
+                      r'^(.+)/[^/]+\.go:\d+\.\d+,\d+\.\d+\s+(\d+)\s+(\d+)', line
+                  )
+                  if not m:
+                      continue
+                  full_pkg = m.group(1)
+                  stmts    = int(m.group(2))
+                  count    = int(m.group(3))
+                  pkg = full_pkg.split('nimbus-local/nimbus/')[-1] or 'nimbus'
+                  entry = pkg_stmts.setdefault(pkg, [0, 0])
+                  entry[1] += stmts
+                  if count > 0:
+                      entry[0] += stmts
+          except FileNotFoundError:
+              pass
+
+          total_covered = sum(v[0] for v in pkg_stmts.values())
+          total_stmts   = sum(v[1] for v in pkg_stmts.values())
+          total_pct     = (total_covered / total_stmts * 100) if total_stmts else 0.0
+
+          # ── build markdown table ──────────────────────────────────────────────
+          rows = []
+          for pkg in sorted(pkg_stmts):
+              cov, total = pkg_stmts[pkg]
+              if total == 0:
+                  continue
+              pct   = cov / total * 100
+              emoji = '✅' if pct >= 70 else ('⚠️' if pct > 0 else '➖')
+              rows.append(f'| {emoji} {pkg} | {pct:.1f}% |')
+
+          table = (
+              '| Package | Coverage |\n|---|---|\n' + '\n'.join(rows)
+              if rows else '_No coverage data_'
+          )
+          open('/tmp/cov-table.md', 'w').write(table)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'passed={passed}\n')
+              f.write(f'failed={failed}\n')
+              f.write(f'skipped={skipped}\n')
+              f.write(f'total_coverage={total_pct:.1f}%\n')
+          PYEOF
+
+      # ── job summary (visible from the PR's Checks tab) ────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          PASSED="${{ steps.report.outputs.passed }}"
+          FAILED="${{ steps.report.outputs.failed }}"
+          SKIPPED="${{ steps.report.outputs.skipped }}"
+          TOTAL_COV="${{ steps.report.outputs.total_coverage }}"
+          UNIT="${{ steps.unit.outcome }}"
+
+          [ "$UNIT" = "success" ] && UNIT_ICON="✅" || UNIT_ICON="❌"
+
+          {
+            echo "## Test Results"
+            echo ""
+            echo "${UNIT_ICON} **Tests:** ${PASSED} passed · ${FAILED} failed · ${SKIPPED} skipped"
+            echo ""
+            echo "### Coverage by package"
+            echo ""
+            cat /tmp/cov-table.md
+            echo ""
+            echo "**Total: ${TOTAL_COV}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── PR comment (visible directly on the PR page) ──────────────────────────
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs       = require('fs');
+            const passed   = '${{ steps.report.outputs.passed }}';
+            const failed   = '${{ steps.report.outputs.failed }}';
+            const skipped  = '${{ steps.report.outputs.skipped }}';
+            const totalCov = '${{ steps.report.outputs.total_coverage }}';
+            const outcome  = '${{ steps.unit.outcome }}';
+
+            const covTable = fs.readFileSync('/tmp/cov-table.md', 'utf8');
+            const icon     = outcome === 'success' ? '✅' : '❌';
+            const runUrl   = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const marker   = '<!-- nimbus-ci-results -->';
+
+            const body = [
+              marker,
+              '## Test Results',
+              '',
+              `${icon} **Tests:** ${passed} passed · ${failed} failed · ${skipped} skipped`,
+              '',
+              '### Coverage',
+              '',
+              covTable,
+              '',
+              `**Total: ${totalCov}** · [Full run ↗](${runUrl})`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # ── gate: fail the job if any tests failed ────────────────────────────────
+      - name: Fail if tests failed
+        if: steps.unit.outcome == 'failure'
+        run: exit 1
