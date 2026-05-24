@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+  echo "Direct commits to $branch are blocked."
+  exit 1
+fi
+
+echo "pre-commit: running gofmt..."
+go fmt ./...
+
+echo "pre-commit: running go build..."
+go build ./...
+
+echo "pre-commit: running go vet..."
+go vet ./...
+
+echo "pre-commit: running tests..."
+go test ./...
+
+echo "pre-commit: all checks passed"

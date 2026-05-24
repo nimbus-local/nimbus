@@ -1,6 +1,12 @@
 INFRA := $(MAKE) -C infra
 
-.PHONY: build fmt vet pr _fmt-check _build _vet
+.PHONY: setup build fmt vet pr _fmt-check _build _vet
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+# Wire up the committed git hooks. Run once after cloning.
+setup:
+	git config core.hooksPath .githooks
 
 # ── Go ────────────────────────────────────────────────────────────────────────
 
