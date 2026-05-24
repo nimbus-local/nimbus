@@ -2,7 +2,7 @@
 
 EventBridge Scheduler is emulated entirely in-memory. Schedules and schedule groups are stored locally and never reach AWS. Schedule expressions are accepted and stored but the ticker (Part 2) is required before any firing occurs.
 
-**Detection**: `r.URL.Path` starts with `/schedules` or `/schedule-groups` (the Scheduler REST API uses bare paths, no date prefix — distinct from EventBridge Events which uses `X-Amz-Target`).
+**Detection**: `r.URL.Path` starts with `/schedules`, `/schedule-groups`, or `/tags/{arn}` where the ARN contains `scheduler` (the Scheduler REST API uses bare paths, no date prefix — distinct from EventBridge Events which uses `X-Amz-Target`).
 
 ## Supported operations
 
@@ -17,6 +17,9 @@ EventBridge Scheduler is emulated entirely in-memory. Schedules and schedule gro
 | `UpdateSchedule` | Replaces schedule expression, state, and target in place |
 | `DeleteSchedule` | `groupName` query param selects group (defaults to `default`) |
 | `ListSchedules` | Supports `ScheduleGroup` and `NamePrefix` query filters |
+| `ListTagsForResource` | GET `/tags/{arn}` — returns stored tags |
+| `TagResource` | POST `/tags/{arn}` — accepted; tags stored |
+| `UntagResource` | DELETE `/tags/{arn}` — accepted; no-op |
 
 ## Example
 

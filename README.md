@@ -55,6 +55,7 @@ volumes:
 | Service | Status | Detection | Docs |
 |---------|--------|-----------|------|
 | [S3](docs/services/s3.md) | ✅ Core | catch-all (path / virtual-hosted) | PutObject, GetObject, DeleteObject, ListObjectsV2, HeadObject, CreateBucket, DeleteBucket, multipart uploads, presigned URLs |
+| [S3 Control](docs/services/s3control.md) | ✅ Core | `x-amz-account-id` header or `/v20180820/` path prefix | Account-level tag and public access block stubs — accepts Pulumi/TF provider calls as no-ops |
 | [SQS](docs/services/sqs.md) | ✅ Core | `Action` param or `AmazonSQS.*` target | CreateQueue, SendMessage, ReceiveMessage, DeleteMessage, PurgeQueue, visibility timeout |
 | [DynamoDB](docs/services/dynamodb.md) | ✅ Full | `DynamoDB_*` target | Proxied to [DynamoDB Local](https://hub.docker.com/r/amazon/dynamodb-local) — full parity |
 | [Secrets Manager](docs/services/secretsmanager.md) | ✅ Core | `secretsmanager.*` target | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DeleteSecret, ListSecrets, DescribeSecret, RestoreSecret |
@@ -69,7 +70,7 @@ volumes:
 | [KMS](docs/services/kms.md) | ✅ Core | `TrentService.*` target | CreateKey, Encrypt/Decrypt (real AES-256-GCM), GenerateDataKey, ReEncrypt, aliases, tags, key lifecycle (enable/disable/schedule-deletion) |
 | [SNS](docs/services/sns.md) | ✅ Core | `AmazonSimpleNotificationService.*` target or `Action` param | CreateTopic, Subscribe (all protocols, auto-confirmed), Publish, PublishBatch — messages captured in memory, never delivered |
 | [EventBridge](docs/services/eventbridge.md) | ✅ Core | `AmazonEventBridge.*` target | PutEvents (captured in memory), event buses (CRUD), rules (CRUD, enable/disable), targets (put/remove/list) |
-| [EventBridge Scheduler](docs/services/scheduler.md) | ✅ Core | `/2020-11-23/` path prefix | Schedule groups (CRUD), schedules (CRUD) — expressions stored; firing added in Part 2 |
+| [EventBridge Scheduler](docs/services/scheduler.md) | ✅ Core | `/schedules` or `/schedule-groups` bare path prefix | Schedule groups (CRUD), schedules (CRUD), tags — expressions stored; firing added in Part 2 |
 | [CloudFront](docs/services/cloudfront.md) | ✅ Core | `/2020-05-31/` path prefix | Distribution CRUD — `localhost`-based `DomainName`, status always `Deployed`, ETag per distribution |
 | [ALB](docs/services/alb.md) | ✅ Core | form-encoded body, `Version=2015-12-01` | Load balancer, target group, listener, and rule CRUD — `localhost`-based `DNSName`, state always `active`; listeners start a real reverse proxy that routes requests to registered IP targets |
 | [RDS / Aurora](docs/services/rds.md) | ✅ Core | form-encoded body, `Version=2014-10-31` | Subnet group, parameter group, cluster, and instance CRUD — cluster endpoint resolves to a real Postgres sidecar; status always `available` |

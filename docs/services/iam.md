@@ -12,6 +12,10 @@ In-memory IAM + STS emulator. Roles, policies, and instance profiles are stored 
 | `GetRole` | Returns role by name |
 | `DeleteRole` | Removes role from store |
 | `ListRoles` | Returns all roles |
+| `UpdateRole` | Accepted; no-op stub |
+| `TagRole` | Accepted; no-op stub |
+| `UntagRole` | Accepted; no-op stub |
+| `ListRoleTags` | Returns empty tag list |
 | `AttachRolePolicy` | Records policy ARN on role; accepts AWS-managed ARNs |
 | `DetachRolePolicy` | Removes attachment |
 | `ListAttachedRolePolicies` | Returns recorded attachments |
@@ -24,10 +28,12 @@ In-memory IAM + STS emulator. Roles, policies, and instance profiles are stored 
 | `GetPolicyVersion` | Returns stored policy document as v1 |
 | `DeletePolicy` | Removes policy |
 | `ListPolicies` | Returns customer-managed policies |
+| `ListPolicyVersions` | Returns a single v1 version for the policy; required by TF provider v6 delete path |
 | `CreateInstanceProfile` | Creates instance profile |
 | `GetInstanceProfile` | Returns profile with attached role |
 | `DeleteInstanceProfile` | Removes instance profile |
 | `ListInstanceProfiles` | Returns all instance profiles |
+| `ListInstanceProfilesForRole` | Returns instance profiles containing the given role; required by TF provider v6 delete path |
 | `AddRoleToInstanceProfile` | Attaches role to profile |
 | `RemoveRoleFromInstanceProfile` | Detaches role from profile |
 | `AssumeRole` | Returns fake credentials — no enforcement |
