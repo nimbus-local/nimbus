@@ -700,6 +700,58 @@ func TestDeleteBucketLifecycle(t *testing.T) {
 	}
 }
 
+func TestPutGetPublicAccessBlock(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/pab-bucket", nil, nil)
+
+	const body = `<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls></PublicAccessBlockConfiguration>`
+
+	w := do(t, svc, http.MethodPut, "/pab-bucket?publicAccessBlock",
+		[]byte(body), map[string]string{"Content-Type": "application/xml"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PutPublicAccessBlock: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = do(t, svc, http.MethodGet, "/pab-bucket?publicAccessBlock", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetPublicAccessBlock: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != body {
+		t.Errorf("GetPublicAccessBlock: body mismatch\ngot:  %q\nwant: %q", got, body)
+	}
+}
+
+func TestGetPublicAccessBlock_NotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/pab-bucket2", nil, nil)
+
+	w := do(t, svc, http.MethodGet, "/pab-bucket2?publicAccessBlock", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GetPublicAccessBlock (no config): expected 404, got %d", w.Code)
+	}
+}
+
+func TestDeletePublicAccessBlock(t *testing.T) {
+	svc, _ := newTestService(t)
+	do(t, svc, http.MethodPut, "/pab-bucket3", nil, nil)
+
+	const body = `<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls></PublicAccessBlockConfiguration>`
+	do(t, svc, http.MethodPut, "/pab-bucket3?publicAccessBlock",
+		[]byte(body), map[string]string{"Content-Type": "application/xml"})
+
+	w := do(t, svc, http.MethodDelete, "/pab-bucket3?publicAccessBlock", nil, nil)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeletePublicAccessBlock: expected 204, got %d", w.Code)
+	}
+
+	// GET after delete must return 404 — this is what the TF provider waiter checks.
+	// Without this, the waiter polls forever and the destroy times out after 3 minutes.
+	w = do(t, svc, http.MethodGet, "/pab-bucket3?publicAccessBlock", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GetPublicAccessBlock after delete: expected 404, got %d", w.Code)
+	}
+}
+
 // TestReservedKeyBlocked verifies that .nimbus-* keys are blocked at the object API level
 // so internal sidecar files (lifecycle config, bucket metadata) are never exposed.
 func TestReservedKeyBlocked(t *testing.T) {
