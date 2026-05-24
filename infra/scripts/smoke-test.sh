@@ -233,6 +233,19 @@ if [ -n "${KEY_ID:-}" ]; then
   else
     fail "enable-key-rotation / get-key-rotation-status" "got: '$ROT'"
   fi
+  # Grants
+  GRANT_ID=$($CLI kms create-grant \
+    --key-id "$KEY_ID" \
+    --grantee-principal "arn:aws:iam::000000000000:role/smoke-test" \
+    --operations Decrypt GenerateDataKey \
+    --query GrantId --output text 2>/dev/null)
+  if [ -n "$GRANT_ID" ]; then
+    ok "create-grant"
+    $CLI kms revoke-grant --key-id "$KEY_ID" --grant-id "$GRANT_ID" 2>/dev/null
+    ok "revoke-grant"
+  else
+    fail "create-grant"
+  fi
 else
   fail "describe-key (alias not found — run 'make apply' first)"
 fi

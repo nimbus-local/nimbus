@@ -33,6 +33,10 @@ Detection: `X-Amz-Target: TrentService.*`
 | EnableKeyRotation | Marks rotation enabled on the key; rejected if key is disabled or pending deletion |
 | DisableKeyRotation | Marks rotation disabled |
 | GetKeyRotationStatus | Returns `{ "KeyRotationEnabled": bool }` |
+| CreateGrant | Stores a grant (grantee principal + operations); returns `GrantId` and `GrantToken` |
+| ListGrants | Returns all grants for a key; optionally filtered by `GrantId` |
+| RevokeGrant | Removes a grant by `GrantId` |
+| RetireGrant | Removes a grant by `GrantToken` or `GrantId` |
 
 ## Ciphertext format
 
