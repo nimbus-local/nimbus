@@ -30,6 +30,9 @@ Detection: `X-Amz-Target: TrentService.*`
 | GenerateRandom | Returns up to 1024 cryptographically random bytes |
 | GetKeyPolicy | Returns a default allow-all policy stub |
 | PutKeyPolicy | Accepted and ignored (no IAM enforcement) |
+| EnableKeyRotation | Marks rotation enabled on the key; rejected if key is disabled or pending deletion |
+| DisableKeyRotation | Marks rotation disabled |
+| GetKeyRotationStatus | Returns `{ "KeyRotationEnabled": bool }` |
 
 ## Ciphertext format
 
