@@ -15,11 +15,14 @@ registered target. Registered targets are immediately `healthy`.
 | `CreateLoadBalancer` | Returns `localhost`-based `DNSName`, state `active` |
 | `DescribeLoadBalancers` | Filter by `LoadBalancerArns` or `Names`; returns `LoadBalancerNotFound` when ARN filter matches nothing |
 | `DeleteLoadBalancer` | Removes from in-memory store |
+| `SetSubnets` | Returns stub availability zone; required by TF provider v6 re-apply |
 | `DescribeLoadBalancerAttributes` | Returns sensible defaults (deletion protection off, idle timeout 60 s, etc.) |
 | `ModifyLoadBalancerAttributes` | Accepted and ignored |
+| `DescribeCapacityReservation` | Returns stub empty reservation state |
 | `CreateTargetGroup` | Stores name, protocol, port, VPC, target type |
 | `DescribeTargetGroups` | Filter by `TargetGroupArns` or `Names` |
 | `DeleteTargetGroup` | Removes from in-memory store |
+| `ModifyTargetGroup` | Returns existing target group unchanged; required by TF provider v6 re-apply |
 | `DescribeTargetGroupAttributes` | Returns sensible defaults (deregistration delay 300 s, stickiness off, etc.) |
 | `ModifyTargetGroupAttributes` | Accepted and ignored |
 | `CreateListener` / `DescribeListeners` / `DeleteListener` | HTTP/HTTPS listeners; `forward` default action stored and echoed back |

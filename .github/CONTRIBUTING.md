@@ -60,10 +60,15 @@ Link the service name to its doc file. Match the status badge used by comparable
 **Install git hooks (run once after cloning):**
 
 ```bash
-sh scripts/install-hooks.sh
+make setup
 ```
 
-This installs a pre-commit hook that runs `gofmt`, `go vet`, and `go test ./... -short` before every commit.
+This sets `core.hooksPath = .githooks` to activate the committed pre-commit hook. The hook runs on every commit and will:
+- Block direct commits to `main` or `master`
+- Run `go fmt ./...`
+- Run `go build ./...`
+- Run `go vet ./...`
+- Run `go test ./...`
 
 **Unit tests (fast, no Docker required):**
 
@@ -71,7 +76,6 @@ This installs a pre-commit hook that runs `gofmt`, `go vet`, and `go test ./... 
 go build ./...
 go test ./...
 go vet ./...
-gofmt -l .
 ```
 
 **End-to-end smoke tests (requires Docker and Terraform):**
