@@ -610,6 +610,84 @@ func TestGetPutKeyPolicy(t *testing.T) {
 	}
 }
 
+// --- Grants ---
+
+func TestCreateListRevokeGrant(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "grant-test")
+
+	// CreateGrant
+	w := kmsRequest(t, svc, "CreateGrant", map[string]interface{}{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/my-lambda",
+		"Operations":       []string{"Decrypt", "GenerateDataKey"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateGrant: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeJSON(t, w)
+	grantID, _ := resp["GrantId"].(string)
+	if grantID == "" {
+		t.Fatal("expected GrantId in CreateGrant response")
+	}
+	if resp["GrantToken"] == nil {
+		t.Error("expected GrantToken in CreateGrant response")
+	}
+
+	// ListGrants
+	w = kmsRequest(t, svc, "ListGrants", map[string]string{"KeyId": keyID})
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListGrants: expected 200, got %d", w.Code)
+	}
+	resp = decodeJSON(t, w)
+	grants, _ := resp["Grants"].([]interface{})
+	if len(grants) != 1 {
+		t.Fatalf("expected 1 grant, got %d", len(grants))
+	}
+
+	// RevokeGrant
+	w = kmsRequest(t, svc, "RevokeGrant", map[string]string{
+		"KeyId":   keyID,
+		"GrantId": grantID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("RevokeGrant: expected 200, got %d", w.Code)
+	}
+
+	// ListGrants after revoke — should be empty
+	w = kmsRequest(t, svc, "ListGrants", map[string]string{"KeyId": keyID})
+	resp = decodeJSON(t, w)
+	grants, _ = resp["Grants"].([]interface{})
+	if len(grants) != 0 {
+		t.Errorf("expected 0 grants after revoke, got %d", len(grants))
+	}
+}
+
+func TestRetireGrant(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "retire-test")
+
+	w := kmsRequest(t, svc, "CreateGrant", map[string]interface{}{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/my-lambda",
+		"Operations":       []string{"Decrypt"},
+	})
+	resp := decodeJSON(t, w)
+	token, _ := resp["GrantToken"].(string)
+
+	w = kmsRequest(t, svc, "RetireGrant", map[string]string{"GrantToken": token})
+	if w.Code != http.StatusOK {
+		t.Fatalf("RetireGrant: expected 200, got %d", w.Code)
+	}
+
+	w = kmsRequest(t, svc, "ListGrants", map[string]string{"KeyId": keyID})
+	resp = decodeJSON(t, w)
+	grants, _ := resp["Grants"].([]interface{})
+	if len(grants) != 0 {
+		t.Errorf("expected 0 grants after retire, got %d", len(grants))
+	}
+}
+
 // --- Key rotation ---
 
 func TestKeyRotation(t *testing.T) {
