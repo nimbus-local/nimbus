@@ -453,6 +453,346 @@ func TestTagsRoundTrip(t *testing.T) {
 	}
 }
 
+// --- GetUserPoolMfaConfig / SetUserPoolMfaConfig ---
+
+func TestGetUserPoolMfaConfig(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "mfa-pool")
+
+	w := cognitoReq(t, s, "GetUserPoolMfaConfig", map[string]interface{}{
+		"UserPoolId": poolID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "MfaConfiguration") {
+		t.Error("expected MfaConfiguration in response")
+	}
+}
+
+func TestGetUserPoolMfaConfig_NotFound(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "GetUserPoolMfaConfig", map[string]interface{}{
+		"UserPoolId": "us-east-1_nope",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- JWKS ---
+
+func TestJWKS(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "jwks-pool")
+
+	req := httptest.NewRequest(http.MethodGet, "/"+poolID+"/.well-known/jwks.json", nil)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, field := range []string{"keys", "kty", "kid", "alg", "RS256", "n", "e"} {
+		if !strings.Contains(body, field) {
+			t.Errorf("JWKS missing field %q", field)
+		}
+	}
+}
+
+func TestDetect_JWKS(t *testing.T) {
+	s := newSvc()
+	req := httptest.NewRequest(http.MethodGet, "/us-east-1_abc12345/.well-known/jwks.json", nil)
+	if !s.Detect(req) {
+		t.Error("Detect should return true for JWKS path")
+	}
+}
+
+// --- User management ---
+
+func createUser(t *testing.T, s *Service, poolID, username, password string) {
+	t.Helper()
+	w := cognitoReq(t, s, "AdminCreateUser", map[string]interface{}{
+		"UserPoolId":        poolID,
+		"Username":          username,
+		"TemporaryPassword": password,
+		"UserAttributes": []map[string]string{
+			{"Name": "email", "Value": username},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("AdminCreateUser %s: expected 200, got %d\n%s", username, w.Code, w.Body.String())
+	}
+}
+
+func TestAdminCreateUser(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "usr-pool")
+	createUser(t, s, poolID, "alice@example.com", "Password1!")
+
+	w := cognitoReq(t, s, "AdminCreateUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "alice@example.com",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on duplicate, got %d", w.Code)
+	}
+}
+
+func TestAdminCreateUser_PoolNotFound(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "AdminCreateUser", map[string]interface{}{
+		"UserPoolId": "us-east-1_nope",
+		"Username":   "alice@example.com",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminSetUserPassword(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "setpw-pool")
+	createUser(t, s, poolID, "bob@example.com", "OldPass1!")
+
+	w := cognitoReq(t, s, "AdminSetUserPassword", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "bob@example.com",
+		"Password":   "NewPass1!",
+		"Permanent":  true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminSetUserPassword_NotFound(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "setpw-miss-pool")
+	w := cognitoReq(t, s, "AdminSetUserPassword", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "nobody@example.com",
+		"Password":   "Pass1!",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- Auth flows ---
+
+func authSetup(t *testing.T) (*Service, string, string) {
+	t.Helper()
+	s := newSvc()
+	poolID := createPool(t, s, "auth-pool")
+	clientID := createClient(t, s, poolID, "auth-client")
+	createUser(t, s, poolID, "carol@example.com", "Pass1!")
+	return s, poolID, clientID
+}
+
+func TestInitiateAuth_UserPassword(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, field := range []string{"AccessToken", "IdToken", "RefreshToken", "ExpiresIn"} {
+		if !strings.Contains(body, field) {
+			t.Errorf("InitiateAuth missing %q in response", field)
+		}
+	}
+}
+
+func TestInitiateAuth_WrongPassword(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "wrong",
+		},
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestInitiateAuth_UserNotFound(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "nobody@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestInitiateAuth_ClientNotFound(t *testing.T) {
+	s := newSvc()
+	createPool(t, s, "auth-no-client-pool")
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow":       "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{},
+		"ClientId":       "nope",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestInitiateAuth_UnsupportedFlow(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "SRP_AUTH",
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAdminInitiateAuth(t *testing.T) {
+	s, poolID, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "AdminInitiateAuth", map[string]interface{}{
+		"AuthFlow":   "ADMIN_USER_PASSWORD_AUTH",
+		"UserPoolId": poolID,
+		"ClientId":   clientID,
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "Pass1!",
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+// --- GetUser ---
+
+func doAuth(t *testing.T, s *Service, clientID string) string {
+	t.Helper()
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	return resp["AuthenticationResult"]["AccessToken"].(string)
+}
+
+func TestGetUser(t *testing.T) {
+	s, _, clientID := authSetup(t)
+	accessToken := doAuth(t, s, clientID)
+
+	w := cognitoReq(t, s, "GetUser", map[string]interface{}{
+		"AccessToken": accessToken,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "carol@example.com") {
+		t.Error("expected username in GetUser response")
+	}
+}
+
+func TestGetUser_InvalidToken(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "GetUser", map[string]interface{}{
+		"AccessToken": "not.a.token",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- GlobalSignOut ---
+
+func TestGlobalSignOut(t *testing.T) {
+	s, _, clientID := authSetup(t)
+	accessToken := doAuth(t, s, clientID)
+
+	// Sign out
+	w := cognitoReq(t, s, "GlobalSignOut", map[string]interface{}{
+		"AccessToken": accessToken,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	// GetUser after sign-out should fail
+	w2 := cognitoReq(t, s, "GetUser", map[string]interface{}{
+		"AccessToken": accessToken,
+	})
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 after sign-out, got %d", w2.Code)
+	}
+}
+
+// --- RevokeToken ---
+
+func TestRevokeToken(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	refreshToken := resp["AuthenticationResult"]["RefreshToken"].(string)
+
+	rw := cognitoReq(t, s, "RevokeToken", map[string]interface{}{
+		"Token":    refreshToken,
+		"ClientId": clientID,
+	})
+	if rw.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestRevokeToken_NotRefreshToken(t *testing.T) {
+	s, _, clientID := authSetup(t)
+	accessToken := doAuth(t, s, clientID)
+
+	w := cognitoReq(t, s, "RevokeToken", map[string]interface{}{
+		"Token":    accessToken, // access token, not refresh
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
 // --- Unknown action ---
 
 func TestUnknownAction(t *testing.T) {

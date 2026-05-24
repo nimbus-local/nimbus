@@ -722,6 +722,42 @@ try_match "ListUserPoolClients includes new client" "$PREFIX-web-client" \
   $CLI cognito-idp list-user-pool-clients --user-pool-id "$POOL_ID" --max-results 10 \
     --query "UserPoolClients[*].ClientName" --output text
 
+$CLI cognito-idp admin-create-user \
+  --user-pool-id "$POOL_ID" \
+  --username "testuser@nimbus.local" \
+  --temporary-password "TempPass1!" \
+  --user-attributes Name=email,Value=testuser@nimbus.local 2>/dev/null
+ok "AdminCreateUser"
+
+$CLI cognito-idp admin-set-user-password \
+  --user-pool-id "$POOL_ID" \
+  --username "testuser@nimbus.local" \
+  --password "FinalPass1!" \
+  --permanent 2>/dev/null
+ok "AdminSetUserPassword"
+
+ACCESS_TOKEN=$($CLI cognito-idp initiate-auth \
+  --auth-flow USER_PASSWORD_AUTH \
+  --client-id "$CLIENT_ID" \
+  --auth-parameters "USERNAME=testuser@nimbus.local,PASSWORD=FinalPass1!" \
+  --query "AuthenticationResult.AccessToken" --output text 2>/dev/null)
+if [ -n "$ACCESS_TOKEN" ] && [ "$ACCESS_TOKEN" != "None" ]; then
+  ok "InitiateAuth returns AccessToken"
+else
+  fail "InitiateAuth returns AccessToken" "got: $ACCESS_TOKEN"
+fi
+
+try_match "GetUser returns username" "testuser@nimbus.local" \
+  $CLI cognito-idp get-user \
+    --access-token "$ACCESS_TOKEN" \
+    --query "Username" --output text
+
+try_match "JWKS endpoint returns RSA key" "RSA" \
+  curl -sf "$NIMBUS_ENDPOINT/$POOL_ID/.well-known/jwks.json"
+
+$CLI cognito-idp global-sign-out --access-token "$ACCESS_TOKEN" 2>/dev/null
+ok "GlobalSignOut"
+
 $CLI cognito-idp delete-user-pool-client \
   --user-pool-id "$POOL_ID" --client-id "$CLIENT_ID" 2>/dev/null
 

@@ -350,18 +350,20 @@ Enables Forge to test full authentication flows locally without hitting real AWS
 | Terraform fixture (`cognito.tf`) — user pool + client | ✅ |
 | Smoke tests | ✅ |
 
-### Part 2 — JWT issuance + auth flows
+### Part 2 — JWT issuance + auth flows ✅ shipped
 
 JWT signing makes locally-issued tokens verifiable by app backends — the critical piece for Forge.
 
 | Work item | Status |
 |-----------|--------|
-| RSA-2048 key pair generated at service startup (in-memory) | |
-| JWKS endpoint: `GET /{userPoolId}/.well-known/jwks.json` | |
-| `InitiateAuth` — `USER_PASSWORD_AUTH` flow → real RS256 access + id + refresh tokens | |
-| `AdminInitiateAuth` — same as above, admin variant | |
-| `GetUser` — validate access token, return user attributes | |
-| `GlobalSignOut` / `RevokeToken` — invalidate tokens | |
+| RSA-2048 key pair generated at service startup (in-memory) | ✅ |
+| JWKS endpoint: `GET /{userPoolId}/.well-known/jwks.json` | ✅ |
+| `InitiateAuth` — `USER_PASSWORD_AUTH` flow → real RS256 access + id + refresh tokens | ✅ |
+| `AdminInitiateAuth` — `ADMIN_USER_PASSWORD_AUTH` / `ADMIN_NO_SRP_AUTH` | ✅ |
+| `GetUser` — validate access token, return user attributes | ✅ |
+| `GlobalSignOut` / `RevokeToken` — invalidate tokens | ✅ |
+| `AdminCreateUser` / `AdminSetUserPassword` — user creation needed for auth flows | ✅ |
+| `GetUserPoolMfaConfig` / `SetUserPoolMfaConfig` — required by TF provider v6 read path | ✅ |
 
 ### Part 3 — User management
 

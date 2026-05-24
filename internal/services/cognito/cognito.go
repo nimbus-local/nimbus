@@ -1,6 +1,8 @@
 package cognito
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,8 +19,11 @@ const accountID = "000000000000"
 // All state is in-memory.
 type Service struct {
 	mu      sync.RWMutex
-	pools   map[string]*userPool   // poolID -> pool
-	clients map[string]*poolClient // clientID -> client
+	pools   map[string]*userPool        // poolID -> pool
+	clients map[string]*poolClient      // clientID -> client
+	users   map[string]map[string]*user // poolID -> username -> user
+	tokens  map[string]*tokenRecord     // jti -> record
+	rsaKey  *rsa.PrivateKey
 	region  string
 }
 
@@ -60,21 +65,34 @@ func New(region string) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("cognito: failed to generate RSA key: " + err.Error())
+	}
 	return &Service{
 		region:  region,
+		rsaKey:  key,
 		pools:   map[string]*userPool{},
 		clients: map[string]*poolClient{},
+		users:   map[string]map[string]*user{},
+		tokens:  map[string]*tokenRecord{},
 	}
 }
 
 func (s *Service) Name() string { return "cognito" }
 
-// Detect identifies Cognito User Pool requests by X-Amz-Target prefix.
+// Detect identifies Cognito User Pool requests.
 func (s *Service) Detect(r *http.Request) bool {
-	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSCognitoIdentityProviderService.")
+	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSCognitoIdentityProviderService.") ||
+		strings.HasSuffix(r.URL.Path, "/.well-known/jwks.json")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/.well-known/jwks.json") {
+		s.jwksHandler(w, r)
+		return
+	}
+
 	target := r.Header.Get("X-Amz-Target")
 	action := strings.TrimPrefix(target, "AWSCognitoIdentityProviderService.")
 
@@ -90,6 +108,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.deleteUserPool(w, r)
 	case "ListUserPools":
 		s.listUserPools(w, r)
+	case "GetUserPoolMfaConfig":
+		s.getUserPoolMfaConfig(w, r)
+	case "SetUserPoolMfaConfig":
+		s.setUserPoolMfaConfig(w, r)
 
 	// User pool client
 	case "CreateUserPoolClient":
@@ -110,6 +132,24 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.tagResource(w, r)
 	case "UntagResource":
 		s.untagResource(w, r)
+
+	// Auth flows + JWT
+	case "InitiateAuth":
+		s.initiateAuth(w, r)
+	case "AdminInitiateAuth":
+		s.adminInitiateAuth(w, r)
+	case "GetUser":
+		s.getUser(w, r)
+	case "GlobalSignOut":
+		s.globalSignOut(w, r)
+	case "RevokeToken":
+		s.revokeToken(w, r)
+
+	// User management (subset needed for auth flows)
+	case "AdminCreateUser":
+		s.adminCreateUser(w, r)
+	case "AdminSetUserPassword":
+		s.adminSetUserPassword(w, r)
 
 	default:
 		jsonError(w, http.StatusBadRequest, "NotImplementedException",
@@ -140,7 +180,7 @@ func (s *Service) createUserPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := "us-east-1_" + uid.New()[:8]
+	id := s.region + "_" + uid.New()[:8]
 	now := time.Now().UTC()
 	tags := req.UserPoolTags
 	if tags == nil {
@@ -258,6 +298,50 @@ func (s *Service) deleteUserPool(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) getUserPoolMfaConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	pool, ok := s.pools[req.UserPoolID]
+	s.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("User pool %s does not exist.", req.UserPoolID))
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"MfaConfiguration": pool.mfaConfiguration,
+	})
+}
+
+func (s *Service) setUserPoolMfaConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID       string `json:"UserPoolId"`
+		MfaConfiguration string `json:"MfaConfiguration"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	pool, ok := s.pools[req.UserPoolID]
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("User pool %s does not exist.", req.UserPoolID))
+		return
+	}
+	if req.MfaConfiguration != "" {
+		pool.mfaConfiguration = req.MfaConfiguration
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"MfaConfiguration": pool.mfaConfiguration,
+	})
 }
 
 func (s *Service) listUserPools(w http.ResponseWriter, r *http.Request) {
