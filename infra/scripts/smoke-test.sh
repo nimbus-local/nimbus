@@ -225,6 +225,14 @@ if [ -n "${KEY_ID:-}" ]; then
   else
     fail "kms encrypt"
   fi
+  # Key rotation
+  $CLI kms enable-key-rotation --key-id "$KEY_ID" 2>/dev/null
+  ROT=$($CLI kms get-key-rotation-status --key-id "$KEY_ID" --query KeyRotationEnabled --output text 2>/dev/null)
+  if [ "$ROT" = "True" ]; then
+    ok "enable-key-rotation / get-key-rotation-status"
+  else
+    fail "enable-key-rotation / get-key-rotation-status" "got: '$ROT'"
+  fi
 else
   fail "describe-key (alias not found — run 'make apply' first)"
 fi

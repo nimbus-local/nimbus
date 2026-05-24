@@ -610,6 +610,59 @@ func TestGetPutKeyPolicy(t *testing.T) {
 	}
 }
 
+// --- Key rotation ---
+
+func TestKeyRotation(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "rotation-test")
+
+	// Default: rotation disabled
+	w := kmsRequest(t, svc, "GetKeyRotationStatus", map[string]string{"KeyId": keyID})
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetKeyRotationStatus: expected 200, got %d", w.Code)
+	}
+	resp := decodeJSON(t, w)
+	if resp["KeyRotationEnabled"] != false {
+		t.Errorf("expected KeyRotationEnabled=false, got %v", resp["KeyRotationEnabled"])
+	}
+
+	// Enable rotation
+	w = kmsRequest(t, svc, "EnableKeyRotation", map[string]string{"KeyId": keyID})
+	if w.Code != http.StatusOK {
+		t.Fatalf("EnableKeyRotation: expected 200, got %d", w.Code)
+	}
+
+	w = kmsRequest(t, svc, "GetKeyRotationStatus", map[string]string{"KeyId": keyID})
+	resp = decodeJSON(t, w)
+	if resp["KeyRotationEnabled"] != true {
+		t.Errorf("expected KeyRotationEnabled=true, got %v", resp["KeyRotationEnabled"])
+	}
+
+	// Disable rotation
+	w = kmsRequest(t, svc, "DisableKeyRotation", map[string]string{"KeyId": keyID})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DisableKeyRotation: expected 200, got %d", w.Code)
+	}
+
+	w = kmsRequest(t, svc, "GetKeyRotationStatus", map[string]string{"KeyId": keyID})
+	resp = decodeJSON(t, w)
+	if resp["KeyRotationEnabled"] != false {
+		t.Errorf("expected KeyRotationEnabled=false after disable, got %v", resp["KeyRotationEnabled"])
+	}
+}
+
+func TestEnableKeyRotationDisabledKey(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "disabled-rotation-test")
+
+	kmsRequest(t, svc, "DisableKey", map[string]string{"KeyId": keyID})
+
+	w := kmsRequest(t, svc, "EnableKeyRotation", map[string]string{"KeyId": keyID})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for disabled key, got %d", w.Code)
+	}
+}
+
 // --- Unknown action ---
 
 func TestUnknownAction(t *testing.T) {
