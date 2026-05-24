@@ -51,14 +51,15 @@ type poolClient struct {
 	userPoolID   string
 	creationDate time.Time
 	// Explicit flows requested by caller — stored for DescribeUserPoolClient.
-	explicitAuthFlows  []string
-	callbackURLs       []string
-	logoutURLs         []string
-	allowedOAuthFlows  []string
-	allowedOAuthScopes []string
-	supportedIDPs      []string
-	generateSecret     bool
-	clientSecret       string
+	explicitAuthFlows               []string
+	callbackURLs                    []string
+	logoutURLs                      []string
+	allowedOAuthFlows               []string
+	allowedOAuthScopes              []string
+	supportedIDPs                   []string
+	allowedOAuthFlowsUserPoolClient bool
+	generateSecret                  bool
+	clientSecret                    string
 }
 
 func New(region string) *Service {
@@ -381,15 +382,16 @@ func (s *Service) listUserPools(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createUserPoolClient(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		UserPoolID         string   `json:"UserPoolId"`
-		ClientName         string   `json:"ClientName"`
-		ExplicitAuthFlows  []string `json:"ExplicitAuthFlows"`
-		CallbackURLs       []string `json:"CallbackURLs"`
-		LogoutURLs         []string `json:"LogoutURLs"`
-		AllowedOAuthFlows  []string `json:"AllowedOAuthFlows"`
-		AllowedOAuthScopes []string `json:"AllowedOAuthScopes"`
-		SupportedIDPs      []string `json:"SupportedIdentityProviders"`
-		GenerateSecret     bool     `json:"GenerateSecret"`
+		UserPoolID                      string   `json:"UserPoolId"`
+		ClientName                      string   `json:"ClientName"`
+		ExplicitAuthFlows               []string `json:"ExplicitAuthFlows"`
+		CallbackURLs                    []string `json:"CallbackURLs"`
+		LogoutURLs                      []string `json:"LogoutURLs"`
+		AllowedOAuthFlows               []string `json:"AllowedOAuthFlows"`
+		AllowedOAuthScopes              []string `json:"AllowedOAuthScopes"`
+		SupportedIDPs                   []string `json:"SupportedIdentityProviders"`
+		AllowedOAuthFlowsUserPoolClient bool     `json:"AllowedOAuthFlowsUserPoolClient"`
+		GenerateSecret                  bool     `json:"GenerateSecret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "could not parse request")
@@ -408,17 +410,18 @@ func (s *Service) createUserPoolClient(w http.ResponseWriter, r *http.Request) {
 	clientID := uid.New()
 	now := time.Now().UTC()
 	c := &poolClient{
-		clientID:           clientID,
-		clientName:         req.ClientName,
-		userPoolID:         req.UserPoolID,
-		creationDate:       now,
-		explicitAuthFlows:  req.ExplicitAuthFlows,
-		callbackURLs:       req.CallbackURLs,
-		logoutURLs:         req.LogoutURLs,
-		allowedOAuthFlows:  req.AllowedOAuthFlows,
-		allowedOAuthScopes: req.AllowedOAuthScopes,
-		supportedIDPs:      req.SupportedIDPs,
-		generateSecret:     req.GenerateSecret,
+		clientID:                        clientID,
+		clientName:                      req.ClientName,
+		userPoolID:                      req.UserPoolID,
+		creationDate:                    now,
+		explicitAuthFlows:               req.ExplicitAuthFlows,
+		callbackURLs:                    req.CallbackURLs,
+		logoutURLs:                      req.LogoutURLs,
+		allowedOAuthFlows:               req.AllowedOAuthFlows,
+		allowedOAuthScopes:              req.AllowedOAuthScopes,
+		supportedIDPs:                   req.SupportedIDPs,
+		allowedOAuthFlowsUserPoolClient: req.AllowedOAuthFlowsUserPoolClient,
+		generateSecret:                  req.GenerateSecret,
 	}
 	if req.GenerateSecret {
 		c.clientSecret = uid.New()
@@ -648,10 +651,11 @@ func (s *Service) poolDetail(p *userPool) map[string]interface{} {
 
 func (s *Service) clientDetail(c *poolClient) map[string]interface{} {
 	out := map[string]interface{}{
-		"ClientId":     c.clientID,
-		"ClientName":   c.clientName,
-		"UserPoolId":   c.userPoolID,
-		"CreationDate": float64(c.creationDate.Unix()),
+		"ClientId":                        c.clientID,
+		"ClientName":                      c.clientName,
+		"UserPoolId":                      c.userPoolID,
+		"CreationDate":                    float64(c.creationDate.Unix()),
+		"AllowedOAuthFlowsUserPoolClient": c.allowedOAuthFlowsUserPoolClient,
 	}
 	if len(c.explicitAuthFlows) > 0 {
 		out["ExplicitAuthFlows"] = c.explicitAuthFlows

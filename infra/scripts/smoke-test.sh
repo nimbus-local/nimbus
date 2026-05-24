@@ -753,7 +753,7 @@ try_match "GetUser returns username" "testuser@nimbus.local" \
     --query "Username" --output text
 
 try_match "JWKS endpoint returns RSA key" "RSA" \
-  curl -sf "$NIMBUS_ENDPOINT/$POOL_ID/.well-known/jwks.json"
+  curl -sf "$NIMBUS/$POOL_ID/.well-known/jwks.json"
 
 $CLI cognito-idp global-sign-out --access-token "$ACCESS_TOKEN" 2>/dev/null
 ok "GlobalSignOut"
