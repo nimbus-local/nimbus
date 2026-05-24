@@ -676,3 +676,12 @@ func TestPathParameterExecution(t *testing.T) {
 		t.Fatalf("want userId=42, got %v", event.PathParameters)
 	}
 }
+
+// --- Name ---
+
+func TestName(t *testing.T) {
+	svc, _ := newTestService()
+	if svc.Name() != "apigateway" {
+		t.Errorf("expected Name()=apigateway, got %s", svc.Name())
+	}
+}

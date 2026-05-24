@@ -435,3 +435,69 @@ func TestUnknownAction(t *testing.T) {
 		t.Errorf("expected InvalidAction error: %s", w.Body.String())
 	}
 }
+
+// --- SetQueueAttributes ---
+
+func TestSetQueueAttributes(t *testing.T) {
+	svc := newTestService()
+	qURL := createQueue(t, svc, "set-attrs-queue")
+
+	w := sqsRequest(t, svc, map[string]string{
+		"Action":            "SetQueueAttributes",
+		"QueueUrl":          qURL,
+		"Attribute.1.Name":  "VisibilityTimeout",
+		"Attribute.1.Value": "60",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetQueueAttributes: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSetQueueAttributes_NotFound(t *testing.T) {
+	svc := newTestService()
+	w := sqsRequest(t, svc, map[string]string{
+		"Action":            "SetQueueAttributes",
+		"QueueUrl":          "http://localhost:4566/000000000000/nonexistent",
+		"Attribute.1.Name":  "VisibilityTimeout",
+		"Attribute.1.Value": "60",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- ListQueueTags / TagQueue ---
+
+func TestListQueueTags(t *testing.T) {
+	svc := newTestService()
+	w := sqsRequest(t, svc, map[string]string{"Action": "ListQueueTags"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListQueueTags: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ListQueueTagsResponse") {
+		t.Error("expected ListQueueTagsResponse in body")
+	}
+}
+
+func TestTagQueue(t *testing.T) {
+	svc := newTestService()
+	qURL := createQueue(t, svc, "tag-queue")
+	w := sqsRequest(t, svc, map[string]string{
+		"Action":      "TagQueue",
+		"QueueUrl":    qURL,
+		"Tag.1.Key":   "env",
+		"Tag.1.Value": "dev",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("TagQueue: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+// --- Name ---
+
+func TestName(t *testing.T) {
+	svc := newTestService()
+	if svc.Name() != "sqs" {
+		t.Errorf("expected Name()=sqs, got %s", svc.Name())
+	}
+}

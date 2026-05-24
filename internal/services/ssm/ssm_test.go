@@ -581,3 +581,138 @@ func TestUnknownOperation(t *testing.T) {
 		t.Errorf("expected 400 for unknown operation, got %d", w.Code)
 	}
 }
+
+// --- Name ---
+
+func TestName(t *testing.T) {
+	svc := newTestService()
+	if svc.Name() != "ssm" {
+		t.Errorf("expected Name()=ssm, got %s", svc.Name())
+	}
+}
+
+// --- ListTagsForResource ---
+
+func TestListTagsForResource(t *testing.T) {
+	svc := newTestService()
+	w := ssmRequest(t, svc, "ListTagsForResource", map[string]interface{}{
+		"ResourceType": "Parameter",
+		"ResourceId":   "/myapp/param",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListTagsForResource: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := responseBody(t, w)
+	if _, ok := body["TagList"]; !ok {
+		t.Error("expected TagList in response")
+	}
+}
+
+// --- DescribeParameters with filters ---
+
+func TestDescribeParameters_FilterByName(t *testing.T) {
+	svc := newTestService()
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/app/config",
+		"Value": "v1",
+		"Type":  "String",
+	})
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/other/param",
+		"Value": "v2",
+		"Type":  "String",
+	})
+
+	w := ssmRequest(t, svc, "DescribeParameters", map[string]interface{}{
+		"ParameterFilters": []map[string]interface{}{
+			{"Key": "Name", "Option": "BeginsWith", "Values": []string{"/app/"}},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := responseBody(t, w)
+	params, _ := body["Parameters"].([]interface{})
+	if len(params) != 1 {
+		t.Errorf("expected 1 parameter, got %d", len(params))
+	}
+}
+
+func TestDescribeParameters_FilterByNameContains(t *testing.T) {
+	svc := newTestService()
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/app/db-host",
+		"Value": "localhost",
+		"Type":  "String",
+	})
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/app/api-key",
+		"Value": "abc",
+		"Type":  "String",
+	})
+
+	w := ssmRequest(t, svc, "DescribeParameters", map[string]interface{}{
+		"ParameterFilters": []map[string]interface{}{
+			{"Key": "Name", "Option": "Contains", "Values": []string{"db-"}},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := responseBody(t, w)
+	params, _ := body["Parameters"].([]interface{})
+	if len(params) != 1 {
+		t.Errorf("expected 1 match, got %d", len(params))
+	}
+}
+
+func TestDescribeParameters_FilterByNameEquals(t *testing.T) {
+	svc := newTestService()
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/exact/match",
+		"Value": "x",
+		"Type":  "String",
+	})
+
+	w := ssmRequest(t, svc, "DescribeParameters", map[string]interface{}{
+		"ParameterFilters": []map[string]interface{}{
+			{"Key": "Name", "Option": "Equals", "Values": []string{"/exact/match"}},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := responseBody(t, w)
+	params, _ := body["Parameters"].([]interface{})
+	if len(params) != 1 {
+		t.Errorf("expected 1 match, got %d", len(params))
+	}
+}
+
+func TestDescribeParameters_FilterByType(t *testing.T) {
+	svc := newTestService()
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/p/secure",
+		"Value": "secret",
+		"Type":  "SecureString",
+	})
+	ssmRequest(t, svc, "PutParameter", map[string]interface{}{
+		"Name":  "/p/plain",
+		"Value": "hello",
+		"Type":  "String",
+	})
+
+	w := ssmRequest(t, svc, "DescribeParameters", map[string]interface{}{
+		"ParameterFilters": []map[string]interface{}{
+			{"Key": "Type", "Option": "Equals", "Values": []string{"SecureString"}},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := responseBody(t, w)
+	params, _ := body["Parameters"].([]interface{})
+	if len(params) != 1 {
+		t.Errorf("expected 1 SecureString, got %d", len(params))
+	}
+}

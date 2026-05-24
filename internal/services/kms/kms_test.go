@@ -751,3 +751,190 @@ func TestUnknownAction(t *testing.T) {
 		t.Errorf("expected 400 for unknown action, got %d", w.Code)
 	}
 }
+
+// --- Name ---
+
+func TestName(t *testing.T) {
+	svc := newTestService()
+	if svc.Name() != "kms" {
+		t.Errorf("expected Name()=kms, got %s", svc.Name())
+	}
+}
+
+// --- Encrypt error paths ---
+
+func TestEncrypt_NotFound(t *testing.T) {
+	svc := newTestService()
+	w := kmsRequest(t, svc, "Encrypt", map[string]interface{}{
+		"KeyId":     "alias/nonexistent",
+		"Plaintext": []byte("hello"),
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestEncrypt_MissingPlaintext(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "enc-missing")
+	w := kmsRequest(t, svc, "Encrypt", map[string]interface{}{
+		"KeyId": keyID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- Decrypt error paths ---
+
+func TestDecrypt_MissingCiphertext(t *testing.T) {
+	svc := newTestService()
+	w := kmsRequest(t, svc, "Decrypt", map[string]interface{}{})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDecrypt_InvalidCiphertext(t *testing.T) {
+	svc := newTestService()
+	w := kmsRequest(t, svc, "Decrypt", map[string]interface{}{
+		"CiphertextBlob": []byte("not-valid-ciphertext"),
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDecrypt_DisabledKey(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "dec-disabled")
+
+	// Encrypt while enabled.
+	ew := kmsRequest(t, svc, "Encrypt", map[string]interface{}{
+		"KeyId":     keyID,
+		"Plaintext": []byte("secret"),
+	})
+	if ew.Code != http.StatusOK {
+		t.Fatalf("encrypt: expected 200, got %d", ew.Code)
+	}
+	var encResp map[string]interface{}
+	json.NewDecoder(ew.Body).Decode(&encResp)
+	ciphertext := encResp["CiphertextBlob"]
+
+	// Disable the key.
+	kmsRequest(t, svc, "DisableKey", map[string]string{"KeyId": keyID})
+
+	// Decrypt should fail.
+	w := kmsRequest(t, svc, "Decrypt", map[string]interface{}{
+		"CiphertextBlob": ciphertext,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 decrypting with disabled key, got %d", w.Code)
+	}
+}
+
+// --- GenerateDataKey error paths ---
+
+func TestGenerateDataKey_NotFound(t *testing.T) {
+	svc := newTestService()
+	w := kmsRequest(t, svc, "GenerateDataKey", map[string]interface{}{
+		"KeyId":   "alias/nonexistent",
+		"KeySpec": "AES_256",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGenerateDataKey_DisabledKey(t *testing.T) {
+	svc := newTestService()
+	keyID := mustCreateKey(t, svc, "gdk-disabled")
+	kmsRequest(t, svc, "DisableKey", map[string]string{"KeyId": keyID})
+
+	w := kmsRequest(t, svc, "GenerateDataKey", map[string]interface{}{
+		"KeyId":   keyID,
+		"KeySpec": "AES_256",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGenerateDataKeyWithoutPlaintext_NotFound(t *testing.T) {
+	svc := newTestService()
+	w := kmsRequest(t, svc, "GenerateDataKeyWithoutPlaintext", map[string]interface{}{
+		"KeyId":   "nonexistent",
+		"KeySpec": "AES_256",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- ReEncrypt ---
+
+func TestReEncrypt_ResponseFields(t *testing.T) {
+	svc := newTestService()
+	srcID := mustCreateKey(t, svc, "reenc-fields-src")
+	dstID := mustCreateKey(t, svc, "reenc-fields-dst")
+
+	ew := kmsRequest(t, svc, "Encrypt", map[string]interface{}{
+		"KeyId":     srcID,
+		"Plaintext": []byte("reencrypt-me"),
+	})
+	var encResp map[string]interface{}
+	json.NewDecoder(ew.Body).Decode(&encResp)
+	ciphertext := encResp["CiphertextBlob"]
+
+	w := kmsRequest(t, svc, "ReEncrypt", map[string]interface{}{
+		"CiphertextBlob":   ciphertext,
+		"DestinationKeyId": dstID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("ReEncrypt: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestReEncrypt_MissingCiphertext(t *testing.T) {
+	svc := newTestService()
+	dstID := mustCreateKey(t, svc, "reenc-dst2")
+	w := kmsRequest(t, svc, "ReEncrypt", map[string]interface{}{
+		"DestinationKeyId": dstID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestReEncrypt_InvalidCiphertext(t *testing.T) {
+	svc := newTestService()
+	dstID := mustCreateKey(t, svc, "reenc-dst3")
+	w := kmsRequest(t, svc, "ReEncrypt", map[string]interface{}{
+		"CiphertextBlob":   []byte("garbage"),
+		"DestinationKeyId": dstID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestReEncrypt_DestinationNotFound(t *testing.T) {
+	svc := newTestService()
+	srcID := mustCreateKey(t, svc, "reenc-src2")
+
+	ew := kmsRequest(t, svc, "Encrypt", map[string]interface{}{
+		"KeyId":     srcID,
+		"Plaintext": []byte("data"),
+	})
+	var encResp map[string]interface{}
+	json.NewDecoder(ew.Body).Decode(&encResp)
+	ciphertext := encResp["CiphertextBlob"]
+
+	w := kmsRequest(t, svc, "ReEncrypt", map[string]interface{}{
+		"CiphertextBlob":   ciphertext,
+		"DestinationKeyId": "alias/nonexistent",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
