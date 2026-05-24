@@ -267,7 +267,13 @@ Same sidecar pattern as Phase 7 with a Valkey (Redis-compatible) container.
 
 | Work item | Status |
 |-----------|--------|
-| `CreateReplicationGroup` / `DescribeReplicationGroups` / `DeleteReplicationGroup` | |
+| `CreateReplicationGroup` / `DescribeReplicationGroups` / `DeleteReplicationGroup` | ✅ |
+| `ModifyReplicationGroup` | ✅ |
+| `IncreaseReplicaCount` / `DecreaseReplicaCount` — stubbed (return existing group, don't actually change replica count) | stub |
+
+> **Note:** `IncreaseReplicaCount` and `DecreaseReplicaCount` are stubbed to unblock TF provider v6's
+> `aws_elasticache_replication_group` apply. A full implementation would track per-node-group shard/replica
+> topology. Only implement if Forge workloads need real multi-replica behaviour locally.
 
 ---
 
