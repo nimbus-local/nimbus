@@ -50,7 +50,7 @@ func New(region string) *Service {
 func (s *Service) Name() string { return "sfn" }
 
 func (s *Service) Detect(r *http.Request) bool {
-	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonStepFunctions.")
+	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSStepFunctions.")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {

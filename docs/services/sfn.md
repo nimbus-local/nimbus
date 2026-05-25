@@ -2,7 +2,7 @@
 
 In-memory Step Functions emulator. State machine definitions (ASL JSON) are stored in memory for the lifetime of the container. Execution engine is added in Parts 2–5; this doc will be extended with execution examples at that point.
 
-Detection: `X-Amz-Target: AmazonStepFunctions.*`
+Detection: `X-Amz-Target: AWSStepFunctions.*`
 
 ## Supported operations
 

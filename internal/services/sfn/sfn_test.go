@@ -20,7 +20,7 @@ func sfnRequest(t *testing.T, svc *Service, op string, body interface{}) *httpte
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", &buf)
 	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
-	req.Header.Set("X-Amz-Target", "AmazonStepFunctions."+op)
+	req.Header.Set("X-Amz-Target", "AWSStepFunctions."+op)
 	w := httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	return w
