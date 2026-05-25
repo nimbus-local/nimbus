@@ -241,7 +241,7 @@ func main() {
 			SNSTopics           int               `json:"sns_topics"`
 			SQSQueues           int               `json:"sqs_queues"`
 			SSMParameters       int               `json:"ssm_parameters"`
-			KinesisStreams       int               `json:"kinesis_streams"`
+			KinesisStreams      int               `json:"kinesis_streams"`
 			SchedulerSchedules  int               `json:"scheduler_schedules"`
 			EventBridgeBuses    int               `json:"eventbridge_buses"`
 			SFNStateMachines    int               `json:"sfn_state_machines"`
