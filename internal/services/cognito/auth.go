@@ -130,6 +130,179 @@ func (s *Service) adminSetUserPassword(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, http.StatusOK, map[string]interface{}{})
 }
 
+func (s *Service) adminGetUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Username   string `json:"Username"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	var u *user
+	if poolUsers := s.users[req.UserPoolID]; poolUsers != nil {
+		u = poolUsers[req.Username]
+	}
+	s.mu.RUnlock()
+
+	if u == nil {
+		jsonError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist.")
+		return
+	}
+	jsonWrite(w, http.StatusOK, s.userDetail(u))
+}
+
+func (s *Service) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Username   string `json:"Username"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	poolUsers := s.users[req.UserPoolID]
+	if poolUsers == nil {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist.")
+		return
+	}
+	if _, ok := poolUsers[req.Username]; !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist.")
+		return
+	}
+	delete(poolUsers, req.Username)
+	// Remove from all groups in this pool.
+	for _, g := range s.groups[req.UserPoolID] {
+		filtered := g.members[:0]
+		for _, m := range g.members {
+			if m != req.Username {
+				filtered = append(filtered, m)
+			}
+		}
+		g.members = filtered
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) adminUpdateUserAttributes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID     string `json:"UserPoolId"`
+		Username       string `json:"Username"`
+		UserAttributes []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"UserAttributes"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	var u *user
+	if poolUsers := s.users[req.UserPoolID]; poolUsers != nil {
+		u = poolUsers[req.Username]
+	}
+	if u == nil {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist.")
+		return
+	}
+	for _, a := range req.UserAttributes {
+		u.attributes[a.Name] = a.Value
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) signUp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientID       string `json:"ClientId"`
+		Username       string `json:"Username"`
+		Password       string `json:"Password"`
+		UserAttributes []struct {
+			Name  string `json:"Name"`
+			Value string `json:"Value"`
+		} `json:"UserAttributes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "could not parse request")
+		return
+	}
+
+	s.mu.RLock()
+	c, ok := s.clients[req.ClientID]
+	s.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException", "Client does not exist.")
+		return
+	}
+
+	poolID := c.userPoolID
+	attrs := map[string]string{}
+	for _, a := range req.UserAttributes {
+		attrs[a.Name] = a.Value
+	}
+	if _, ok := attrs["email"]; !ok && strings.Contains(req.Username, "@") {
+		attrs["email"] = req.Username
+	}
+
+	s.mu.Lock()
+	if s.users[poolID] == nil {
+		s.users[poolID] = map[string]*user{}
+	}
+	if _, exists := s.users[poolID][req.Username]; exists {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "UsernameExistsException", "User already exists.")
+		return
+	}
+	sub := uid.New()
+	u := &user{
+		sub:        sub,
+		username:   req.Username,
+		password:   req.Password,
+		confirmed:  true, // auto-confirm in local mode
+		enabled:    true,
+		attributes: attrs,
+		userPoolID: poolID,
+		createdAt:  time.Now().UTC(),
+	}
+	s.users[poolID][req.Username] = u
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"UserConfirmed": true,
+		"UserSub":       sub,
+	})
+}
+
+func (s *Service) confirmSignUp(w http.ResponseWriter, r *http.Request) {
+	// Users are auto-confirmed in local mode — always succeed.
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Filter     string `json:"Filter"`
+		Limit      int    `json:"Limit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	poolUsers := s.users[req.UserPoolID]
+	users := make([]map[string]interface{}, 0, len(poolUsers))
+	for _, u := range poolUsers {
+		users = append(users, s.userDetail(u))
+	}
+	s.mu.RUnlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Users":           users,
+		"PaginationToken": "",
+	})
+}
+
 func (s *Service) initiateAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AuthFlow       string            `json:"AuthFlow"`
@@ -187,6 +360,15 @@ func (s *Service) issueTokens(w http.ResponseWriter, poolID, clientID string, pa
 	if poolUsers := s.users[poolID]; poolUsers != nil {
 		u = poolUsers[username]
 	}
+	var groupNames []string
+	for _, g := range s.groups[poolID] {
+		for _, m := range g.members {
+			if m == username {
+				groupNames = append(groupNames, g.name)
+				break
+			}
+		}
+	}
 	s.mu.RUnlock()
 
 	if u == nil || !u.enabled {
@@ -237,6 +419,9 @@ func (s *Service) issueTokens(w http.ResponseWriter, poolID, clientID string, pa
 	}
 	if email, ok := u.attributes["email"]; ok {
 		idClaims["email"] = email
+	}
+	if len(groupNames) > 0 {
+		idClaims["cognito:groups"] = groupNames
 	}
 
 	accessToken, err := signJWT(s.rsaKey, accessClaims)

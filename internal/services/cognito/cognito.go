@@ -19,12 +19,23 @@ const accountID = "000000000000"
 // All state is in-memory.
 type Service struct {
 	mu      sync.RWMutex
-	pools   map[string]*userPool        // poolID -> pool
-	clients map[string]*poolClient      // clientID -> client
-	users   map[string]map[string]*user // poolID -> username -> user
-	tokens  map[string]*tokenRecord     // jti -> record
+	pools   map[string]*userPool              // poolID -> pool
+	clients map[string]*poolClient            // clientID -> client
+	users   map[string]map[string]*user       // poolID -> username -> user
+	groups  map[string]map[string]*poolGroup  // poolID -> groupName -> group
+	tokens  map[string]*tokenRecord           // jti -> record
 	rsaKey  *rsa.PrivateKey
 	region  string
+}
+
+type poolGroup struct {
+	name             string
+	description      string
+	roleARN          string
+	precedence       int
+	members          []string // usernames
+	creationDate     time.Time
+	lastModifiedDate time.Time
 }
 
 type userPool struct {
@@ -76,6 +87,7 @@ func New(region string) *Service {
 		pools:   map[string]*userPool{},
 		clients: map[string]*poolClient{},
 		users:   map[string]map[string]*user{},
+		groups:  map[string]map[string]*poolGroup{},
 		tokens:  map[string]*tokenRecord{},
 	}
 }
@@ -146,11 +158,39 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "RevokeToken":
 		s.revokeToken(w, r)
 
-	// User management (subset needed for auth flows)
+	// User management
 	case "AdminCreateUser":
 		s.adminCreateUser(w, r)
 	case "AdminSetUserPassword":
 		s.adminSetUserPassword(w, r)
+	case "AdminGetUser":
+		s.adminGetUser(w, r)
+	case "AdminDeleteUser":
+		s.adminDeleteUser(w, r)
+	case "AdminUpdateUserAttributes":
+		s.adminUpdateUserAttributes(w, r)
+	case "SignUp":
+		s.signUp(w, r)
+	case "ConfirmSignUp":
+		s.confirmSignUp(w, r)
+	case "ListUsers":
+		s.listUsers(w, r)
+
+	// Groups
+	case "CreateGroup":
+		s.createGroup(w, r)
+	case "DeleteGroup":
+		s.deleteGroup(w, r)
+	case "GetGroup":
+		s.getGroup(w, r)
+	case "ListGroups":
+		s.listGroups(w, r)
+	case "AdminAddUserToGroup":
+		s.adminAddUserToGroup(w, r)
+	case "AdminRemoveUserFromGroup":
+		s.adminRemoveUserFromGroup(w, r)
+	case "AdminListGroupsForUser":
+		s.adminListGroupsForUser(w, r)
 
 	default:
 		jsonError(w, http.StatusBadRequest, "NotImplementedException",
@@ -290,12 +330,14 @@ func (s *Service) deleteUserPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(s.pools, req.UserPoolID)
-	// Cascade-delete clients belonging to this pool.
+	// Cascade-delete clients, users, and groups belonging to this pool.
 	for id, c := range s.clients {
 		if c.userPoolID == req.UserPoolID {
 			delete(s.clients, id)
 		}
 	}
+	delete(s.users, req.UserPoolID)
+	delete(s.groups, req.UserPoolID)
 	s.mu.Unlock()
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{})
@@ -615,6 +657,218 @@ func (s *Service) untagResource(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+// --- Groups ---
+
+func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID  string `json:"UserPoolId"`
+		GroupName   string `json:"GroupName"`
+		Description string `json:"Description"`
+		RoleARN     string `json:"RoleArn"`
+		Precedence  int    `json:"Precedence"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "could not parse request")
+		return
+	}
+	if req.GroupName == "" {
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "GroupName is required")
+		return
+	}
+
+	s.mu.Lock()
+	if _, ok := s.pools[req.UserPoolID]; !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("User pool %s does not exist.", req.UserPoolID))
+		return
+	}
+	if s.groups[req.UserPoolID] == nil {
+		s.groups[req.UserPoolID] = map[string]*poolGroup{}
+	}
+	if _, exists := s.groups[req.UserPoolID][req.GroupName]; exists {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "GroupExistsException",
+			fmt.Sprintf("Group %s already exists.", req.GroupName))
+		return
+	}
+	now := time.Now().UTC()
+	g := &poolGroup{
+		name:             req.GroupName,
+		description:      req.Description,
+		roleARN:          req.RoleARN,
+		precedence:       req.Precedence,
+		members:          []string{},
+		creationDate:     now,
+		lastModifiedDate: now,
+	}
+	s.groups[req.UserPoolID][req.GroupName] = g
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Group": groupDetail(req.UserPoolID, g),
+	})
+}
+
+func (s *Service) deleteGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		GroupName  string `json:"GroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if s.groups[req.UserPoolID] != nil {
+		delete(s.groups[req.UserPoolID], req.GroupName)
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) getGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		GroupName  string `json:"GroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	var g *poolGroup
+	if s.groups[req.UserPoolID] != nil {
+		g = s.groups[req.UserPoolID][req.GroupName]
+	}
+	s.mu.RUnlock()
+
+	if g == nil {
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Group %s does not exist.", req.GroupName))
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Group": groupDetail(req.UserPoolID, g),
+	})
+}
+
+func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Limit      int    `json:"Limit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	poolGroups := s.groups[req.UserPoolID]
+	groups := make([]map[string]interface{}, 0, len(poolGroups))
+	for _, g := range poolGroups {
+		groups = append(groups, groupDetail(req.UserPoolID, g))
+	}
+	s.mu.RUnlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Groups":    groups,
+		"NextToken": "",
+	})
+}
+
+func (s *Service) adminAddUserToGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Username   string `json:"Username"`
+		GroupName  string `json:"GroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if s.groups[req.UserPoolID] == nil {
+		s.groups[req.UserPoolID] = map[string]*poolGroup{}
+	}
+	g, ok := s.groups[req.UserPoolID][req.GroupName]
+	if !ok {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Group %s does not exist.", req.GroupName))
+		return
+	}
+	for _, m := range g.members {
+		if m == req.Username {
+			s.mu.Unlock()
+			jsonWrite(w, http.StatusOK, map[string]interface{}{})
+			return
+		}
+	}
+	g.members = append(g.members, req.Username)
+	g.lastModifiedDate = time.Now().UTC()
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) adminRemoveUserFromGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Username   string `json:"Username"`
+		GroupName  string `json:"GroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if g, ok := s.groups[req.UserPoolID][req.GroupName]; ok {
+		filtered := g.members[:0]
+		for _, m := range g.members {
+			if m != req.Username {
+				filtered = append(filtered, m)
+			}
+		}
+		g.members = filtered
+		g.lastModifiedDate = time.Now().UTC()
+	}
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) adminListGroupsForUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserPoolID string `json:"UserPoolId"`
+		Username   string `json:"Username"`
+		Limit      int    `json:"Limit"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	var found []map[string]interface{}
+	for _, g := range s.groups[req.UserPoolID] {
+		for _, m := range g.members {
+			if m == req.Username {
+				found = append(found, groupDetail(req.UserPoolID, g))
+				break
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	if found == nil {
+		found = []map[string]interface{}{}
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{
+		"Groups":    found,
+		"NextToken": "",
+	})
+}
+
+func groupDetail(poolID string, g *poolGroup) map[string]interface{} {
+	return map[string]interface{}{
+		"GroupName":        g.name,
+		"UserPoolId":       poolID,
+		"Description":      g.description,
+		"RoleArn":          g.roleARN,
+		"Precedence":       g.precedence,
+		"CreationDate":     float64(g.creationDate.Unix()),
+		"LastModifiedDate": float64(g.lastModifiedDate.Unix()),
+	}
 }
 
 // --- Helpers ---
