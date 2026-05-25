@@ -136,6 +136,30 @@ func (s *Service) fire(sch *schedule, now time.Time) {
 	go s.invokeTarget(name, targetCopy)
 }
 
+// Reset clears all schedule groups and schedules, restoring the default group.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schedules = map[string]*schedule{}
+	s.groups = map[string]*scheduleGroup{}
+	now := time.Now().UTC()
+	s.groups["default"] = &scheduleGroup{
+		name:             "default",
+		arn:              s.groupARN("default"),
+		state:            "ACTIVE",
+		creationDate:     now,
+		lastModifiedDate: now,
+		tags:             []tag{},
+	}
+}
+
+// ScheduleCount returns the number of schedules across all groups.
+func (s *Service) ScheduleCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.schedules)
+}
+
 func (s *Service) Name() string { return "scheduler" }
 
 // Detect identifies EventBridge Scheduler requests by path.

@@ -59,6 +59,15 @@ func (r *Router) HealthHandler(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, `{"status":"running","services":%s}`, r.serviceList())
 }
 
+// ServiceNames returns the names of all registered services in registration order.
+func (r *Router) ServiceNames() []string {
+	names := make([]string, len(r.services))
+	for i, svc := range r.services {
+		names[i] = svc.Name()
+	}
+	return names
+}
+
 func (r *Router) serviceList() string {
 	out := "["
 	for i, svc := range r.services {

@@ -42,11 +42,31 @@ func New(checker FunctionChecker) *Service {
 	}
 }
 
+// Reset clears all mock responses, recorded invocations, and live endpoints.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.responses = map[string]json.RawMessage{}
+	s.invocations = nil
+	s.liveEndpoints = map[string]string{}
+}
+
 // LiveEndpoint returns the registered live endpoint for the given function, if any.
 func (s *Service) LiveEndpoint(name string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.liveEndpoints[name]
+}
+
+// LiveEndpoints returns a snapshot of all registered live endpoints.
+func (s *Service) LiveEndpoints() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]string, len(s.liveEndpoints))
+	for k, v := range s.liveEndpoints {
+		out[k] = v
+	}
+	return out
 }
 
 // RegisterHandler serves POST /_nimbus/lambda/register and

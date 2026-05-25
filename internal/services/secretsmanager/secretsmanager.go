@@ -53,6 +53,20 @@ func New(region string) *Service {
 	}
 }
 
+// Reset clears all secrets.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secrets = map[string]*secret{}
+}
+
+// SecretCount returns the number of secrets.
+func (s *Service) SecretCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.secrets)
+}
+
 func (s *Service) Name() string { return "secretsmanager" }
 
 // Detect identifies Secrets Manager requests by X-Amz-Target header.

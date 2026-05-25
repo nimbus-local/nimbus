@@ -52,6 +52,20 @@ func New(region string) *Service {
 	}
 }
 
+// Reset clears all parameters.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parameters = map[string]*parameter{}
+}
+
+// ParameterCount returns the number of stored parameters.
+func (s *Service) ParameterCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.parameters)
+}
+
 func (s *Service) Name() string { return "ssm" }
 
 // Detect identifies SSM requests by X-Amz-Target header.

@@ -69,6 +69,23 @@ func New(region string) *Service {
 	}
 }
 
+// Reset clears all topics, subscriptions, and captured messages.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.topics = map[string]*topic{}
+	s.byName = map[string]string{}
+	s.subscriptions = map[string]*subscription{}
+	s.messages = nil
+}
+
+// TopicCount returns the number of topics.
+func (s *Service) TopicCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.topics)
+}
+
 func (s *Service) Name() string { return "sns" }
 
 // Detect identifies SNS requests by X-Amz-Target header or Action param.

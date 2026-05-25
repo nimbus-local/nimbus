@@ -50,6 +50,21 @@ func New(region, nimbusBaseURL string) *Service {
 	}
 }
 
+// Reset clears all state machines and executions.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stateMachines = map[string]*stateMachine{}
+	s.executions = map[string]*execution{}
+}
+
+// StateMachineCount returns the number of state machines.
+func (s *Service) StateMachineCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.stateMachines)
+}
+
 func (s *Service) Name() string { return "sfn" }
 
 func (s *Service) Detect(r *http.Request) bool {
