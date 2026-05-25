@@ -770,6 +770,7 @@ try_match "DeleteUserPool removes pool" "" \
 
 section "Kinesis"
 STREAM_NAME="$PREFIX-nimbus-stream"
+$CLI kinesis delete-stream --stream-name "$STREAM_NAME" 2>/dev/null || true
 $CLI kinesis create-stream --stream-name "$STREAM_NAME" --shard-count 2
 try_match "ListStreams contains stream" "$STREAM_NAME" \
   $CLI kinesis list-streams --query "StreamNames" --output text
@@ -807,6 +808,7 @@ try_match "DeleteStream removes stream" "" \
 
 section "Kinesis ESM"
 ESM_STREAM="$PREFIX-esm-stream"
+$CLI kinesis delete-stream --stream-name "$ESM_STREAM" 2>/dev/null || true
 $CLI kinesis create-stream --stream-name "$ESM_STREAM" --shard-count 1
 # Create ESM linking stream to the existing Lambda function
 ESM_UUID=$($CLI lambda create-event-source-mapping \
