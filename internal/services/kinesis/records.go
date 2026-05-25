@@ -166,7 +166,7 @@ func (s *Service) getShardIterator(w http.ResponseWriter, r *http.Request) {
 		offset = findSequenceOffset(sh, req.StartingSequenceNumber, true)
 	case "AT_TIMESTAMP":
 		offset = findTimestampOffset(sh, req.Timestamp)
-	// LATEST: offset stays at len(records)
+		// LATEST: offset stays at len(records)
 	}
 	sh.mu.Unlock()
 
@@ -255,10 +255,10 @@ func (s *Service) getRecords(w http.ResponseWriter, r *http.Request) {
 	nextIt := base64.StdEncoding.EncodeToString(nextRaw)
 
 	jsonhttp.Write(w, http.StatusOK, map[string]any{
-		"Records":              out,
-		"NextShardIterator":    nextIt,
-		"MillisBehindLatest":   millisBehind,
-		"ChildShards":          []any{},
+		"Records":            out,
+		"NextShardIterator":  nextIt,
+		"MillisBehindLatest": millisBehind,
+		"ChildShards":        []any{},
 	})
 }
 

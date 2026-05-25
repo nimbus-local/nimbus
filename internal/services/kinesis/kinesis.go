@@ -181,17 +181,17 @@ func shardSummaries(st *stream) []map[string]any {
 
 func streamDescription(st *stream, shards []map[string]any) map[string]any {
 	return map[string]any{
-		"StreamName":                    st.name,
-		"StreamARN":                     st.arn,
-		"StreamStatus":                  st.status,
-		"Shards":                        shards,
-		"HasMoreShards":                 false,
-		"RetentionPeriodHours":          st.retentionHours,
-		"StreamCreationTimestamp":       st.createdAt.Unix(),
-		"EnhancedMonitoring":            []map[string]any{{"ShardLevelMetrics": []string{}}},
-		"EncryptionType":                "NONE",
-		"KeyId":                         nil,
-		"StreamModeDetails":             map[string]string{"StreamMode": "PROVISIONED"},
+		"StreamName":              st.name,
+		"StreamARN":               st.arn,
+		"StreamStatus":            st.status,
+		"Shards":                  shards,
+		"HasMoreShards":           false,
+		"RetentionPeriodHours":    st.retentionHours,
+		"StreamCreationTimestamp": st.createdAt.Unix(),
+		"EnhancedMonitoring":      []map[string]any{{"ShardLevelMetrics": []string{}}},
+		"EncryptionType":          "NONE",
+		"KeyId":                   nil,
+		"StreamModeDetails":       map[string]string{"StreamMode": "PROVISIONED"},
 	}
 }
 
@@ -253,7 +253,7 @@ func (s *Service) deleteStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) listStreams(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Limit                  int    `json:"Limit"`
+		Limit                    int    `json:"Limit"`
 		ExclusiveStartStreamName string `json:"ExclusiveStartStreamName"`
 	}
 	decode(w, r, &req) // optional body
@@ -266,7 +266,7 @@ func (s *Service) listStreams(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]any{
 		"StreamNames":    names,
-		"HasMoreStreams":  false,
+		"HasMoreStreams": false,
 	})
 }
 
@@ -341,8 +341,8 @@ func (s *Service) listShards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]any{
-		"Shards":            shardSummaries(st),
-		"NextToken":         nil,
+		"Shards":    shardSummaries(st),
+		"NextToken": nil,
 	})
 }
 
@@ -420,9 +420,9 @@ func (s *Service) removeTagsFromStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) setRetention(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		StreamName             string `json:"StreamName"`
-		StreamARN              string `json:"StreamARN"`
-		RetentionPeriodHours   int    `json:"RetentionPeriodHours"`
+		StreamName           string `json:"StreamName"`
+		StreamARN            string `json:"StreamARN"`
+		RetentionPeriodHours int    `json:"RetentionPeriodHours"`
 	}
 	if !decode(w, r, &req) {
 		return
