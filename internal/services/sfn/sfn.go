@@ -88,6 +88,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getExecutionHistory(w, r)
 	case "StopExecution":
 		s.stopExecution(w, r)
+	case "ValidateStateMachineDefinition":
+		s.validateStateMachineDefinition(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", op))
@@ -520,6 +522,26 @@ func (s *Service) stopExecution(w http.ResponseWriter, r *http.Request) {
 
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"stopDate": stopDate,
+	})
+}
+
+func (s *Service) validateStateMachineDefinition(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Definition string `json:"definition"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Definition != "" && !json.Valid([]byte(req.Definition)) {
+		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+			"result":      "FAIL",
+			"diagnostics": []map[string]interface{}{{"message": "Definition is not valid JSON", "code": "SCHEMA_VALIDATION_FAILED"}},
+		})
+		return
+	}
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"result":      "OK",
+		"diagnostics": []interface{}{},
 	})
 }
 
