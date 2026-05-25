@@ -3,6 +3,7 @@ package invocation
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -59,6 +60,22 @@ func (s *Service) ClearInvocations() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.invocations = nil
+}
+
+// InvocationsHandler serves GET /_nimbus/lambda/invocations and
+// DELETE /_nimbus/lambda/invocations for test inspection.
+func (s *Service) InvocationsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		invocs := s.Invocations()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(invocs) //nolint:errcheck
+	case http.MethodDelete:
+		s.ClearInvocations()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // DirectInvoke invokes a function synchronously without going through HTTP.
