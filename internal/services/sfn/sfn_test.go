@@ -196,3 +196,149 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// --- Part 2: execution engine helpers ---
+
+// createSM is a test helper that creates a state machine and returns its ARN.
+func createSM(t *testing.T, svc *Service, name, definition string) string {
+	t.Helper()
+	w := sfnRequest(t, svc, "CreateStateMachine", map[string]interface{}{
+		"name":       name,
+		"definition": definition,
+		"roleArn":    "arn:aws:iam::000000000000:role/test",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateStateMachine: %d %s", w.Code, w.Body.String())
+	}
+	return body(t, w)["stateMachineArn"].(string)
+}
+
+// startExec starts an execution and returns its ARN, polling until done (up to 2 s).
+func startExec(t *testing.T, svc *Service, smARN, input string) string {
+	t.Helper()
+	req := map[string]interface{}{"stateMachineArn": smARN}
+	if input != "" {
+		req["input"] = input
+	}
+	w := sfnRequest(t, svc, "StartExecution", req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("StartExecution: %d %s", w.Code, w.Body.String())
+	}
+	return body(t, w)["executionArn"].(string)
+}
+
+// waitDone polls DescribeExecution until status != RUNNING (max 2 s).
+func waitDone(t *testing.T, svc *Service, execARN string) map[string]interface{} {
+	t.Helper()
+	deadline := 50 // 50 × 40 ms = 2 s
+	for i := 0; i < deadline; i++ {
+		w := sfnRequest(t, svc, "DescribeExecution", map[string]interface{}{"executionArn": execARN})
+		if w.Code != http.StatusOK {
+			t.Fatalf("DescribeExecution: %d %s", w.Code, w.Body.String())
+		}
+		b := body(t, w)
+		if b["status"] != "RUNNING" {
+			return b
+		}
+		// tiny sleep so goroutine can finish
+		var ch = make(chan struct{})
+		go func() { close(ch) }()
+		<-ch
+	}
+	t.Fatal("execution did not complete within 2 s")
+	return nil
+}
+
+// --- Part 2 tests ---
+
+func TestStartExecutionPassSucceed(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"S1","States":{"S1":{"Type":"Pass","Next":"S2"},"S2":{"Type":"Succeed"}}}`
+	smARN := createSM(t, svc, "pass-succeed", def)
+
+	execARN := startExec(t, svc, smARN, `{"x":1}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	if result["output"] != `{"x":1}` {
+		t.Errorf("expected input passed through, got %v", result["output"])
+	}
+}
+
+func TestStartExecutionFail(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"F","States":{"F":{"Type":"Fail","Error":"MyError","Cause":"test cause"}}}`
+	smARN := createSM(t, svc, "fail-sm", def)
+
+	execARN := startExec(t, svc, smARN, "")
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "FAILED" {
+		t.Fatalf("expected FAILED, got %v", result["status"])
+	}
+	if result["error"] != "MyError" {
+		t.Errorf("expected error=MyError, got %v", result["error"])
+	}
+}
+
+func TestPassWithResult(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"P","States":{"P":{"Type":"Pass","Result":{"hello":"world"},"End":true}}}`
+	smARN := createSM(t, svc, "pass-result", def)
+
+	execARN := startExec(t, svc, smARN, `{}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	if result["output"] != `{"hello":"world"}` {
+		t.Errorf("expected Result as output, got %v", result["output"])
+	}
+}
+
+func TestPassResultPath(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"P","States":{"P":{"Type":"Pass","Result":42,"ResultPath":"$.count","End":true}}}`
+	smARN := createSM(t, svc, "pass-resultpath", def)
+
+	execARN := startExec(t, svc, smARN, `{"name":"test"}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if out["name"] != "test" || out["count"] != float64(42) {
+		t.Errorf("unexpected output: %v", out)
+	}
+}
+
+func TestGetExecutionHistory(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"P","States":{"P":{"Type":"Pass","End":true}}}`
+	smARN := createSM(t, svc, "hist-sm", def)
+
+	execARN := startExec(t, svc, smARN, `{}`)
+	waitDone(t, svc, execARN)
+
+	w := sfnRequest(t, svc, "GetExecutionHistory", map[string]interface{}{"executionArn": execARN})
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetExecutionHistory: %d %s", w.Code, w.Body.String())
+	}
+	b := body(t, w)
+	events := b["events"].([]interface{})
+	if len(events) < 3 {
+		t.Errorf("expected at least 3 events (started, entered, exited/succeeded), got %d", len(events))
+	}
+	// First event must be ExecutionStarted
+	first := events[0].(map[string]interface{})
+	if first["type"] != "ExecutionStarted" {
+		t.Errorf("first event should be ExecutionStarted, got %v", first["type"])
+	}
+}

@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/nimbus-local/nimbus/internal/jsonhttp"
+	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
 // Service implements the AWS Step Functions emulator.
-// State machines are stored in-memory. Accepts any credentials — local dev tool.
+// State machines and executions are stored in-memory. Accepts any credentials — local dev tool.
 type Service struct {
 	mu            sync.RWMutex
 	stateMachines map[string]*stateMachine // keyed by ARN
+	executions    map[string]*execution    // keyed by execution ARN
 	region        string
 	account       string
 }
@@ -39,6 +41,7 @@ func New(region string) *Service {
 	}
 	return &Service{
 		stateMachines: map[string]*stateMachine{},
+		executions:    map[string]*execution{},
 		region:        region,
 		account:       defaultAccount,
 	}
@@ -74,6 +77,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.untagResource(w, r)
 	case "ListTagsForResource":
 		s.listTagsForResource(w, r)
+	case "StartExecution":
+		s.startExecution(w, r)
+	case "DescribeExecution":
+		s.describeExecution(w, r)
+	case "GetExecutionHistory":
+		s.getExecutionHistory(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", op))
@@ -90,10 +99,10 @@ func (s *Service) smARN(name string) string {
 
 func (s *Service) createStateMachine(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string            `json:"name"`
-		Definition string            `json:"definition"`
-		RoleArn    string            `json:"roleArn"`
-		Type       string            `json:"type"`
+		Name       string              `json:"name"`
+		Definition string              `json:"definition"`
+		RoleArn    string              `json:"roleArn"`
+		Type       string              `json:"type"`
 		Tags       []map[string]string `json:"tags"`
 	}
 	if !decode(w, r, &req) {
@@ -269,7 +278,7 @@ func (s *Service) listStateMachines(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) tagResource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ResourceArn string            `json:"resourceArn"`
+		ResourceArn string              `json:"resourceArn"`
 		Tags        []map[string]string `json:"tags"`
 	}
 	if !decode(w, r, &req) {
@@ -356,6 +365,123 @@ func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Execution handlers ---
+
+func (s *Service) startExecution(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StateMachineArn string `json:"stateMachineArn"`
+		Name            string `json:"name"`
+		Input           string `json:"input"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	sm := s.findSM(req.StateMachineArn)
+	if sm == nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "StateMachineDoesNotExist",
+			fmt.Sprintf("State machine does not exist: %s", req.StateMachineArn))
+		return
+	}
+
+	name := req.Name
+	if name == "" {
+		name = uid.New()
+	}
+	input := req.Input
+	if input == "" {
+		input = "{}"
+	}
+
+	execArn := s.execARN(sm.name, name)
+	now := time.Now().UTC()
+
+	exec := &execution{
+		name:      name,
+		arn:       execArn,
+		smARN:     sm.arn,
+		smName:    sm.name,
+		input:     input,
+		status:    "RUNNING",
+		startedAt: now,
+	}
+
+	s.mu.Lock()
+	s.executions[execArn] = exec
+	s.mu.Unlock()
+
+	go s.runExecution(exec, sm)
+
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"executionArn": execArn,
+		"startDate":    float64(now.UnixNano()) / 1e9,
+	})
+}
+
+func (s *Service) describeExecution(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExecutionArn string `json:"executionArn"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	exec := s.findExec(req.ExecutionArn)
+	if exec == nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "ExecutionDoesNotExist",
+			fmt.Sprintf("Execution does not exist: %s", req.ExecutionArn))
+		return
+	}
+
+	exec.mu.Lock()
+	resp := map[string]interface{}{
+		"executionArn":    exec.arn,
+		"stateMachineArn": exec.smARN,
+		"name":            exec.name,
+		"status":          exec.status,
+		"startDate":       float64(exec.startedAt.UnixNano()) / 1e9,
+		"input":           exec.input,
+	}
+	if exec.stoppedAt != nil {
+		resp["stopDate"] = float64(exec.stoppedAt.UnixNano()) / 1e9
+	}
+	if exec.output != "" {
+		resp["output"] = exec.output
+	}
+	if exec.errCode != "" {
+		resp["error"] = exec.errCode
+		resp["cause"] = exec.cause
+	}
+	exec.mu.Unlock()
+
+	jsonhttp.Write(w, http.StatusOK, resp)
+}
+
+func (s *Service) getExecutionHistory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExecutionArn string `json:"executionArn"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	exec := s.findExec(req.ExecutionArn)
+	if exec == nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "ExecutionDoesNotExist",
+			fmt.Sprintf("Execution does not exist: %s", req.ExecutionArn))
+		return
+	}
+
+	exec.mu.Lock()
+	events := make([]historyEvent, len(exec.history))
+	copy(events, exec.history)
+	exec.mu.Unlock()
+
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"events": events,
+	})
+}
+
 // --- Helpers ---
 
 // findSM looks up a state machine by ARN or by name-derived ARN.
@@ -366,12 +492,18 @@ func (s *Service) findSM(arnOrName string) *stateMachine {
 	if sm, ok := s.stateMachines[arnOrName]; ok {
 		return sm
 	}
-	// Try treating it as a name
 	derived := s.smARN(arnOrName)
 	if sm, ok := s.stateMachines[derived]; ok {
 		return sm
 	}
 	return nil
+}
+
+// findExec looks up an execution by ARN.
+func (s *Service) findExec(arn string) *execution {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.executions[arn]
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v interface{}) bool {
@@ -383,13 +515,6 @@ func decode(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	return true
 }
 
-// IDForExecution returns the execution ARN prefix for a given state machine name.
-// Used by the execution engine in later parts.
 func (s *Service) execARN(smName, execName string) string {
 	return fmt.Sprintf("arn:aws:states:%s:%s:execution:%s:%s", s.region, s.account, smName, execName)
-}
-
-// GetStateMachine returns the state machine for a given ARN (used by execution engine).
-func (s *Service) GetStateMachine(arn string) *stateMachine {
-	return s.findSM(arn)
 }
