@@ -604,28 +604,57 @@ Event buses, rules, and targets. Distinct from EventBridge Scheduler (Phase 4).
 | `CreateStateMachine` — parse and store ASL JSON definition | |
 | `DescribeStateMachine` / `UpdateStateMachine` / `DeleteStateMachine` / `ListStateMachines` | |
 | `TagResource` / `UntagResource` / `ListTagsForResource` | |
-
-### Part 2 — Execution engine (core states)
-
-| Work item | Status |
-|-----------|--------|
-| `StartExecution` — Express (synchronous) + Standard (goroutine) | |
-| `Pass` state — apply `Result` / `ResultPath` | |
-| `Task` state — invoke Lambda resource via Lambda service | |
-| `Wait` state — sleep for `Seconds` or until `Timestamp` | |
-| `Succeed` / `Fail` states | |
-| `Choice` state — evaluate conditions, branch | |
-| `DescribeExecution` / `StopExecution` | |
-| `GetExecutionHistory` — return event history list | |
-
-### Part 3 — Parallel + Map states
-
-| Work item | Status |
-|-----------|--------|
-| `Parallel` — run branches concurrently, merge results | |
-| `Map` — iterate over array, run iterator state machine per item | |
-| Terraform fixture (`sfn.tf`), smoke test section | |
+| `sfn` endpoint in `provider.tf` | |
 | Service doc + README row | |
+
+_Test_: create/describe/update/delete/list a state machine; verify definition round-trips. Smoke: `aws stepfunctions create-state-machine` + `list-state-machines`.
+
+### Part 2 — Execution scaffold + terminal states
+
+| Work item | Status |
+|-----------|--------|
+| `StartExecution` — Standard (goroutine) + Express (synchronous, awaited) | |
+| `Pass` state — pass input to output, apply `Result` / `ResultPath` | |
+| `Succeed` / `Fail` states | |
+| `DescribeExecution` / `GetExecutionHistory` | |
+
+_Test_: run a `Pass → Succeed` chain, assert status=`SUCCEEDED` and history events present. Smoke: `aws stepfunctions start-execution` + `describe-execution`.
+
+### Part 3 — Choice + Wait states
+
+| Work item | Status |
+|-----------|--------|
+| `Choice` state — evaluate StringEquals / NumericGreaterThan / BooleanEquals / And / Or / Not conditions, branch | |
+| `Wait` state — sleep `Seconds` or until `Timestamp` | |
+| `StopExecution` | |
+
+_Test_: Choice: branch on a string condition, verify correct next state. Wait: `Seconds: 1`, assert execution finishes after delay. Smoke: CLI execution with branching input.
+
+### Part 4 — Task state → Lambda invocation
+
+| Work item | Status |
+|-----------|--------|
+| `Task` state — invoke `arn:aws:lambda:…:function:{name}` via Lambda service HTTP | |
+| Error handling — `Catch` / `Retry` on task failure | |
+
+_Test_: unit-mock the Lambda HTTP call; integration test invokes a real registered function and verifies output propagated. Smoke: requires Nimbus running with Lambda registered.
+
+### Part 5 — Parallel + Map states
+
+| Work item | Status |
+|-----------|--------|
+| `Parallel` — run branches concurrently, merge results into array | |
+| `Map` — iterate over input array, run iterator state machine per item | |
+
+_Test_: Parallel: two `Pass` branches merge. Map: iterate over `[1,2,3]`, each item through a `Pass`. Smoke: CLI execution on an array input.
+
+### Part 6 — Terraform fixture, smoke tests, docs
+
+| Work item | Status |
+|-----------|--------|
+| Terraform fixture (`sfn.tf`) — state machine + execution role | |
+| Smoke test section in `smoke-test.sh` | |
+| Service doc (`docs/services/sfn.md`) already created in Part 1 — extend with execution examples | |
 
 ---
 

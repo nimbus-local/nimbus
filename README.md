@@ -80,6 +80,7 @@ volumes:
 | [CloudWatch Metrics](docs/services/cloudwatchmetrics.md) | ✅ Core | `X-Amz-Target: GraniteServiceVersion20100801.*` | PutMetricData, ListMetrics, GetMetricStatistics, GetMetricData, metric alarms (structural, always OK), tags |
 | [Cognito](docs/services/cognito.md) | ✅ Core | `X-Amz-Target: AWSCognitoIdentityProviderService.*` | User pool and client CRUD, tags — infra lifecycle for `terraform apply`; auth flows (JWT) in Phase 2 |
 | [Kinesis](docs/services/kinesis.md) | ✅ Core | `X-Amz-Target: Kinesis_20131202.*` | Stream CRUD, PutRecord/PutRecords, GetShardIterator, GetRecords — in-memory ring buffer per shard; partition key hashed to shard via MD5; Lambda ESM runner (1 s poll, full Kinesis event envelope) |
+| [Step Functions](docs/services/sfn.md) | ✅ Core | `X-Amz-Target: AWSStepFunctions.*` | CreateStateMachine / StartExecution; Pass, Succeed, Fail, Choice, Wait, Task (→Lambda), Parallel, Map; Catch + Retry |
 
 ---
 

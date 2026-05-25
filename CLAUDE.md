@@ -93,6 +93,17 @@ TF provider v6 calls update operations not needed during fresh creation. Impleme
 
 Without these, `terraform apply` on an already-provisioned environment returns 400/InvalidAction.
 
+### Step Functions — `ValidateStateMachineDefinition` pre-flight
+
+TF provider v6 calls two extra operations around `CreateStateMachine`:
+
+| Operation | When | Stub response |
+|-----------|------|---------------|
+| `ValidateStateMachineDefinition` | Before create | `{"result":"OK","diagnostics":[]}` |
+| `ListStateMachineVersions` | After create (read-back) | `{"stateMachineVersions":[]}` |
+
+A real `ValidateStateMachineDefinition` would parse the ASL and check state references — not needed for local dev since bad definitions surface as `States.Runtime` failures at execution time.
+
 ### Delete path operations (v6 calls these before deleting resources)
 
 | Service | Operation required before delete |
