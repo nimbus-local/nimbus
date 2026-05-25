@@ -173,6 +173,10 @@ func main() {
 	// Lambda invocations inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/lambda/invocations", lambdaSvc.Invocation.InvocationsHandler)
 
+	// Lambda live function registration — not AWS API, Nimbus-specific (forge dev tunnel)
+	mux.HandleFunc("/_nimbus/lambda/register", lambdaSvc.Invocation.RegisterHandler)
+	mux.HandleFunc("/_nimbus/lambda/register/", lambdaSvc.Invocation.RegisterHandler)
+
 	// ACM inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/acm/certs/", acmSvc.CertHandler)
 
