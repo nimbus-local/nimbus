@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,16 +27,91 @@ type InvocationRecord struct {
 
 // Service handles Lambda invocation operations and stores mock state.
 type Service struct {
-	mu          sync.RWMutex
-	checker     FunctionChecker
-	responses   map[string]json.RawMessage // configured mock response per function name
-	invocations []*InvocationRecord
+	mu            sync.RWMutex
+	checker       FunctionChecker
+	responses     map[string]json.RawMessage // configured mock response per function name
+	invocations   []*InvocationRecord
+	liveEndpoints map[string]string // function name → live HTTP endpoint
 }
 
 func New(checker FunctionChecker) *Service {
 	return &Service{
-		checker:   checker,
-		responses: map[string]json.RawMessage{},
+		checker:       checker,
+		responses:     map[string]json.RawMessage{},
+		liveEndpoints: map[string]string{},
+	}
+}
+
+// Reset clears all mock responses, recorded invocations, and live endpoints.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.responses = map[string]json.RawMessage{}
+	s.invocations = nil
+	s.liveEndpoints = map[string]string{}
+}
+
+// LiveEndpoint returns the registered live endpoint for the given function, if any.
+func (s *Service) LiveEndpoint(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.liveEndpoints[name]
+}
+
+// LiveEndpoints returns a snapshot of all registered live endpoints.
+func (s *Service) LiveEndpoints() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]string, len(s.liveEndpoints))
+	for k, v := range s.liveEndpoints {
+		out[k] = v
+	}
+	return out
+}
+
+// RegisterHandler serves POST /_nimbus/lambda/register and
+// DELETE /_nimbus/lambda/register/{function_name} for forge live dev.
+func (s *Service) RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var body struct {
+			FunctionName string `json:"function_name"`
+			Endpoint     string `json:"endpoint"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FunctionName == "" || body.Endpoint == "" {
+			http.Error(w, `{"message":"function_name and endpoint are required"}`, http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.liveEndpoints[body.FunctionName] = body.Endpoint
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"function_name":%q,"endpoint":%q}`, body.FunctionName, body.Endpoint)
+
+	case http.MethodDelete:
+		name := strings.TrimPrefix(r.URL.Path, "/_nimbus/lambda/register/")
+		if name == "" {
+			http.Error(w, `{"message":"function_name is required"}`, http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		delete(s.liveEndpoints, name)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+
+	case http.MethodGet:
+		s.mu.RLock()
+		out := make(map[string]string, len(s.liveEndpoints))
+		for k, v := range s.liveEndpoints {
+			out[k] = v
+		}
+		s.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out) //nolint:errcheck
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 

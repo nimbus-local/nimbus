@@ -74,6 +74,27 @@ func New(region string) *Service {
 	return svc
 }
 
+// Reset clears all captured events, rules, and targets, restoring the default bus.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
+	s.rules = map[string]*rule{}
+	s.targets = map[string][]*target{}
+	s.eventBuses = map[string]*eventBus{}
+	s.eventBuses["default"] = &eventBus{
+		Name: "default",
+		ARN:  fmt.Sprintf("arn:aws:events:%s:%s:event-bus/default", s.region, accountID),
+	}
+}
+
+// BusCount returns the number of event buses.
+func (s *Service) BusCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.eventBuses)
+}
+
 func (s *Service) Name() string { return "eventbridge" }
 
 // Detect identifies EventBridge requests by X-Amz-Target header.

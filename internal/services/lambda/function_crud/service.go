@@ -2,6 +2,8 @@ package function_crud
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/nimbus-local/nimbus/internal/uid"
@@ -23,6 +25,28 @@ func New(region, account string) *Service {
 		region:         region,
 		account:        account,
 	}
+}
+
+// Reset clears all function state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.functions = map[string]*FunctionConfig{}
+	s.versionCounter = map[string]int{}
+}
+
+// FunctionNames returns a sorted list of $LATEST function names.
+func (s *Service) FunctionNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := make([]string, 0, len(s.functions))
+	for name := range s.functions {
+		if !strings.Contains(name, ":") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // FunctionExists reports whether a $LATEST function with the given name is registered.

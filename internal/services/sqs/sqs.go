@@ -71,6 +71,21 @@ func New(region string) *Service {
 	}
 }
 
+// Reset clears all queues and their messages.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queues = map[string]*queue{}
+	s.byName = map[string]string{}
+}
+
+// QueueCount returns the number of queues.
+func (s *Service) QueueCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.queues)
+}
+
 func (s *Service) Name() string { return "sqs" }
 
 // Detect identifies SQS requests by the Action query parameter or

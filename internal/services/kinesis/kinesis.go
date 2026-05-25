@@ -60,6 +60,20 @@ func New(region string) *Service {
 	}
 }
 
+// Reset clears all streams and their records.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streams = map[string]*stream{}
+}
+
+// StreamCount returns the number of streams.
+func (s *Service) StreamCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.streams)
+}
+
 func (s *Service) Name() string { return "kinesis" }
 
 func (s *Service) Detect(r *http.Request) bool {

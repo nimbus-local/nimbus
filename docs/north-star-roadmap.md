@@ -662,27 +662,27 @@ _Test_: Parallel: two `Pass` branches merge. Map: iterate over `[1,2,3]`, each i
 
 These endpoints are not AWS-compatible — they are Nimbus-specific APIs used by forge dev tooling and test harnesses.
 
-### Part 1 — Live function registration
+### Part 1 — Live function registration ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `POST /_nimbus/lambda/register` — register `{function_name, endpoint}` for HTTP proxy invocation | |
-| `DELETE /_nimbus/lambda/register/{function_name}` — deregister | |
+| `POST /_nimbus/lambda/register` — register `{function_name, endpoint}` for HTTP proxy invocation | ✅ |
+| `DELETE /_nimbus/lambda/register/{function_name}` — deregister | ✅ |
 
-### Part 2 — State inspection + reset
-
-| Work item | Status |
-|-----------|--------|
-| `GET /_nimbus/state` — dump all in-memory state: functions, queues, topics, buses, ESMs, parameters, schedules | |
-| `POST /_nimbus/reset` — clear all in-memory state (S3 filesystem objects untouched) | |
-| Extend `GET /_nimbus/health` — include active ESM count and registered service list | |
-
-### Part 3 — forge dev tunnel verification
+### Part 2 — State inspection + reset ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| Trace full round-trip: API Gateway → Lambda emulator → live registration proxy → local handler | |
-| Document required env vars (`FORGE_AWS_ENDPOINT`, `AWS_DEFAULT_REGION`, etc.) | |
+| `GET /_nimbus/state` — dump all in-memory state: functions, queues, topics, buses, ESMs, parameters, schedules | ✅ |
+| `POST /_nimbus/reset` — clear all in-memory state (S3 filesystem objects untouched) | ✅ |
+| Extend `GET /_nimbus/health` — include active ESM count and registered service list | ✅ |
+
+### Part 3 — forge dev tunnel verification ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| Trace full round-trip: API Gateway → Lambda emulator → live registration proxy → local handler | ✅ |
+| Document required env vars (`AWS_ENDPOINT_URL`, `AWS_DEFAULT_REGION`, etc.) | ✅ |
 
 ---
 

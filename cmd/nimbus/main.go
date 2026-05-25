@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -89,10 +90,13 @@ func main() {
 	r.Register(ecr.New(cfg.DefaultRegion))
 	ecsSvc := ecs.New(cfg.DefaultRegion)
 	r.Register(ecsSvc)
-	r.Register(secretsmanager.New(cfg.DefaultRegion))
+	smSvc := secretsmanager.New(cfg.DefaultRegion)
+	r.Register(smSvc)
 	r.Register(kms.New(cfg.DefaultRegion))
-	r.Register(ssm.New(cfg.DefaultRegion))
-	r.Register(sqs.New(cfg.DefaultRegion))
+	ssmSvc := ssm.New(cfg.DefaultRegion)
+	r.Register(ssmSvc)
+	sqsSvc := sqs.New(cfg.DefaultRegion)
+	r.Register(sqsSvc)
 	snsSvc := sns.New(cfg.DefaultRegion)
 	r.Register(snsSvc)
 	nimbusBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
@@ -128,14 +132,29 @@ func main() {
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(cognito.New(cfg.DefaultRegion))
-	r.Register(sfn.New(cfg.DefaultRegion, nimbusBaseURL))
+	sfnSvc := sfn.New(cfg.DefaultRegion, nimbusBaseURL)
+	r.Register(sfnSvc)
 	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
 	// Standard endpoints
 	mux := http.NewServeMux()
-	mux.HandleFunc("/_nimbus/health", r.HealthHandler)
-	mux.HandleFunc("/_localstack/health", r.HealthHandler) // LocalStack-compatible alias
+	healthHandler := func(w http.ResponseWriter, req *http.Request) {
+		type healthResponse struct {
+			Status     string   `json:"status"`
+			Services   []string `json:"services"`
+			ActiveESMs int      `json:"active_esms"`
+		}
+		resp := healthResponse{
+			Status:     "running",
+			Services:   r.ServiceNames(),
+			ActiveESMs: lambdaSvc.EventSources.ActiveCount(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	}
+	mux.HandleFunc("/_nimbus/health", healthHandler)
+	mux.HandleFunc("/_localstack/health", healthHandler) // LocalStack-compatible alias
 
 	// CloudWatch Logs inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/logs/", cwlSvc.LogsHandler)
@@ -173,6 +192,10 @@ func main() {
 	// Lambda invocations inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/lambda/invocations", lambdaSvc.Invocation.InvocationsHandler)
 
+	// Lambda live function registration — not AWS API, Nimbus-specific (forge dev tunnel)
+	mux.HandleFunc("/_nimbus/lambda/register", lambdaSvc.Invocation.RegisterHandler)
+	mux.HandleFunc("/_nimbus/lambda/register/", lambdaSvc.Invocation.RegisterHandler)
+
 	// ACM inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/acm/certs/", acmSvc.CertHandler)
 
@@ -203,6 +226,62 @@ func main() {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+
+	// /_nimbus/state — dump in-memory state counts for all services
+	mux.HandleFunc("/_nimbus/state", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		type stateResponse struct {
+			Functions           []string          `json:"functions"`
+			LiveEndpoints       map[string]string `json:"live_endpoints"`
+			EventSourceMappings int               `json:"event_source_mappings"`
+			SNSTopics           int               `json:"sns_topics"`
+			SQSQueues           int               `json:"sqs_queues"`
+			SSMParameters       int               `json:"ssm_parameters"`
+			KinesisStreams      int               `json:"kinesis_streams"`
+			SchedulerSchedules  int               `json:"scheduler_schedules"`
+			EventBridgeBuses    int               `json:"eventbridge_buses"`
+			SFNStateMachines    int               `json:"sfn_state_machines"`
+			Secrets             int               `json:"secrets"`
+		}
+		resp := stateResponse{
+			Functions:           lambdaSvc.CRUD.FunctionNames(),
+			LiveEndpoints:       lambdaSvc.Invocation.LiveEndpoints(),
+			EventSourceMappings: lambdaSvc.EventSources.ActiveCount(),
+			SNSTopics:           snsSvc.TopicCount(),
+			SQSQueues:           sqsSvc.QueueCount(),
+			SSMParameters:       ssmSvc.ParameterCount(),
+			KinesisStreams:      kinesisSvc.StreamCount(),
+			SchedulerSchedules:  schedSvc.ScheduleCount(),
+			EventBridgeBuses:    ebSvc.BusCount(),
+			SFNStateMachines:    sfnSvc.StateMachineCount(),
+			Secrets:             smSvc.SecretCount(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+
+	// /_nimbus/reset — clear all in-memory state (S3 filesystem objects untouched)
+	mux.HandleFunc("/_nimbus/reset", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		lambdaSvc.CRUD.Reset()
+		lambdaSvc.Invocation.Reset()
+		lambdaSvc.EventSources.Reset()
+		snsSvc.Reset()
+		sqsSvc.Reset()
+		ssmSvc.Reset()
+		kinesisSvc.Reset()
+		schedSvc.Reset()
+		ebSvc.Reset()
+		sfnSvc.Reset()
+		smSvc.Reset()
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.Handle("/", r)
