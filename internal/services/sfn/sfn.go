@@ -90,6 +90,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.stopExecution(w, r)
 	case "ValidateStateMachineDefinition":
 		s.validateStateMachineDefinition(w, r)
+	case "ListStateMachineVersions":
+		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{"stateMachineVersions": []interface{}{}})
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", op))
