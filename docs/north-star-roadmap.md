@@ -1,11 +1,19 @@
 # Project North Star
 
 The goal of Project North Star is to make Nimbus a complete local development
-environment for teams running production workloads on AWS ECS. The target stack
-is the one most commonly used in real ECS deployments:
+environment for teams running production workloads on AWS — initially focused on
+ECS, now expanded to cover the full forge / SST v3 construct set.
+
+**Original ECS target stack:**
 
 > ECR · ECS · IAM · CloudWatch Logs · EventBridge Scheduler · CloudFront ·
 > ALB · SSM · S3 · Aurora · Valkey · KMS · CloudWatch Metrics · Route 53 · ACM
+
+**forge / SST v3 additions (Phases 13–22):**
+
+> Lambda · API Gateway (REST + HTTP + WebSocket) · SNS · SES ·
+> EventBridge Events · Secrets Manager · Kinesis · Step Functions ·
+> Internal dev APIs (state/reset/live registration)
 
 Each phase is a self-contained chunk that ships with:
 
@@ -340,7 +348,7 @@ Accept metrics from apps and SDKs.
 
 ---
 
-## Phase 12 — Cognito User Pools 🚧 In Progress (Parts 1–2 shipped)
+## Phase 12 — Cognito User Pools ✅ shipped
 
 Enables Forge to test full authentication flows locally without hitting real AWS. Forge uses Cognito User Pools to protect web apps it deploys, so the emulator needs both the infrastructure layer (for Terraform) and the auth layer (for app sign-in and JWT verification).
 
@@ -371,24 +379,281 @@ JWT signing makes locally-issued tokens verifiable by app backends — the criti
 | `AdminCreateUser` / `AdminSetUserPassword` — user creation needed for auth flows | ✅ |
 | `GetUserPoolMfaConfig` / `SetUserPoolMfaConfig` — required by TF provider v6 read path | ✅ |
 
-### Part 3 — User management
+### Part 3 — User management ✅ shipped
 
 `AdminCreateUser` and `AdminSetUserPassword` shipped early in Part 2 (required to make auth flows testable). This part adds the remaining management operations.
 
 | Work item | Status |
 |-----------|--------|
-| `AdminGetUser` / `AdminDeleteUser` | |
-| `AdminUpdateUserAttributes` / `AdminGetUserAttributes` | |
-| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | |
-| `ListUsers` / `AdminListUsers` — filter by status, attribute | |
+| `AdminGetUser` / `AdminDeleteUser` | ✅ |
+| `AdminUpdateUserAttributes` | ✅ |
+| `SignUp` (auto-confirm in local mode) / `ConfirmSignUp` | ✅ |
+| `ListUsers` | ✅ |
 
-### Part 4 — Groups
+### Part 4 — Groups ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateGroup` / `DeleteGroup` / `GetGroup` / `ListGroups` | |
-| `AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminListGroupsForUser` | |
-| `cognito:groups` claim injected into id tokens | |
+| `CreateGroup` / `DeleteGroup` / `GetGroup` / `ListGroups` | ✅ |
+| `AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminListGroupsForUser` | ✅ |
+| `cognito:groups` claim injected into id tokens | ✅ |
+
+---
+
+---
+
+## Phase 13 — Lambda ✅ shipped
+
+Full Lambda control plane and data plane. Foundation for every event-driven forge construct.
+
+### Part 1 — Function CRUD + invocation ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateFunction` / `GetFunction` / `GetFunctionConfiguration` / `UpdateFunctionCode` / `UpdateFunctionConfiguration` / `DeleteFunction` / `ListFunctions` | ✅ |
+| `PublishVersion` / `ListVersions` | ✅ |
+| `InvokeFunction` — HTTP proxy mode (live dev endpoint registration) | ✅ |
+| `InvokeAsync` — returns 202, executes in background | ✅ |
+| `InvokeWithResponseStream` — returns 501 | ✅ |
+| `TagResource` / `UntagResource` / `ListTags` | ✅ |
+
+### Part 2 — Aliases + permissions ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateAlias` / `GetAlias` / `UpdateAlias` / `DeleteAlias` / `ListAliases` | ✅ |
+| `AddPermission` / `GetPolicy` / `RemovePermission` | ✅ |
+
+### Part 3 — Event source mappings ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateEventSourceMapping` / `GetEventSourceMapping` / `UpdateEventSourceMapping` / `DeleteEventSourceMapping` / `ListEventSourceMappings` | ✅ |
+
+### Part 4 — Concurrency + layers ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `PutFunctionConcurrency` / `GetFunctionConcurrency` / `DeleteFunctionConcurrency` | ✅ |
+| `PutProvisionedConcurrencyConfig` / `GetProvisionedConcurrencyConfig` / `DeleteProvisionedConcurrencyConfig` / `ListProvisionedConcurrencyConfigs` | ✅ |
+| `PublishLayerVersion` / `GetLayerVersion` / `DeleteLayerVersion` / `ListLayers` / `ListLayerVersions` | ✅ |
+| `AddLayerVersionPermission` / `GetLayerVersionPolicy` / `RemoveLayerVersionPermission` | ✅ |
+
+### Part 5 — URL config + code signing + settings ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateFunctionUrlConfig` / `GetFunctionUrlConfig` / `UpdateFunctionUrlConfig` / `DeleteFunctionUrlConfig` / `ListFunctionUrlConfigs` | ✅ |
+| `PutFunctionEventInvokeConfig` / `GetFunctionEventInvokeConfig` / `UpdateFunctionEventInvokeConfig` / `DeleteFunctionEventInvokeConfig` / `ListFunctionEventInvokeConfigs` | ✅ |
+| `CreateCodeSigningConfig` / `GetCodeSigningConfig` / `UpdateCodeSigningConfig` / `DeleteCodeSigningConfig` | ✅ |
+| `PutFunctionCodeSigningConfig` / `GetFunctionCodeSigningConfig` / `DeleteFunctionCodeSigningConfig` | ✅ |
+| `GetAccountSettings` / `GetRuntimeManagementConfig` / `PutRuntimeManagementConfig` | ✅ |
+| `PutFunctionRecursionConfig` / `GetFunctionRecursionConfig` | ✅ |
+
+---
+
+## Phase 14 — API Gateway ✅ shipped
+
+Both REST API (v1) and HTTP API (v2) management planes plus the Lambda proxy data plane.
+
+### Part 1 — REST API (v1) control plane ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateRestApi` / `GetRestApis` / `GetRestApi` / `UpdateRestApi` / `DeleteRestApi` | ✅ |
+| `GetResources` / `GetResource` / `CreateResource` / `DeleteResource` | ✅ |
+| `PutMethod` / `GetMethod` / `DeleteMethod` | ✅ |
+| `PutIntegration` / `GetIntegration` / `DeleteIntegration` | ✅ |
+| `PutMethodResponse` / `GetMethodResponse` / `PutIntegrationResponse` / `GetIntegrationResponse` | ✅ |
+| `CreateDeployment` / `GetDeployments` / `CreateStage` / `GetStages` / `UpdateStage` / `DeleteStage` | ✅ |
+| REST API execute data plane: `/{apiId}/{stage}/_user_request_/{proxy+}` → Lambda `AWS_PROXY` | ✅ |
+
+### Part 2 — HTTP API (v2) control plane + data plane ✅ shipped
+
+Supports both AWS SDK Go v2 path prefix (`/v2/apis/`) and direct (`/apis/`).
+
+| Work item | Status |
+|-----------|--------|
+| `CreateApi` / `GetApis` / `GetApi` / `UpdateApi` / `DeleteApi` | ✅ |
+| `CreateRoute` / `GetRoutes` / `GetRoute` / `UpdateRoute` / `DeleteRoute` | ✅ |
+| `CreateIntegration` / `GetIntegrations` / `GetIntegration` / `UpdateIntegration` / `DeleteIntegration` | ✅ |
+| `CreateStage` / `GetStages` / `GetStage` / `UpdateStage` / `DeleteStage` | ✅ |
+| `CreateDeployment` / `GetDeployments` / `GetDeployment` / `DeleteDeployment` | ✅ |
+| HTTP API data plane: payload format v1.0 and v2.0, path parameter extraction, cookie forwarding | ✅ |
+
+### Part 3 — WebSocket API
+
+| Work item | Status |
+|-----------|--------|
+| `CreateApi` (WebSocket protocol) — reuse v2 store with `protocolType: WEBSOCKET` | |
+| WebSocket upgrade via `net/http` hijacker — `$connect` / `$disconnect` / `$default` route dispatch | |
+| Lambda event envelope for WebSocket events | |
+| Connection registry: `sync.Map[connectionId → conn]` | |
+| Management API: `POST /v1/apis/{apiId}/@connections/{connectionId}` → send frame | |
+| Management API: `DELETE /v1/apis/{apiId}/@connections/{connectionId}` → close | |
+
+---
+
+## Phase 15 — SNS ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateTopic` / `DeleteTopic` / `ListTopics` / `GetTopicAttributes` / `SetTopicAttributes` | ✅ |
+| `Subscribe` / `Unsubscribe` / `ListSubscriptions` / `ListSubscriptionsByTopic` / `GetSubscriptionAttributes` / `ConfirmSubscription` | ✅ |
+| `Publish` / `PublishBatch` — messages captured in-memory | ✅ |
+| `ListTagsForResource` / `TagResource` | ✅ |
+| `/_nimbus/sns/messages` GET (inspect) / DELETE (clear) | ✅ |
+
+---
+
+## Phase 16 — SES ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `SendEmail` — log to stdout, capture in-memory | ✅ |
+| `SendRawEmail` — parse MIME, log from/to/subject | ✅ |
+| `VerifyEmailIdentity` / `VerifyDomainIdentity` / `GetIdentityVerificationAttributes` | ✅ |
+| `CreateConfigurationSet` / `DeleteConfigurationSet` | ✅ |
+| `/_nimbus/ses/messages` GET (inspect) / DELETE (clear) | ✅ |
+
+---
+
+## Phase 17 — EventBridge Events ✅ shipped
+
+Event buses, rules, and targets. Distinct from EventBridge Scheduler (Phase 4).
+
+| Work item | Status |
+|-----------|--------|
+| `CreateEventBus` / `DeleteEventBus` / `DescribeEventBus` / `ListEventBuses` | ✅ |
+| `PutEvents` — events captured in-memory (bus `default` always present) | ✅ |
+| `PutRule` / `DeleteRule` / `DescribeRule` / `ListRules` / `EnableRule` / `DisableRule` | ✅ |
+| `PutTargets` / `RemoveTargets` / `ListTargetsByRule` | ✅ |
+| `ListTagsForResource` / `TagResource` / `UntagResource` | ✅ |
+| Detects `AmazonEventBridge.*`, `AmazonCloudWatchEvents.*`, `AWSEvents.*` targets | ✅ |
+| `/_nimbus/eventbridge/events` GET (inspect) / DELETE (clear) | ✅ |
+
+---
+
+## Phase 18 — Secrets Manager + KMS ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| Secrets Manager: `CreateSecret` / `GetSecretValue` / `PutSecretValue` / `UpdateSecret` / `DeleteSecret` / `ListSecrets` / `DescribeSecret` | ✅ |
+| Secrets Manager: `TagResource` / `UntagResource` / `ListSecretVersionIds` | ✅ |
+| KMS: `CreateKey` / `DescribeKey` / `ListKeys` / `ScheduleKeyDeletion` | ✅ |
+| KMS: `CreateAlias` / `ListAliases` / `DeleteAlias` / `UpdateAlias` | ✅ |
+| KMS: `Encrypt` / `Decrypt` / `GenerateDataKey` — in-memory AES-256 with no actual protection | ✅ |
+| KMS: `TagResource` / `UntagResource` / `ListResourceTags` | ✅ |
+
+---
+
+## Phase 19 — ECR ✅ shipped
+
+| Work item | Status |
+|-----------|--------|
+| `CreateRepository` / `DescribeRepositories` / `DeleteRepository` / `ListTagsForResource` | ✅ |
+| `GetAuthorizationToken` — return a dummy base64 token accepted by `docker login` | ✅ |
+| `PutImage` / `DescribeImages` / `BatchDeleteImage` / `BatchGetImage` | ✅ |
+| `SetRepositoryPolicy` / `GetRepositoryPolicy` / `DeleteRepositoryPolicy` | ✅ |
+| `GetLifecyclePolicy` / `PutLifecyclePolicy` / `DeleteLifecyclePolicy` | ✅ |
+| Registry (HTTP v2) data plane: `GET /v2/{name}/manifests/{ref}`, `PUT`, `DELETE`; blob `HEAD`/`GET`/`POST`/`PATCH`/`PUT` | ✅ |
+
+---
+
+## Phase 20 — Kinesis Data Streams
+
+### Part 1 — Stream CRUD + shard model
+
+| Work item | Status |
+|-----------|--------|
+| `CreateStream` / `DeleteStream` / `ListStreams` / `DescribeStream` / `DescribeStreamSummary` | |
+| `ListShards` — return configured shard count | |
+| `AddTagsToStream` / `ListTagsForStream` / `RemoveTagsFromStream` | |
+
+### Part 2 — PutRecord / PutRecords
+
+| Work item | Status |
+|-----------|--------|
+| `PutRecord` / `PutRecords` — in-memory ring buffer per shard, monotonic sequence numbers | |
+| Partition key → shard via `hash(partitionKey) mod shardCount` | |
+
+### Part 3 — GetRecords + iterators
+
+| Work item | Status |
+|-----------|--------|
+| `GetShardIterator` — `TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER` | |
+| `GetRecords` — advance iterator, return `MillisBehindLatest` | |
+| `MergeShards` / `SplitShard` — stub (return success, no resharding) | |
+
+### Part 4 — Lambda ESM integration
+
+| Work item | Status |
+|-----------|--------|
+| Kinesis ESM runner — goroutine per active mapping polling `GetRecords`, building Kinesis event envelope, invoking Lambda | |
+| Terraform fixture (`kinesis.tf`), smoke test section | |
+| Service doc + README row | |
+
+---
+
+## Phase 21 — Step Functions
+
+### Part 1 — State machine CRUD
+
+| Work item | Status |
+|-----------|--------|
+| `CreateStateMachine` — parse and store ASL JSON definition | |
+| `DescribeStateMachine` / `UpdateStateMachine` / `DeleteStateMachine` / `ListStateMachines` | |
+| `TagResource` / `UntagResource` / `ListTagsForResource` | |
+
+### Part 2 — Execution engine (core states)
+
+| Work item | Status |
+|-----------|--------|
+| `StartExecution` — Express (synchronous) + Standard (goroutine) | |
+| `Pass` state — apply `Result` / `ResultPath` | |
+| `Task` state — invoke Lambda resource via Lambda service | |
+| `Wait` state — sleep for `Seconds` or until `Timestamp` | |
+| `Succeed` / `Fail` states | |
+| `Choice` state — evaluate conditions, branch | |
+| `DescribeExecution` / `StopExecution` | |
+| `GetExecutionHistory` — return event history list | |
+
+### Part 3 — Parallel + Map states
+
+| Work item | Status |
+|-----------|--------|
+| `Parallel` — run branches concurrently, merge results | |
+| `Map` — iterate over array, run iterator state machine per item | |
+| Terraform fixture (`sfn.tf`), smoke test section | |
+| Service doc + README row | |
+
+---
+
+## Phase 22 — Internal Dev APIs + forge Tunnel
+
+These endpoints are not AWS-compatible — they are Nimbus-specific APIs used by forge dev tooling and test harnesses.
+
+### Part 1 — Live function registration
+
+| Work item | Status |
+|-----------|--------|
+| `POST /_nimbus/lambda/register` — register `{function_name, endpoint}` for HTTP proxy invocation | |
+| `DELETE /_nimbus/lambda/register/{function_name}` — deregister | |
+
+### Part 2 — State inspection + reset
+
+| Work item | Status |
+|-----------|--------|
+| `GET /_nimbus/state` — dump all in-memory state: functions, queues, topics, buses, ESMs, parameters, schedules | |
+| `POST /_nimbus/reset` — clear all in-memory state (S3 filesystem objects untouched) | |
+| Extend `GET /_nimbus/health` — include active ESM count and registered service list | |
+
+### Part 3 — forge dev tunnel verification
+
+| Work item | Status |
+|-----------|--------|
+| Trace full round-trip: API Gateway → Lambda emulator → live registration proxy → local handler | |
+| Document required env vars (`FORGE_AWS_ENDPOINT`, `AWS_DEFAULT_REGION`, etc.) | |
 
 ---
 

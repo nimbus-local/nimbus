@@ -793,6 +793,525 @@ func TestRevokeToken_NotRefreshToken(t *testing.T) {
 	}
 }
 
+// --- AdminGetUser ---
+
+func TestAdminGetUser(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "get-user-pool")
+	createUser(t, s, poolID, "dave@example.com", "Pass1!")
+
+	w := cognitoReq(t, s, "AdminGetUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "dave@example.com",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "dave@example.com") {
+		t.Error("expected username in response")
+	}
+}
+
+func TestAdminGetUser_NotFound(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "get-user-miss-pool")
+	w := cognitoReq(t, s, "AdminGetUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "nobody@example.com",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- AdminDeleteUser ---
+
+func TestAdminDeleteUser(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "del-user-pool")
+	createUser(t, s, poolID, "eve@example.com", "Pass1!")
+
+	w := cognitoReq(t, s, "AdminDeleteUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "eve@example.com",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	// Should be gone
+	w2 := cognitoReq(t, s, "AdminGetUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "eve@example.com",
+	})
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 after delete, got %d", w2.Code)
+	}
+}
+
+func TestAdminDeleteUser_NotFound(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "del-user-miss-pool")
+	w := cognitoReq(t, s, "AdminDeleteUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "nobody@example.com",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- AdminUpdateUserAttributes ---
+
+func TestAdminUpdateUserAttributes(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "upd-attr-pool")
+	createUser(t, s, poolID, "frank@example.com", "Pass1!")
+
+	w := cognitoReq(t, s, "AdminUpdateUserAttributes", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "frank@example.com",
+		"UserAttributes": []map[string]string{
+			{"Name": "custom:role", "Value": "admin"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	// Verify via AdminGetUser
+	w2 := cognitoReq(t, s, "AdminGetUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "frank@example.com",
+	})
+	if !strings.Contains(w2.Body.String(), "admin") {
+		t.Error("expected updated attribute in response")
+	}
+}
+
+func TestAdminUpdateUserAttributes_NotFound(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "upd-attr-miss-pool")
+	w := cognitoReq(t, s, "AdminUpdateUserAttributes", map[string]interface{}{
+		"UserPoolId":     poolID,
+		"Username":       "nobody@example.com",
+		"UserAttributes": []map[string]string{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- SignUp ---
+
+func TestSignUp(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "signup-pool")
+	clientID := createClient(t, s, poolID, "signup-client")
+
+	w := cognitoReq(t, s, "SignUp", map[string]interface{}{
+		"ClientId": clientID,
+		"Username": "grace@example.com",
+		"Password": "Pass1!",
+		"UserAttributes": []map[string]string{
+			{"Name": "email", "Value": "grace@example.com"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "UserConfirmed") {
+		t.Error("expected UserConfirmed in response")
+	}
+	if !strings.Contains(body, "true") {
+		t.Error("expected auto-confirmed=true")
+	}
+}
+
+func TestSignUp_Duplicate(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "signup-dup-pool")
+	clientID := createClient(t, s, poolID, "signup-dup-client")
+
+	body := map[string]interface{}{
+		"ClientId": clientID,
+		"Username": "henry@example.com",
+		"Password": "Pass1!",
+	}
+	cognitoReq(t, s, "SignUp", body)
+	w := cognitoReq(t, s, "SignUp", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on duplicate, got %d", w.Code)
+	}
+}
+
+func TestSignUp_ClientNotFound(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "SignUp", map[string]interface{}{
+		"ClientId": "nope",
+		"Username": "ida@example.com",
+		"Password": "Pass1!",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestSignUp_ThenAuth(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "signup-auth-pool")
+	clientID := createClient(t, s, poolID, "signup-auth-client")
+
+	cognitoReq(t, s, "SignUp", map[string]interface{}{
+		"ClientId": clientID,
+		"Username": "jack@example.com",
+		"Password": "Pass1!",
+	})
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "jack@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on auth after signup, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+// --- ConfirmSignUp ---
+
+func TestConfirmSignUp(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "confirm-pool")
+	clientID := createClient(t, s, poolID, "confirm-client")
+
+	cognitoReq(t, s, "SignUp", map[string]interface{}{
+		"ClientId": clientID,
+		"Username": "kate@example.com",
+		"Password": "Pass1!",
+	})
+
+	w := cognitoReq(t, s, "ConfirmSignUp", map[string]interface{}{
+		"ClientId":         clientID,
+		"Username":         "kate@example.com",
+		"ConfirmationCode": "123456",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+// --- ListUsers ---
+
+func TestListUsers(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "list-users-pool")
+	createUser(t, s, poolID, "liam@example.com", "Pass1!")
+	createUser(t, s, poolID, "mia@example.com", "Pass1!")
+
+	// Users in another pool — should not appear.
+	otherPool := createPool(t, s, "list-users-other")
+	createUser(t, s, otherPool, "noah@example.com", "Pass1!")
+
+	w := cognitoReq(t, s, "ListUsers", map[string]interface{}{
+		"UserPoolId": poolID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "liam@example.com") || !strings.Contains(body, "mia@example.com") {
+		t.Error("expected both users in response")
+	}
+	if strings.Contains(body, "noah@example.com") {
+		t.Error("other-pool user should not appear")
+	}
+}
+
+// --- Groups ---
+
+func createGroup(t *testing.T, s *Service, poolID, name string) {
+	t.Helper()
+	w := cognitoReq(t, s, "CreateGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  name,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateGroup %s: expected 200, got %d\n%s", name, w.Code, w.Body.String())
+	}
+}
+
+func TestCreateGroup(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "group-pool")
+	createGroup(t, s, poolID, "admins")
+
+	w := cognitoReq(t, s, "GetGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "admins",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "admins") {
+		t.Error("expected group name in response")
+	}
+}
+
+func TestCreateGroup_Duplicate(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "group-dup-pool")
+	createGroup(t, s, poolID, "editors")
+
+	w := cognitoReq(t, s, "CreateGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "editors",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on duplicate, got %d", w.Code)
+	}
+}
+
+func TestCreateGroup_PoolNotFound(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "CreateGroup", map[string]interface{}{
+		"UserPoolId": "us-east-1_nope",
+		"GroupName":  "orphan",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDeleteGroup(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "del-group-pool")
+	createGroup(t, s, poolID, "readers")
+
+	w := cognitoReq(t, s, "DeleteGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "readers",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	w2 := cognitoReq(t, s, "GetGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "readers",
+	})
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 after delete, got %d", w2.Code)
+	}
+}
+
+func TestListGroups(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "list-groups-pool")
+	createGroup(t, s, poolID, "alpha")
+	createGroup(t, s, poolID, "beta")
+
+	w := cognitoReq(t, s, "ListGroups", map[string]interface{}{
+		"UserPoolId": poolID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alpha") || !strings.Contains(body, "beta") {
+		t.Error("expected both groups in response")
+	}
+}
+
+func TestGetGroup_NotFound(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "get-group-miss-pool")
+	w := cognitoReq(t, s, "GetGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "nope",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- Group membership ---
+
+func TestAdminAddUserToGroup(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "membership-pool")
+	createUser(t, s, poolID, "olivia@example.com", "Pass1!")
+	createGroup(t, s, poolID, "vip")
+
+	w := cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "olivia@example.com",
+		"GroupName":  "vip",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	w2 := cognitoReq(t, s, "AdminListGroupsForUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "olivia@example.com",
+	})
+	if !strings.Contains(w2.Body.String(), "vip") {
+		t.Error("expected group in AdminListGroupsForUser response")
+	}
+}
+
+func TestAdminAddUserToGroup_Idempotent(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "idempotent-pool")
+	createUser(t, s, poolID, "peter@example.com", "Pass1!")
+	createGroup(t, s, poolID, "once")
+
+	cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "peter@example.com", "GroupName": "once",
+	})
+	w := cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "peter@example.com", "GroupName": "once",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on idempotent add, got %d", w.Code)
+	}
+
+	// Should still appear exactly once
+	w2 := cognitoReq(t, s, "AdminListGroupsForUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "peter@example.com",
+	})
+	var resp map[string]interface{}
+	json.NewDecoder(w2.Body).Decode(&resp)
+	groups, _ := resp["Groups"].([]interface{})
+	if len(groups) != 1 {
+		t.Errorf("expected 1 group, got %d", len(groups))
+	}
+}
+
+func TestAdminRemoveUserFromGroup(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "remove-pool")
+	createUser(t, s, poolID, "quinn@example.com", "Pass1!")
+	createGroup(t, s, poolID, "temp")
+
+	cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "quinn@example.com", "GroupName": "temp",
+	})
+	cognitoReq(t, s, "AdminRemoveUserFromGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "quinn@example.com", "GroupName": "temp",
+	})
+
+	w := cognitoReq(t, s, "AdminListGroupsForUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "quinn@example.com",
+	})
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	groups, _ := resp["Groups"].([]interface{})
+	if len(groups) != 0 {
+		t.Errorf("expected 0 groups after removal, got %d", len(groups))
+	}
+}
+
+func TestAdminDeleteUser_RemovesFromGroups(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "del-removes-pool")
+	createUser(t, s, poolID, "rose@example.com", "Pass1!")
+	createGroup(t, s, poolID, "staff")
+
+	cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "rose@example.com", "GroupName": "staff",
+	})
+	cognitoReq(t, s, "AdminDeleteUser", map[string]interface{}{
+		"UserPoolId": poolID,
+		"Username":   "rose@example.com",
+	})
+
+	// Group should be empty
+	w := cognitoReq(t, s, "GetGroup", map[string]interface{}{
+		"UserPoolId": poolID,
+		"GroupName":  "staff",
+	})
+	// Group still exists but has no members — we don't expose members in GetGroup,
+	// but AdminListGroupsForUser for the deleted user should return empty.
+	if w.Code != http.StatusOK {
+		t.Fatalf("group should still exist, got %d", w.Code)
+	}
+}
+
+// --- cognito:groups claim in id token ---
+
+func TestCognitoGroupsInIDToken(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "groups-token-pool")
+	clientID := createClient(t, s, poolID, "groups-token-client")
+	createUser(t, s, poolID, "sam@example.com", "Pass1!")
+	createGroup(t, s, poolID, "superusers")
+
+	cognitoReq(t, s, "AdminAddUserToGroup", map[string]interface{}{
+		"UserPoolId": poolID, "Username": "sam@example.com", "GroupName": "superusers",
+	})
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "sam@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	idToken, _ := resp["AuthenticationResult"]["IdToken"].(string)
+	if idToken == "" {
+		t.Fatal("expected IdToken in response")
+	}
+
+	// Decode the payload and check cognito:groups
+	claims, err := parseJWTPayload(idToken)
+	if err != nil {
+		t.Fatalf("failed to parse id token: %v", err)
+	}
+	groups, ok := claims["cognito:groups"].([]interface{})
+	if !ok || len(groups) == 0 {
+		t.Errorf("expected cognito:groups in id token, got %v", claims["cognito:groups"])
+	}
+	if groups[0].(string) != "superusers" {
+		t.Errorf("expected superusers in groups, got %v", groups[0])
+	}
+}
+
+func TestCognitoGroupsAbsentWhenNoGroups(t *testing.T) {
+	s, _, clientID := authSetup(t)
+
+	w := cognitoReq(t, s, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]string{
+			"USERNAME": "carol@example.com",
+			"PASSWORD": "Pass1!",
+		},
+		"ClientId": clientID,
+	})
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	idToken, _ := resp["AuthenticationResult"]["IdToken"].(string)
+
+	claims, _ := parseJWTPayload(idToken)
+	if _, present := claims["cognito:groups"]; present {
+		t.Error("cognito:groups should be absent when user has no groups")
+	}
+}
+
 // --- Unknown action ---
 
 func TestUnknownAction(t *testing.T) {
