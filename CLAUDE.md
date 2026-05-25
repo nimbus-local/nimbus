@@ -93,6 +93,10 @@ TF provider v6 calls update operations not needed during fresh creation. Impleme
 
 Without these, `terraform apply` on an already-provisioned environment returns 400/InvalidAction.
 
+### Step Functions — `ValidateStateMachineDefinition` pre-flight
+
+TF provider v6 calls `ValidateStateMachineDefinition` before `CreateStateMachine`. Nimbus stubs it to return `{"result":"OK","diagnostics":[]}` for any valid-JSON definition, which is enough to satisfy the provider. A real implementation would parse the ASL and validate state references, type fields, etc. — not needed for local dev.
+
 ### Delete path operations (v6 calls these before deleting resources)
 
 | Service | Operation required before delete |
