@@ -37,9 +37,28 @@ type aslState struct {
 	Timestamp     string `json:"Timestamp"`
 	TimestampPath string `json:"TimestampPath"`
 
+	// Task
+	Resource        string        `json:"Resource"`
+	TimeoutSeconds  int           `json:"TimeoutSeconds"`
+	Retry           []retryConfig `json:"Retry"`
+	Catch           []catchConfig `json:"Catch"`
+
 	// Routing
 	Next string `json:"Next"`
 	End  bool   `json:"End"`
+}
+
+type retryConfig struct {
+	ErrorEquals     []string `json:"ErrorEquals"`
+	IntervalSeconds int      `json:"IntervalSeconds"`
+	MaxAttempts     int      `json:"MaxAttempts"`
+	BackoffRate     float64  `json:"BackoffRate"`
+}
+
+type catchConfig struct {
+	ErrorEquals []string        `json:"ErrorEquals"`
+	Next        string          `json:"Next"`
+	ResultPath  json.RawMessage `json:"ResultPath"`
 }
 
 type choiceRule struct {
@@ -52,12 +71,12 @@ type choiceRule struct {
 	Variable string `json:"Variable"`
 
 	// String comparisons (literal value)
-	StringEquals             *string `json:"StringEquals"`
-	StringLessThan           *string `json:"StringLessThan"`
-	StringGreaterThan        *string `json:"StringGreaterThan"`
-	StringLessThanEquals     *string `json:"StringLessThanEquals"`
-	StringGreaterThanEquals  *string `json:"StringGreaterThanEquals"`
-	StringMatches            *string `json:"StringMatches"`
+	StringEquals            *string `json:"StringEquals"`
+	StringLessThan          *string `json:"StringLessThan"`
+	StringGreaterThan       *string `json:"StringGreaterThan"`
+	StringLessThanEquals    *string `json:"StringLessThanEquals"`
+	StringGreaterThanEquals *string `json:"StringGreaterThanEquals"`
+	StringMatches           *string `json:"StringMatches"`
 
 	// Numeric comparisons
 	NumericEquals            *float64 `json:"NumericEquals"`

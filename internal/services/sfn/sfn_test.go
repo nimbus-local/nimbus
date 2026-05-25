@@ -11,7 +11,7 @@ import (
 )
 
 func newTestService() *Service {
-	return New("us-east-1")
+	return New("us-east-1", "")
 }
 
 func sfnRequest(t *testing.T, svc *Service, op string, body interface{}) *httptest.ResponseRecorder {
@@ -355,7 +355,10 @@ func TestChoiceNumeric(t *testing.T) {
 		`"Mid":{"Type":"Pass","Result":"mid","End":true}}}`
 	smARN := createSM(t, svc, "choice-num", def)
 
-	for _, tc := range []struct{ n int; want string }{{20, `"big"`}, {-1, `"neg"`}, {5, `"mid"`}} {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{{20, `"big"`}, {-1, `"neg"`}, {5, `"mid"`}} {
 		input := fmt.Sprintf(`{"n":%d}`, tc.n)
 		e := startExec(t, svc, smARN, input)
 		r := waitDone(t, svc, e)
@@ -377,7 +380,10 @@ func TestChoiceAndOr(t *testing.T) {
 		`"Neither":{"Type":"Pass","Result":"neither","End":true}}}`
 	smARN := createSM(t, svc, "choice-andor", def)
 
-	for _, tc := range []struct{ a, b bool; want string }{
+	for _, tc := range []struct {
+		a, b bool
+		want string
+	}{
 		{true, true, `"both"`},
 		{true, false, `"either"`},
 		{false, false, `"neither"`},
@@ -456,5 +462,117 @@ func TestGetExecutionHistory(t *testing.T) {
 	first := events[0].(map[string]interface{})
 	if first["type"] != "ExecutionStarted" {
 		t.Errorf("first event should be ExecutionStarted, got %v", first["type"])
+	}
+}
+
+// --- Part 4 tests ---
+
+func TestTaskStateLambdaSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer srv.Close()
+
+	svc := New("us-east-1", srv.URL)
+	def := `{"StartAt":"T","States":{"T":{"Type":"Task","Resource":"arn:aws:lambda:us-east-1:000000000000:function:my-fn","End":true}}}`
+	smARN := createSM(t, svc, "task-success", def)
+
+	execARN := startExec(t, svc, smARN, `{"x":1}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v (cause: %v)", result["status"], result["cause"])
+	}
+	if result["output"] != `{"result":"ok"}` {
+		t.Errorf("expected lambda output, got %v", result["output"])
+	}
+}
+
+func TestTaskStateLambdaResultPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`42`))
+	}))
+	defer srv.Close()
+
+	svc := New("us-east-1", srv.URL)
+	def := `{"StartAt":"T","States":{"T":{"Type":"Task","Resource":"arn:aws:lambda:us-east-1:000000000000:function:fn","ResultPath":"$.computed","End":true}}}`
+	smARN := createSM(t, svc, "task-resultpath", def)
+
+	execARN := startExec(t, svc, smARN, `{"name":"test"}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out["name"] != "test" || out["computed"] != float64(42) {
+		t.Errorf("unexpected output: %v", out)
+	}
+}
+
+func TestTaskStateLambdaCatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Amz-Function-Error", "States.TaskFailed")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"errorMessage":"boom"}`))
+	}))
+	defer srv.Close()
+
+	svc := New("us-east-1", srv.URL)
+	def := `{"StartAt":"T","States":{` +
+		`"T":{"Type":"Task","Resource":"arn:aws:lambda:us-east-1:000000000000:function:fn",` +
+		`"Catch":[{"ErrorEquals":["States.ALL"],"Next":"Caught","ResultPath":"$.err"}]},` +
+		`"Caught":{"Type":"Succeed"}}}`
+	smARN := createSM(t, svc, "task-catch", def)
+
+	execARN := startExec(t, svc, smARN, `{"input":1}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED via Catch, got %v", result["status"])
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := out["err"]; !ok {
+		t.Errorf("expected err field from Catch ResultPath, got %v", out)
+	}
+}
+
+func TestTaskStateLambdaRetryThenSucceed(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.Header().Set("X-Amz-Function-Error", "States.TaskFailed")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`"transient error"`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`"success"`))
+	}))
+	defer srv.Close()
+
+	svc := New("us-east-1", srv.URL)
+	def := `{"StartAt":"T","States":{"T":{"Type":"Task","Resource":"arn:aws:lambda:us-east-1:000000000000:function:fn",` +
+		`"Retry":[{"ErrorEquals":["States.TaskFailed"],"IntervalSeconds":0,"MaxAttempts":3,"BackoffRate":1}],` +
+		`"End":true}}}`
+	smARN := createSM(t, svc, "task-retry", def)
+
+	execARN := startExec(t, svc, smARN, `{}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED after retry, got %v", result["status"])
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
 	}
 }

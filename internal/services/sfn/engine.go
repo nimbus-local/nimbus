@@ -1,9 +1,13 @@
 package sfn
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -223,6 +227,39 @@ func (s *Service) runExecution(exec *execution, sm *stateMachine) {
 			}
 			stateName = state.Next
 
+		case "Task":
+			output, next, end, taskErr, taskCause := s.runTask(exec.ctx, state, current)
+			if taskErr != "" {
+				// Try Catch
+				if catchNext, catchInput := applyCatch(state.Catch, taskErr, taskCause, current); catchNext != "" {
+					exec.addEvent("TaskStateExited", map[string]interface{}{
+						"stateExitedEventDetails": map[string]interface{}{
+							"name":          stateName,
+							"output":        string(catchInput),
+							"outputDetails": map[string]interface{}{"included": true, "truncated": false},
+						},
+					})
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				exec.failExec(taskErr, taskCause)
+				return
+			}
+			exec.addEvent("TaskStateExited", map[string]interface{}{
+				"stateExitedEventDetails": map[string]interface{}{
+					"name":          stateName,
+					"output":        string(output),
+					"outputDetails": map[string]interface{}{"included": true, "truncated": false},
+				},
+			})
+			if end {
+				exec.succeed(string(output))
+				return
+			}
+			current = output
+			stateName = next
+
 		default:
 			exec.failExec("States.Runtime", fmt.Sprintf("unsupported state type: %s", state.Type))
 			return
@@ -280,7 +317,207 @@ func enteredEvent(stateType string) string {
 		return "WaitStateEntered"
 	case "Choice":
 		return "ChoiceStateEntered"
+	case "Task":
+		return "TaskStateEntered"
 	default:
 		return stateType + "StateEntered"
 	}
+}
+
+// runTask invokes a Lambda function and returns (output, next, end, errCode, cause).
+// errCode is non-empty on failure; retry logic is applied internally.
+func (s *Service) runTask(ctx context.Context, state *aslState, input json.RawMessage) (output json.RawMessage, next string, end bool, errCode, cause string) {
+	funcName := lambdaFuncName(state.Resource)
+	if funcName == "" {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("unsupported Task resource: %s", state.Resource)
+	}
+
+	// Apply InputPath to get effective task input.
+	effective, err := jsonPath(input, state.InputPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("InputPath: %s", err)
+	}
+
+	timeout := state.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 60
+	}
+
+	// Determine max attempts and retry configs.
+	var lastErr, lastCause string
+	maxAttempts := 1 // 1 = first attempt, no retries by default
+	if len(state.Retry) > 0 {
+		// Use the highest MaxAttempts across all retry configs as an upper bound.
+		// (Real SFN applies per-error retry configs, but this covers the common case.)
+		for _, rc := range state.Retry {
+			ma := rc.MaxAttempts
+			if ma <= 0 {
+				ma = 3
+			}
+			if ma+1 > maxAttempts {
+				maxAttempts = ma + 1
+			}
+		}
+	}
+
+	var attempt int
+	for attempt = 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Compute backoff delay from matching retry config.
+			delay := retryDelay(state.Retry, lastErr, attempt)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, "", false, "States.Runtime", "execution aborted"
+			}
+		}
+
+		result, invokeErr, invokeCause := s.invokeLambda(ctx, funcName, effective, timeout)
+		if invokeErr == "" {
+			// Success — apply ResultPath and OutputPath.
+			merged, err := applyResultPath(input, result, state.ResultPath)
+			if err != nil {
+				return nil, "", false, "States.Runtime", fmt.Sprintf("ResultPath: %s", err)
+			}
+			final, err := jsonPath(merged, state.OutputPath)
+			if err != nil {
+				return nil, "", false, "States.Runtime", fmt.Sprintf("OutputPath: %s", err)
+			}
+			return final, state.Next, state.End, "", ""
+		}
+
+		lastErr = invokeErr
+		lastCause = invokeCause
+
+		// Check if this error is retryable.
+		if !isRetryable(state.Retry, lastErr, attempt) {
+			break
+		}
+	}
+
+	return nil, "", false, lastErr, lastCause
+}
+
+// invokeLambda calls the Lambda service via HTTP and returns (result, errCode, cause).
+func (s *Service) invokeLambda(ctx context.Context, funcName string, payload json.RawMessage, timeoutSeconds int) (json.RawMessage, string, string) {
+	if s.nimbusBaseURL == "" {
+		return nil, "States.Runtime", "no Nimbus base URL configured for Task state"
+	}
+
+	url := fmt.Sprintf("%s/2015-03-31/functions/%s/invocations", s.nimbusBaseURL, funcName)
+
+	body := payload
+	if len(body) == 0 {
+		body = json.RawMessage("null")
+	}
+
+	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(taskCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, "States.Runtime", err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Amz-Invocation-Type", "RequestResponse")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if taskCtx.Err() != nil {
+			return nil, "States.Timeout", "Lambda invocation timed out"
+		}
+		return nil, "States.TaskFailed", err.Error()
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// Lambda signals function errors with X-Amz-Function-Error regardless of HTTP status.
+	if funcErr := resp.Header.Get("X-Amz-Function-Error"); funcErr != "" {
+		return nil, "States.TaskFailed", string(respBody)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "States.TaskFailed", string(respBody)
+	}
+
+	return json.RawMessage(respBody), "", ""
+}
+
+// lambdaFuncName extracts the function name from a Lambda ARN or plain name.
+// Supports: "arn:aws:lambda:{region}:{account}:function:{name}" and bare "{name}".
+func lambdaFuncName(resource string) string {
+	const prefix = ":function:"
+	if idx := strings.LastIndex(resource, prefix); idx >= 0 {
+		return resource[idx+len(prefix):]
+	}
+	// If it's not an ARN, treat it as a plain function name.
+	if !strings.HasPrefix(resource, "arn:") {
+		return resource
+	}
+	return ""
+}
+
+// retryDelay returns the backoff delay for the given attempt number using the matching retry config.
+func retryDelay(retries []retryConfig, errCode string, attempt int) time.Duration {
+	for _, rc := range retries {
+		if !errorMatches(rc.ErrorEquals, errCode) {
+			continue
+		}
+		interval := rc.IntervalSeconds
+		if interval <= 0 {
+			interval = 1
+		}
+		rate := rc.BackoffRate
+		if rate <= 0 {
+			rate = 2.0
+		}
+		delay := float64(interval)
+		for i := 1; i < attempt; i++ {
+			delay *= rate
+		}
+		return time.Duration(delay * float64(time.Second))
+	}
+	return time.Second
+}
+
+// isRetryable checks whether the error matches any retry config that still has attempts left.
+func isRetryable(retries []retryConfig, errCode string, attempt int) bool {
+	for _, rc := range retries {
+		if !errorMatches(rc.ErrorEquals, errCode) {
+			continue
+		}
+		ma := rc.MaxAttempts
+		if ma <= 0 {
+			ma = 3
+		}
+		return attempt < ma
+	}
+	return false
+}
+
+// applyCatch checks Catch configs and returns (nextState, errorInput) or ("", nil) if no match.
+func applyCatch(catches []catchConfig, errCode, cause string, input json.RawMessage) (string, json.RawMessage) {
+	for _, c := range catches {
+		if !errorMatches(c.ErrorEquals, errCode) {
+			continue
+		}
+		errObj, _ := json.Marshal(map[string]string{"Error": errCode, "Cause": cause})
+		merged, err := applyResultPath(input, json.RawMessage(errObj), c.ResultPath)
+		if err != nil {
+			merged = json.RawMessage(errObj)
+		}
+		return c.Next, merged
+	}
+	return "", nil
+}
+
+// errorMatches returns true if errCode matches any entry in the list (States.ALL matches everything).
+func errorMatches(list []string, errCode string) bool {
+	for _, e := range list {
+		if e == "States.ALL" || e == errCode {
+			return true
+		}
+	}
+	return false
 }

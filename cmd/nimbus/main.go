@@ -128,7 +128,7 @@ func main() {
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(cognito.New(cfg.DefaultRegion))
-	r.Register(sfn.New(cfg.DefaultRegion))
+	r.Register(sfn.New(cfg.DefaultRegion, nimbusBaseURL))
 	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 

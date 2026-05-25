@@ -21,6 +21,7 @@ type Service struct {
 	executions    map[string]*execution    // keyed by execution ARN
 	region        string
 	account       string
+	nimbusBaseURL string // base URL for calling other Nimbus services (e.g. Lambda)
 }
 
 type stateMachine struct {
@@ -36,7 +37,7 @@ type stateMachine struct {
 
 const defaultAccount = "000000000000"
 
-func New(region string) *Service {
+func New(region, nimbusBaseURL string) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
@@ -45,6 +46,7 @@ func New(region string) *Service {
 		executions:    map[string]*execution{},
 		region:        region,
 		account:       defaultAccount,
+		nimbusBaseURL: nimbusBaseURL,
 	}
 }
 
