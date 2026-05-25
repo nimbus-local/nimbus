@@ -545,6 +545,179 @@ func TestTaskStateLambdaCatch(t *testing.T) {
 	}
 }
 
+// --- Part 5 tests ---
+
+func TestParallelStateTwoBranches(t *testing.T) {
+	svc := newTestService()
+	def := `{
+		"StartAt":"P",
+		"States":{
+			"P":{
+				"Type":"Parallel",
+				"Branches":[
+					{"StartAt":"A","States":{"A":{"Type":"Pass","Result":{"branch":"a"},"End":true}}},
+					{"StartAt":"B","States":{"B":{"Type":"Pass","Result":{"branch":"b"},"End":true}}}
+				],
+				"End":true
+			}
+		}
+	}`
+	smARN := createSM(t, svc, "parallel-two", def)
+	execARN := startExec(t, svc, smARN, `{}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out []map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 branch results, got %d", len(out))
+	}
+	// Branch ordering must be preserved.
+	if out[0]["branch"] != "a" || out[1]["branch"] != "b" {
+		t.Errorf("unexpected branch outputs: %v", out)
+	}
+}
+
+func TestParallelStateResultPath(t *testing.T) {
+	svc := newTestService()
+	def := `{
+		"StartAt":"P",
+		"States":{
+			"P":{
+				"Type":"Parallel",
+				"Branches":[
+					{"StartAt":"X","States":{"X":{"Type":"Pass","Result":1,"End":true}}},
+					{"StartAt":"Y","States":{"Y":{"Type":"Pass","Result":2,"End":true}}}
+				],
+				"ResultPath":"$.branches",
+				"End":true
+			}
+		}
+	}`
+	smARN := createSM(t, svc, "parallel-resultpath", def)
+	execARN := startExec(t, svc, smARN, `{"name":"test"}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out["name"] != "test" {
+		t.Errorf("expected original input preserved, got %v", out)
+	}
+	branches, ok := out["branches"].([]interface{})
+	if !ok || len(branches) != 2 {
+		t.Errorf("expected branches array of length 2, got %v", out["branches"])
+	}
+}
+
+func TestMapStateIterateArray(t *testing.T) {
+	svc := newTestService()
+	// Iterator doubles each item via Result (ignores input, just returns a constant — simplified).
+	// Real test: each item passes through unchanged.
+	def := `{
+		"StartAt":"M",
+		"States":{
+			"M":{
+				"Type":"Map",
+				"Iterator":{
+					"StartAt":"I",
+					"States":{"I":{"Type":"Pass","End":true}}
+				},
+				"End":true
+			}
+		}
+	}`
+	smARN := createSM(t, svc, "map-iterate", def)
+	execARN := startExec(t, svc, smARN, `[1,2,3]`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out []interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("expected 3 results, got %d: %v", len(out), out)
+	}
+	for i, v := range out {
+		expected := float64(i + 1)
+		if v != expected {
+			t.Errorf("item %d: expected %v, got %v", i, expected, v)
+		}
+	}
+}
+
+func TestMapStateItemsPath(t *testing.T) {
+	svc := newTestService()
+	def := `{
+		"StartAt":"M",
+		"States":{
+			"M":{
+				"Type":"Map",
+				"ItemsPath":"$.items",
+				"Iterator":{
+					"StartAt":"I",
+					"States":{"I":{"Type":"Pass","End":true}}
+				},
+				"ResultPath":"$.results",
+				"End":true
+			}
+		}
+	}`
+	smARN := createSM(t, svc, "map-itemspath", def)
+	execARN := startExec(t, svc, smARN, `{"items":["a","b"]}`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(result["output"].(string)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	results, ok := out["results"].([]interface{})
+	if !ok || len(results) != 2 {
+		t.Errorf("expected results array of length 2, got %v", out["results"])
+	}
+	if results[0] != "a" || results[1] != "b" {
+		t.Errorf("expected [a b], got %v", results)
+	}
+}
+
+func TestMapStateEmptyArray(t *testing.T) {
+	svc := newTestService()
+	def := `{
+		"StartAt":"M",
+		"States":{
+			"M":{
+				"Type":"Map",
+				"Iterator":{"StartAt":"I","States":{"I":{"Type":"Pass","End":true}}},
+				"End":true
+			}
+		}
+	}`
+	smARN := createSM(t, svc, "map-empty", def)
+	execARN := startExec(t, svc, smARN, `[]`)
+	result := waitDone(t, svc, execARN)
+
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED, got %v", result["status"])
+	}
+	if result["output"] != `[]` {
+		t.Errorf("expected empty array output, got %v", result["output"])
+	}
+}
+
 func TestTaskStateLambdaRetryThenSucceed(t *testing.T) {
 	attempts := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

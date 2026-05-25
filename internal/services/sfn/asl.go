@@ -38,10 +38,18 @@ type aslState struct {
 	TimestampPath string `json:"TimestampPath"`
 
 	// Task
-	Resource        string        `json:"Resource"`
-	TimeoutSeconds  int           `json:"TimeoutSeconds"`
-	Retry           []retryConfig `json:"Retry"`
-	Catch           []catchConfig `json:"Catch"`
+	Resource       string        `json:"Resource"`
+	TimeoutSeconds int           `json:"TimeoutSeconds"`
+	Retry          []retryConfig `json:"Retry"`
+	Catch          []catchConfig `json:"Catch"`
+
+	// Parallel
+	Branches []aslDefinition `json:"Branches"`
+
+	// Map
+	ItemsPath      json.RawMessage `json:"ItemsPath"`
+	Iterator       *aslDefinition  `json:"Iterator"`
+	MaxConcurrency int             `json:"MaxConcurrency"`
 
 	// Routing
 	Next string `json:"Next"`

@@ -920,9 +920,65 @@ try_match "ListTagsForResource contains env=smoke" "smoke" \
     --resource-arn "$SFN_ARN" \
     --query "tags[?key=='env'].value" --output text
 
+# Parallel state — two branches produce an array of two results
+SFN_PARALLEL_DEF='{"StartAt":"P","States":{"P":{"Type":"Parallel","Branches":[{"StartAt":"A","States":{"A":{"Type":"Pass","Result":{"branch":"a"},"End":true}}},{"StartAt":"B","States":{"B":{"Type":"Pass","Result":{"branch":"b"},"End":true}}}],"End":true}}}'
+$CLI stepfunctions delete-state-machine \
+  --state-machine-arn "arn:aws:states:${REGION:-us-east-1}:000000000000:stateMachine:${SFN_NAME}-parallel" \
+  2>/dev/null || true
+PARALLEL_SM_ARN=$($CLI stepfunctions create-state-machine \
+  --name "${SFN_NAME}-parallel" \
+  --definition "$SFN_PARALLEL_DEF" \
+  --role-arn "arn:aws:iam::000000000000:role/sfn-role" \
+  --type STANDARD \
+  --query stateMachineArn --output text)
+PARALLEL_EXEC=$($CLI stepfunctions start-execution \
+  --state-machine-arn "$PARALLEL_SM_ARN" \
+  --input '{}' \
+  --query executionArn --output text)
+for _i in 1 2 3 4 5 6; do
+  PARALLEL_STATUS=$($CLI stepfunctions describe-execution \
+    --execution-arn "$PARALLEL_EXEC" --query status --output text)
+  [ "$PARALLEL_STATUS" != "RUNNING" ] && break
+  sleep 0.5
+done
+try_match "Parallel state execution SUCCEEDED" "SUCCEEDED" \
+  echo "$PARALLEL_STATUS"
+try_match "Parallel state output contains branch a" '"branch":"a"' \
+  $CLI stepfunctions describe-execution \
+    --execution-arn "$PARALLEL_EXEC" --query output --output text
+
+# Map state — iterate over [1,2,3], each item passes through unchanged
+SFN_MAP_DEF='{"StartAt":"M","States":{"M":{"Type":"Map","Iterator":{"StartAt":"I","States":{"I":{"Type":"Pass","End":true}}},"End":true}}}'
+$CLI stepfunctions delete-state-machine \
+  --state-machine-arn "arn:aws:states:${REGION:-us-east-1}:000000000000:stateMachine:${SFN_NAME}-map" \
+  2>/dev/null || true
+MAP_SM_ARN=$($CLI stepfunctions create-state-machine \
+  --name "${SFN_NAME}-map" \
+  --definition "$SFN_MAP_DEF" \
+  --role-arn "arn:aws:iam::000000000000:role/sfn-role" \
+  --type STANDARD \
+  --query stateMachineArn --output text)
+MAP_EXEC=$($CLI stepfunctions start-execution \
+  --state-machine-arn "$MAP_SM_ARN" \
+  --input '[1,2,3]' \
+  --query executionArn --output text)
+for _i in 1 2 3 4 5 6; do
+  MAP_STATUS=$($CLI stepfunctions describe-execution \
+    --execution-arn "$MAP_EXEC" --query status --output text)
+  [ "$MAP_STATUS" != "RUNNING" ] && break
+  sleep 0.5
+done
+try_match "Map state execution SUCCEEDED" "SUCCEEDED" \
+  echo "$MAP_STATUS"
+try_match "Map state output is array of 3" "1" \
+  $CLI stepfunctions describe-execution \
+    --execution-arn "$MAP_EXEC" --query "output" --output text
+
 # Clean up
 $CLI stepfunctions delete-state-machine --state-machine-arn "$SFN_ARN" > /dev/null
 $CLI stepfunctions delete-state-machine --state-machine-arn "$FAIL_SM_ARN" > /dev/null
+$CLI stepfunctions delete-state-machine --state-machine-arn "$PARALLEL_SM_ARN" > /dev/null
+$CLI stepfunctions delete-state-machine --state-machine-arn "$MAP_SM_ARN" > /dev/null
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

@@ -230,15 +230,8 @@ func (s *Service) runExecution(exec *execution, sm *stateMachine) {
 		case "Task":
 			output, next, end, taskErr, taskCause := s.runTask(exec.ctx, state, current)
 			if taskErr != "" {
-				// Try Catch
 				if catchNext, catchInput := applyCatch(state.Catch, taskErr, taskCause, current); catchNext != "" {
-					exec.addEvent("TaskStateExited", map[string]interface{}{
-						"stateExitedEventDetails": map[string]interface{}{
-							"name":          stateName,
-							"output":        string(catchInput),
-							"outputDetails": map[string]interface{}{"included": true, "truncated": false},
-						},
-					})
+					exec.addEvent("TaskStateExited", exitedDetails(stateName, catchInput))
 					current = catchInput
 					stateName = catchNext
 					continue
@@ -246,13 +239,47 @@ func (s *Service) runExecution(exec *execution, sm *stateMachine) {
 				exec.failExec(taskErr, taskCause)
 				return
 			}
-			exec.addEvent("TaskStateExited", map[string]interface{}{
-				"stateExitedEventDetails": map[string]interface{}{
-					"name":          stateName,
-					"output":        string(output),
-					"outputDetails": map[string]interface{}{"included": true, "truncated": false},
-				},
-			})
+			exec.addEvent("TaskStateExited", exitedDetails(stateName, output))
+			if end {
+				exec.succeed(string(output))
+				return
+			}
+			current = output
+			stateName = next
+
+		case "Parallel":
+			output, next, end, taskErr, taskCause := s.runParallelState(exec.ctx, state, current)
+			if taskErr != "" {
+				if catchNext, catchInput := applyCatch(state.Catch, taskErr, taskCause, current); catchNext != "" {
+					exec.addEvent("ParallelStateExited", exitedDetails(stateName, catchInput))
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				exec.failExec(taskErr, taskCause)
+				return
+			}
+			exec.addEvent("ParallelStateExited", exitedDetails(stateName, output))
+			if end {
+				exec.succeed(string(output))
+				return
+			}
+			current = output
+			stateName = next
+
+		case "Map":
+			output, next, end, taskErr, taskCause := s.runMapState(exec.ctx, state, current)
+			if taskErr != "" {
+				if catchNext, catchInput := applyCatch(state.Catch, taskErr, taskCause, current); catchNext != "" {
+					exec.addEvent("MapStateExited", exitedDetails(stateName, catchInput))
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				exec.failExec(taskErr, taskCause)
+				return
+			}
+			exec.addEvent("MapStateExited", exitedDetails(stateName, output))
 			if end {
 				exec.succeed(string(output))
 				return
@@ -319,8 +346,266 @@ func enteredEvent(stateType string) string {
 		return "ChoiceStateEntered"
 	case "Task":
 		return "TaskStateEntered"
+	case "Parallel":
+		return "ParallelStateEntered"
+	case "Map":
+		return "MapStateEntered"
 	default:
 		return stateType + "StateEntered"
+	}
+}
+
+// exitedDetails builds the stateExitedEventDetails map for addEvent calls.
+func exitedDetails(name string, output json.RawMessage) map[string]interface{} {
+	return map[string]interface{}{
+		"stateExitedEventDetails": map[string]interface{}{
+			"name":          name,
+			"output":        string(output),
+			"outputDetails": map[string]interface{}{"included": true, "truncated": false},
+		},
+	}
+}
+
+// runParallelState executes all Branches concurrently and returns their outputs as a JSON array.
+func (s *Service) runParallelState(ctx context.Context, state *aslState, input json.RawMessage) (output json.RawMessage, next string, end bool, errCode, cause string) {
+	effective, err := jsonPath(input, state.InputPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("InputPath: %s", err)
+	}
+
+	type branchResult struct {
+		idx int
+		out json.RawMessage
+		err error
+	}
+
+	branchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ch := make(chan branchResult, len(state.Branches))
+	for i, branch := range state.Branches {
+		i, branch := i, branch
+		go func() {
+			out, err := s.runBranch(branchCtx, &branch, effective)
+			ch <- branchResult{idx: i, out: out, err: err}
+		}()
+	}
+
+	results := make([]json.RawMessage, len(state.Branches))
+	for range state.Branches {
+		r := <-ch
+		if r.err != nil {
+			cancel() // abort remaining branches
+			return nil, "", false, "States.BranchFailed", r.err.Error()
+		}
+		results[r.idx] = r.out
+	}
+
+	arr, err := json.Marshal(results)
+	if err != nil {
+		return nil, "", false, "States.Runtime", err.Error()
+	}
+	merged, err := applyResultPath(input, json.RawMessage(arr), state.ResultPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("ResultPath: %s", err)
+	}
+	final, err := jsonPath(merged, state.OutputPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("OutputPath: %s", err)
+	}
+	return final, state.Next, state.End, "", ""
+}
+
+// runMapState iterates over the items array and runs the Iterator for each item.
+func (s *Service) runMapState(ctx context.Context, state *aslState, input json.RawMessage) (output json.RawMessage, next string, end bool, errCode, cause string) {
+	if state.Iterator == nil {
+		return nil, "", false, "States.Runtime", "Map state has no Iterator"
+	}
+
+	// Resolve items array.
+	itemsRaw, err := jsonPath(input, state.ItemsPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("ItemsPath: %s", err)
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(itemsRaw, &items); err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("ItemsPath value is not an array: %s", err)
+	}
+
+	type itemResult struct {
+		idx int
+		out json.RawMessage
+		err error
+	}
+
+	concurrency := state.MaxConcurrency
+	if concurrency <= 0 {
+		concurrency = len(items)
+	}
+	if concurrency == 0 {
+		// Empty array — output is [].
+		empty := json.RawMessage("[]")
+		merged, err := applyResultPath(input, empty, state.ResultPath)
+		if err != nil {
+			return nil, "", false, "States.Runtime", fmt.Sprintf("ResultPath: %s", err)
+		}
+		final, err := jsonPath(merged, state.OutputPath)
+		if err != nil {
+			return nil, "", false, "States.Runtime", fmt.Sprintf("OutputPath: %s", err)
+		}
+		return final, state.Next, state.End, "", ""
+	}
+
+	mapCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sem := make(chan struct{}, concurrency)
+	ch := make(chan itemResult, len(items))
+
+	for i, item := range items {
+		i, item := i, item
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			out, err := s.runBranch(mapCtx, state.Iterator, item)
+			ch <- itemResult{idx: i, out: out, err: err}
+		}()
+	}
+
+	results := make([]json.RawMessage, len(items))
+	for range items {
+		r := <-ch
+		if r.err != nil {
+			cancel()
+			return nil, "", false, "States.MapFailed", r.err.Error()
+		}
+		results[r.idx] = r.out
+	}
+
+	arr, err := json.Marshal(results)
+	if err != nil {
+		return nil, "", false, "States.Runtime", err.Error()
+	}
+	merged, err := applyResultPath(input, json.RawMessage(arr), state.ResultPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("ResultPath: %s", err)
+	}
+	final, err := jsonPath(merged, state.OutputPath)
+	if err != nil {
+		return nil, "", false, "States.Runtime", fmt.Sprintf("OutputPath: %s", err)
+	}
+	return final, state.Next, state.End, "", ""
+}
+
+// runBranch executes a sub-state machine (Parallel branch or Map iterator) and returns the output.
+// Unlike runExecution it does not record history events — it is a pure compute helper.
+func (s *Service) runBranch(ctx context.Context, asl *aslDefinition, input json.RawMessage) (json.RawMessage, error) {
+	current := input
+	stateName := asl.StartAt
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("execution aborted")
+		default:
+		}
+
+		state, ok := asl.States[stateName]
+		if !ok {
+			return nil, fmt.Errorf("state not found: %s", stateName)
+		}
+
+		switch state.Type {
+		case "Pass":
+			output, next, end, err := runPass(state, current)
+			if err != nil {
+				return nil, err
+			}
+			if end {
+				return output, nil
+			}
+			current = output
+			stateName = next
+
+		case "Succeed":
+			return current, nil
+
+		case "Fail":
+			return nil, fmt.Errorf("%s: %s", state.Error, state.Cause)
+
+		case "Choice":
+			next, err := runChoice(state, current)
+			if err != nil {
+				return nil, err
+			}
+			stateName = next
+
+		case "Wait":
+			dur, err := waitDuration(state, current)
+			if err != nil {
+				return nil, err
+			}
+			select {
+			case <-time.After(dur):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("execution aborted")
+			}
+			if state.End {
+				return current, nil
+			}
+			stateName = state.Next
+
+		case "Task":
+			output, next, end, errCode, cause := s.runTask(ctx, state, current)
+			if errCode != "" {
+				if catchNext, catchInput := applyCatch(state.Catch, errCode, cause, current); catchNext != "" {
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				return nil, fmt.Errorf("%s: %s", errCode, cause)
+			}
+			if end {
+				return output, nil
+			}
+			current = output
+			stateName = next
+
+		case "Parallel":
+			output, next, end, errCode, cause := s.runParallelState(ctx, state, current)
+			if errCode != "" {
+				if catchNext, catchInput := applyCatch(state.Catch, errCode, cause, current); catchNext != "" {
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				return nil, fmt.Errorf("%s: %s", errCode, cause)
+			}
+			if end {
+				return output, nil
+			}
+			current = output
+			stateName = next
+
+		case "Map":
+			output, next, end, errCode, cause := s.runMapState(ctx, state, current)
+			if errCode != "" {
+				if catchNext, catchInput := applyCatch(state.Catch, errCode, cause, current); catchNext != "" {
+					current = catchInput
+					stateName = catchNext
+					continue
+				}
+				return nil, fmt.Errorf("%s: %s", errCode, cause)
+			}
+			if end {
+				return output, nil
+			}
+			current = output
+			stateName = next
+
+		default:
+			return nil, fmt.Errorf("unsupported state type: %s", state.Type)
+		}
 	}
 }
 
