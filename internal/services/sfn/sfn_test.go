@@ -3,9 +3,11 @@ package sfn
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func newTestService() *Service {
@@ -227,11 +229,11 @@ func startExec(t *testing.T, svc *Service, smARN, input string) string {
 	return body(t, w)["executionArn"].(string)
 }
 
-// waitDone polls DescribeExecution until status != RUNNING (max 2 s).
+// waitDone polls DescribeExecution until status != RUNNING (max 5 s).
 func waitDone(t *testing.T, svc *Service, execARN string) map[string]interface{} {
 	t.Helper()
-	deadline := 50 // 50 × 40 ms = 2 s
-	for i := 0; i < deadline; i++ {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		w := sfnRequest(t, svc, "DescribeExecution", map[string]interface{}{"executionArn": execARN})
 		if w.Code != http.StatusOK {
 			t.Fatalf("DescribeExecution: %d %s", w.Code, w.Body.String())
@@ -240,12 +242,9 @@ func waitDone(t *testing.T, svc *Service, execARN string) map[string]interface{}
 		if b["status"] != "RUNNING" {
 			return b
 		}
-		// tiny sleep so goroutine can finish
-		var ch = make(chan struct{})
-		go func() { close(ch) }()
-		<-ch
+		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("execution did not complete within 2 s")
+	t.Fatal("execution did not complete within 5 s")
 	return nil
 }
 
@@ -316,6 +315,123 @@ func TestPassResultPath(t *testing.T) {
 	}
 	if out["name"] != "test" || out["count"] != float64(42) {
 		t.Errorf("unexpected output: %v", out)
+	}
+}
+
+// --- Part 3 tests ---
+
+func TestChoiceStringEquals(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"C","States":{` +
+		`"C":{"Type":"Choice","Choices":[{"Variable":"$.env","StringEquals":"prod","Next":"Prod"}],"Default":"Dev"},` +
+		`"Prod":{"Type":"Pass","Result":"production","End":true},` +
+		`"Dev":{"Type":"Pass","Result":"development","End":true}}}`
+	smARN := createSM(t, svc, "choice-str", def)
+
+	// Match first rule
+	e1 := startExec(t, svc, smARN, `{"env":"prod"}`)
+	r1 := waitDone(t, svc, e1)
+	if r1["output"] != `"production"` {
+		t.Errorf("expected 'production', got %v", r1["output"])
+	}
+
+	// Fall through to Default
+	e2 := startExec(t, svc, smARN, `{"env":"staging"}`)
+	r2 := waitDone(t, svc, e2)
+	if r2["output"] != `"development"` {
+		t.Errorf("expected 'development', got %v", r2["output"])
+	}
+}
+
+func TestChoiceNumeric(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"C","States":{` +
+		`"C":{"Type":"Choice","Choices":[` +
+		`{"Variable":"$.n","NumericGreaterThan":10,"Next":"Big"},` +
+		`{"Variable":"$.n","NumericLessThan":0,"Next":"Neg"}` +
+		`],"Default":"Mid"},` +
+		`"Big":{"Type":"Pass","Result":"big","End":true},` +
+		`"Neg":{"Type":"Pass","Result":"neg","End":true},` +
+		`"Mid":{"Type":"Pass","Result":"mid","End":true}}}`
+	smARN := createSM(t, svc, "choice-num", def)
+
+	for _, tc := range []struct{ n int; want string }{{20, `"big"`}, {-1, `"neg"`}, {5, `"mid"`}} {
+		input := fmt.Sprintf(`{"n":%d}`, tc.n)
+		e := startExec(t, svc, smARN, input)
+		r := waitDone(t, svc, e)
+		if r["output"] != tc.want {
+			t.Errorf("n=%d: expected %s, got %v", tc.n, tc.want, r["output"])
+		}
+	}
+}
+
+func TestChoiceAndOr(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"C","States":{` +
+		`"C":{"Type":"Choice","Choices":[` +
+		`{"And":[{"Variable":"$.a","BooleanEquals":true},{"Variable":"$.b","BooleanEquals":true}],"Next":"Both"},` +
+		`{"Or":[{"Variable":"$.a","BooleanEquals":true},{"Variable":"$.b","BooleanEquals":true}],"Next":"Either"}` +
+		`],"Default":"Neither"},` +
+		`"Both":{"Type":"Pass","Result":"both","End":true},` +
+		`"Either":{"Type":"Pass","Result":"either","End":true},` +
+		`"Neither":{"Type":"Pass","Result":"neither","End":true}}}`
+	smARN := createSM(t, svc, "choice-andor", def)
+
+	for _, tc := range []struct{ a, b bool; want string }{
+		{true, true, `"both"`},
+		{true, false, `"either"`},
+		{false, false, `"neither"`},
+	} {
+		input := fmt.Sprintf(`{"a":%v,"b":%v}`, tc.a, tc.b)
+		e := startExec(t, svc, smARN, input)
+		r := waitDone(t, svc, e)
+		if r["output"] != tc.want {
+			t.Errorf("a=%v b=%v: expected %s, got %v", tc.a, tc.b, tc.want, r["output"])
+		}
+	}
+}
+
+func TestWaitSeconds(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"W","States":{"W":{"Type":"Wait","Seconds":1,"Next":"Done"},"Done":{"Type":"Succeed"}}}`
+	smARN := createSM(t, svc, "wait-sm", def)
+
+	execARN := startExec(t, svc, smARN, `{"x":42}`)
+	// Should still be RUNNING immediately
+	w := sfnRequest(t, svc, "DescribeExecution", map[string]interface{}{"executionArn": execARN})
+	b := body(t, w)
+	if b["status"] != "RUNNING" {
+		t.Errorf("expected RUNNING immediately after start, got %v", b["status"])
+	}
+	// After waiting, should SUCCEED with input passed through
+	result := waitDone(t, svc, execARN)
+	if result["status"] != "SUCCEEDED" {
+		t.Fatalf("expected SUCCEEDED after wait, got %v", result["status"])
+	}
+	if result["output"] != `{"x":42}` {
+		t.Errorf("expected input passed through, got %v", result["output"])
+	}
+}
+
+func TestStopExecution(t *testing.T) {
+	svc := newTestService()
+	def := `{"StartAt":"W","States":{"W":{"Type":"Wait","Seconds":60,"Next":"Done"},"Done":{"Type":"Succeed"}}}`
+	smARN := createSM(t, svc, "stop-sm", def)
+
+	execARN := startExec(t, svc, smARN, `{}`)
+	// Stop immediately while waiting
+	w := sfnRequest(t, svc, "StopExecution", map[string]interface{}{
+		"executionArn": execARN,
+		"error":        "ManualStop",
+		"cause":        "test",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("StopExecution: %d %s", w.Code, w.Body.String())
+	}
+
+	result := waitDone(t, svc, execARN)
+	if result["status"] != "ABORTED" {
+		t.Fatalf("expected ABORTED, got %v", result["status"])
 	}
 }
 

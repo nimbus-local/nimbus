@@ -1,6 +1,7 @@
 package sfn
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -12,6 +13,8 @@ type historyEvent = map[string]interface{}
 
 type execution struct {
 	mu          sync.Mutex
+	cancel      context.CancelFunc
+	ctx         context.Context
 	name        string
 	arn         string
 	smARN       string
@@ -47,7 +50,7 @@ func (e *execution) succeed(output string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nextEventID++
-	evt := historyEvent{
+	e.history = append(e.history, historyEvent{
 		"id":        e.nextEventID,
 		"timestamp": float64(now.UnixNano()) / 1e9,
 		"type":      "ExecutionSucceeded",
@@ -55,8 +58,7 @@ func (e *execution) succeed(output string) {
 			"output":        output,
 			"outputDetails": map[string]interface{}{"included": true, "truncated": false},
 		},
-	}
-	e.history = append(e.history, evt)
+	})
 	e.output = output
 	e.status = "SUCCEEDED"
 	e.stoppedAt = &now
@@ -67,7 +69,7 @@ func (e *execution) failExec(errCode, cause string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nextEventID++
-	evt := historyEvent{
+	e.history = append(e.history, historyEvent{
 		"id":        e.nextEventID,
 		"timestamp": float64(now.UnixNano()) / 1e9,
 		"type":      "ExecutionFailed",
@@ -75,12 +77,36 @@ func (e *execution) failExec(errCode, cause string) {
 			"error": errCode,
 			"cause": cause,
 		},
-	}
-	e.history = append(e.history, evt)
+	})
 	e.errCode = errCode
 	e.cause = cause
 	e.status = "FAILED"
 	e.stoppedAt = &now
+}
+
+// abort is called by StopExecution — sets ABORTED and records the event.
+func (e *execution) abort(errCode, cause string) bool {
+	now := time.Now().UTC()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.status != "RUNNING" {
+		return false
+	}
+	e.nextEventID++
+	e.history = append(e.history, historyEvent{
+		"id":        e.nextEventID,
+		"timestamp": float64(now.UnixNano()) / 1e9,
+		"type":      "ExecutionAborted",
+		"executionAbortedEventDetails": map[string]interface{}{
+			"error": errCode,
+			"cause": cause,
+		},
+	})
+	e.errCode = errCode
+	e.cause = cause
+	e.status = "ABORTED"
+	e.stoppedAt = &now
+	return true
 }
 
 func (s *Service) runExecution(exec *execution, sm *stateMachine) {
@@ -101,6 +127,13 @@ func (s *Service) runExecution(exec *execution, sm *stateMachine) {
 	stateName := asl.StartAt
 
 	for {
+		// Check if StopExecution was called between states.
+		select {
+		case <-exec.ctx.Done():
+			return
+		default:
+		}
+
 		state, ok := asl.States[stateName]
 		if !ok {
 			exec.failExec("States.Runtime", fmt.Sprintf("state not found: %s", stateName))
@@ -151,23 +184,75 @@ func (s *Service) runExecution(exec *execution, sm *stateMachine) {
 			exec.failExec(state.Error, state.Cause)
 			return
 
+		case "Choice":
+			next, err := runChoice(state, current)
+			if err != nil {
+				exec.failExec("States.NoChoiceMatched", err.Error())
+				return
+			}
+			exec.addEvent("ChoiceStateExited", map[string]interface{}{
+				"stateExitedEventDetails": map[string]interface{}{
+					"name":          stateName,
+					"output":        string(current),
+					"outputDetails": map[string]interface{}{"included": true, "truncated": false},
+				},
+			})
+			stateName = next
+
+		case "Wait":
+			dur, err := waitDuration(state, current)
+			if err != nil {
+				exec.failExec("States.Runtime", err.Error())
+				return
+			}
+			select {
+			case <-time.After(dur):
+			case <-exec.ctx.Done():
+				return
+			}
+			exec.addEvent("WaitStateExited", map[string]interface{}{
+				"stateExitedEventDetails": map[string]interface{}{
+					"name":          stateName,
+					"output":        string(current),
+					"outputDetails": map[string]interface{}{"included": true, "truncated": false},
+				},
+			})
+			if state.End {
+				exec.succeed(string(current))
+				return
+			}
+			stateName = state.Next
+
 		default:
-			exec.failExec("States.Runtime", fmt.Sprintf("unsupported state type in Part 2: %s", state.Type))
+			exec.failExec("States.Runtime", fmt.Sprintf("unsupported state type: %s", state.Type))
 			return
 		}
 	}
 }
 
-// runPass applies InputPath → Result/ResultPath → OutputPath and returns the
-// output, next state name, end flag, and any error.
+// runChoice evaluates Choices in order and returns the next state name.
+func runChoice(state *aslState, input json.RawMessage) (string, error) {
+	for _, rule := range state.Choices {
+		ok, err := evalChoiceRule(rule, input)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return rule.Next, nil
+		}
+	}
+	if state.Default != "" {
+		return state.Default, nil
+	}
+	return "", fmt.Errorf("no choice rule matched and no Default defined")
+}
+
+// runPass applies InputPath → Result/ResultPath → OutputPath.
 func runPass(state *aslState, input json.RawMessage) (output json.RawMessage, next string, end bool, err error) {
-	// 1. InputPath
 	effective, err := jsonPath(input, state.InputPath)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("InputPath: %w", err)
 	}
-
-	// 2. Result / ResultPath
 	result := effective
 	if len(state.Result) > 0 {
 		result = state.Result
@@ -176,13 +261,10 @@ func runPass(state *aslState, input json.RawMessage) (output json.RawMessage, ne
 	if err != nil {
 		return nil, "", false, fmt.Errorf("ResultPath: %w", err)
 	}
-
-	// 3. OutputPath
 	final, err := jsonPath(merged, state.OutputPath)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("OutputPath: %w", err)
 	}
-
 	return final, state.Next, state.End, nil
 }
 
@@ -194,6 +276,10 @@ func enteredEvent(stateType string) string {
 		return "SucceedStateEntered"
 	case "Fail":
 		return "FailStateEntered"
+	case "Wait":
+		return "WaitStateEntered"
+	case "Choice":
+		return "ChoiceStateEntered"
 	default:
 		return stateType + "StateEntered"
 	}

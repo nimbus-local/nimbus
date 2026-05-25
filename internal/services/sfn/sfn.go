@@ -1,6 +1,7 @@
 package sfn
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -83,6 +84,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeExecution(w, r)
 	case "GetExecutionHistory":
 		s.getExecutionHistory(w, r)
+	case "StopExecution":
+		s.stopExecution(w, r)
 	default:
 		jsonhttp.Error(w, http.StatusBadRequest, "InvalidAction",
 			fmt.Sprintf("Operation %s is not supported.", op))
@@ -395,8 +398,11 @@ func (s *Service) startExecution(w http.ResponseWriter, r *http.Request) {
 
 	execArn := s.execARN(sm.name, name)
 	now := time.Now().UTC()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	exec := &execution{
+		ctx:       ctx,
+		cancel:    cancel,
 		name:      name,
 		arn:       execArn,
 		smARN:     sm.arn,
@@ -479,6 +485,39 @@ func (s *Service) getExecutionHistory(w http.ResponseWriter, r *http.Request) {
 
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"events": events,
+	})
+}
+
+func (s *Service) stopExecution(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExecutionArn string `json:"executionArn"`
+		Error        string `json:"error"`
+		Cause        string `json:"cause"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	exec := s.findExec(req.ExecutionArn)
+	if exec == nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "ExecutionDoesNotExist",
+			fmt.Sprintf("Execution does not exist: %s", req.ExecutionArn))
+		return
+	}
+
+	if !exec.abort(req.Error, req.Cause) {
+		jsonhttp.Error(w, http.StatusBadRequest, "ExecutionNotRunning",
+			"Execution is not in a running state.")
+		return
+	}
+	exec.cancel()
+
+	exec.mu.Lock()
+	stopDate := float64(exec.stoppedAt.UnixNano()) / 1e9
+	exec.mu.Unlock()
+
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
+		"stopDate": stopDate,
 	})
 }
 
