@@ -766,6 +766,71 @@ try_match "DeleteUserPool removes pool" "" \
   $CLI cognito-idp list-user-pools --max-results 10 \
     --query "UserPools[?Name=='$PREFIX-nimbus-pool'].Name" --output text
 
+# ── Kinesis ───────────────────────────────────────────────────────────────────
+
+section "Kinesis"
+STREAM_NAME="$PREFIX-nimbus-stream"
+$CLI kinesis create-stream --stream-name "$STREAM_NAME" --shard-count 2
+try_match "ListStreams contains stream" "$STREAM_NAME" \
+  $CLI kinesis list-streams --query "StreamNames" --output text
+try_match "DescribeStream status ACTIVE" "ACTIVE" \
+  $CLI kinesis describe-stream --stream-name "$STREAM_NAME" \
+    --query "StreamDescription.StreamStatus" --output text
+try_match "ListShards returns 2 shards" "2" \
+  $CLI kinesis list-shards --stream-name "$STREAM_NAME" \
+    --query "length(Shards)" --output text
+SHARD_ID=$($CLI kinesis list-shards --stream-name "$STREAM_NAME" \
+  --query "Shards[0].ShardId" --output text)
+$CLI kinesis add-tags-to-stream --stream-name "$STREAM_NAME" --tags env=test
+try_match "ListTagsForStream contains env=test" "test" \
+  $CLI kinesis list-tags-for-stream --stream-name "$STREAM_NAME" \
+    --query "Tags[?Key=='env'].Value" --output text
+PUT_OUT=$($CLI kinesis put-record --stream-name "$STREAM_NAME" \
+  --partition-key "pk-1" --data "aGVsbG8=")
+SEQ=$(echo "$PUT_OUT" | python3 -c "import sys,json;print(json.load(sys.stdin)['SequenceNumber'])")
+PUT_SHARD=$(echo "$PUT_OUT" | python3 -c "import sys,json;print(json.load(sys.stdin)['ShardId'])")
+try_match "PutRecord returns sequence number" "49" \
+  echo "$SEQ"
+IT=$($CLI kinesis get-shard-iterator --stream-name "$STREAM_NAME" \
+  --shard-id "$PUT_SHARD" --shard-iterator-type TRIM_HORIZON \
+  --query "ShardIterator" --output text)
+try_match "GetRecords returns at least 1 record" "1" \
+  $CLI kinesis get-records --shard-iterator "$IT" \
+    --query "length(Records)" --output text
+$CLI kinesis remove-tags-from-stream --stream-name "$STREAM_NAME" --tag-keys env
+$CLI kinesis delete-stream --stream-name "$STREAM_NAME"
+try_match "DeleteStream removes stream" "" \
+  $CLI kinesis list-streams \
+    --query "StreamNames[?@=='$STREAM_NAME']" --output text
+
+# ── Kinesis ESM (Lambda integration) ─────────────────────────────────────────
+
+section "Kinesis ESM"
+ESM_STREAM="$PREFIX-esm-stream"
+$CLI kinesis create-stream --stream-name "$ESM_STREAM" --shard-count 1
+# Create ESM linking stream to the existing Lambda function
+ESM_UUID=$($CLI lambda create-event-source-mapping \
+  --event-source-arn "arn:aws:kinesis:${REGION:-us-east-1}:000000000000:stream/$ESM_STREAM" \
+  --function-name "$PREFIX" \
+  --starting-position TRIM_HORIZON \
+  --batch-size 10 \
+  --query UUID --output text)
+try_match "CreateEventSourceMapping returns UUID" "-" \
+  echo "$ESM_UUID"
+try_match "ListEventSourceMappings includes new ESM" "$ESM_UUID" \
+  $CLI lambda list-event-source-mappings \
+    --function-name "$PREFIX" --query "EventSourceMappings[*].UUID" --output text
+# Put a record so the ESM runner has something to deliver
+$CLI kinesis put-record --stream-name "$ESM_STREAM" \
+  --partition-key "pk-esm" --data "$(echo -n 'esm-test' | base64)" > /dev/null
+# Give the ESM runner (1 s tick) time to invoke Lambda
+sleep 2
+try_match "ESM runner invoked Lambda (invocation recorded)" "$PREFIX" \
+  curl -sf "$NIMBUS/_nimbus/lambda/invocations" --header "Accept: application/json"
+# Clean up
+$CLI lambda delete-event-source-mapping --uuid "$ESM_UUID" > /dev/null
+$CLI kinesis delete-stream --stream-name "$ESM_STREAM"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo

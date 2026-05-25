@@ -562,36 +562,36 @@ Event buses, rules, and targets. Distinct from EventBridge Scheduler (Phase 4).
 
 ## Phase 20 — Kinesis Data Streams
 
-### Part 1 — Stream CRUD + shard model
+### Part 1 — Stream CRUD + shard model ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `CreateStream` / `DeleteStream` / `ListStreams` / `DescribeStream` / `DescribeStreamSummary` | |
-| `ListShards` — return configured shard count | |
-| `AddTagsToStream` / `ListTagsForStream` / `RemoveTagsFromStream` | |
+| `CreateStream` / `DeleteStream` / `ListStreams` / `DescribeStream` / `DescribeStreamSummary` |✅ |
+| `ListShards` — return configured shard count |✅ |
+| `AddTagsToStream` / `ListTagsForStream` / `RemoveTagsFromStream` |✅ |
 
-### Part 2 — PutRecord / PutRecords
+### Part 2 — PutRecord / PutRecords ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `PutRecord` / `PutRecords` — in-memory ring buffer per shard, monotonic sequence numbers | |
+| `PutRecord` / `PutRecords` — in-memory ring buffer per shard, monotonic sequence numbers |✅ |
 | Partition key → shard via `hash(partitionKey) mod shardCount` | |
 
-### Part 3 — GetRecords + iterators
+### Part 3 — GetRecords + iterators ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| `GetShardIterator` — `TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER` | |
-| `GetRecords` — advance iterator, return `MillisBehindLatest` | |
-| `MergeShards` / `SplitShard` — stub (return success, no resharding) | |
+| `GetShardIterator` — `TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER` |✅ |
+| `GetRecords` — advance iterator, return `MillisBehindLatest` |✅ |
+| `MergeShards` / `SplitShard` — stub (return success, no resharding) |✅ |
 
-### Part 4 — Lambda ESM integration
+### Part 4 — Lambda ESM integration ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
-| Kinesis ESM runner — goroutine per active mapping polling `GetRecords`, building Kinesis event envelope, invoking Lambda | |
-| Terraform fixture (`kinesis.tf`), smoke test section | |
-| Service doc + README row | |
+| Kinesis ESM runner — goroutine per active mapping polling `GetRecords`, building Kinesis event envelope, invoking Lambda |✅ |
+| Terraform fixture (`kinesis.tf`), smoke test section |✅ |
+| Service doc + README row |✅ |
 
 ---
 

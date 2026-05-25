@@ -23,6 +23,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/elasticache"
 	"github.com/nimbus-local/nimbus/internal/services/eventbridge"
 	"github.com/nimbus-local/nimbus/internal/services/iam"
+	"github.com/nimbus-local/nimbus/internal/services/kinesis"
 	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
 	"github.com/nimbus-local/nimbus/internal/services/rds"
@@ -93,7 +94,28 @@ func main() {
 	r.Register(sqs.New(cfg.DefaultRegion))
 	snsSvc := sns.New(cfg.DefaultRegion)
 	r.Register(snsSvc)
-	schedSvc := scheduler.New(cfg.DefaultRegion, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port))
+	nimbusBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+	kinesisSvc := kinesis.New(cfg.DefaultRegion)
+	r.Register(kinesisSvc)
+	kinesisSvc.StartESMRunner(func() []kinesis.ESMInfo {
+		raw := lambdaSvc.EventSources.ListKinesisESMs()
+		out := make([]kinesis.ESMInfo, len(raw))
+		for i, m := range raw {
+			bs := m.BatchSize
+			if bs <= 0 {
+				bs = 100
+			}
+			out[i] = kinesis.ESMInfo{
+				UUID:             m.UUID,
+				FunctionName:     m.FunctionName,
+				EventSourceArn:   m.EventSourceArn,
+				BatchSize:        bs,
+				StartingPosition: m.StartingPosition,
+			}
+		}
+		return out
+	}, nimbusBaseURL)
+	schedSvc := scheduler.New(cfg.DefaultRegion, nimbusBaseURL)
 	r.Register(schedSvc)
 	albSvc := alb.New(cfg.DefaultRegion)
 	r.Register(albSvc)
@@ -145,6 +167,9 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Lambda invocations inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/lambda/invocations", lambdaSvc.Invocation.InvocationsHandler)
 
 	// ACM inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/acm/certs/", acmSvc.CertHandler)
