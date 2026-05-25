@@ -33,5 +33,6 @@ provider "aws" {
     elbv2          = var.nimbus_endpoint
     cognitoidp     = var.nimbus_endpoint
     kinesis        = var.nimbus_endpoint
+    sfn            = var.nimbus_endpoint
   }
 }

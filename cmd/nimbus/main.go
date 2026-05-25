@@ -33,6 +33,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/scheduler"
 	"github.com/nimbus-local/nimbus/internal/services/secretsmanager"
 	"github.com/nimbus-local/nimbus/internal/services/ses"
+	"github.com/nimbus-local/nimbus/internal/services/sfn"
 	"github.com/nimbus-local/nimbus/internal/services/sns"
 	"github.com/nimbus-local/nimbus/internal/services/sqs"
 	"github.com/nimbus-local/nimbus/internal/services/ssm"
@@ -127,6 +128,7 @@ func main() {
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
 	r.Register(cognito.New(cfg.DefaultRegion))
+	r.Register(sfn.New(cfg.DefaultRegion))
 	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
