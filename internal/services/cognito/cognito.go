@@ -19,11 +19,11 @@ const accountID = "000000000000"
 // All state is in-memory.
 type Service struct {
 	mu      sync.RWMutex
-	pools   map[string]*userPool              // poolID -> pool
-	clients map[string]*poolClient            // clientID -> client
-	users   map[string]map[string]*user       // poolID -> username -> user
-	groups  map[string]map[string]*poolGroup  // poolID -> groupName -> group
-	tokens  map[string]*tokenRecord           // jti -> record
+	pools   map[string]*userPool             // poolID -> pool
+	clients map[string]*poolClient           // clientID -> client
+	users   map[string]map[string]*user      // poolID -> username -> user
+	groups  map[string]map[string]*poolGroup // poolID -> groupName -> group
+	tokens  map[string]*tokenRecord          // jti -> record
 	rsaKey  *rsa.PrivateKey
 	region  string
 }
