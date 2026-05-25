@@ -95,7 +95,14 @@ Without these, `terraform apply` on an already-provisioned environment returns 4
 
 ### Step Functions — `ValidateStateMachineDefinition` pre-flight
 
-TF provider v6 calls `ValidateStateMachineDefinition` before `CreateStateMachine`. Nimbus stubs it to return `{"result":"OK","diagnostics":[]}` for any valid-JSON definition, which is enough to satisfy the provider. A real implementation would parse the ASL and validate state references, type fields, etc. — not needed for local dev.
+TF provider v6 calls two extra operations around `CreateStateMachine`:
+
+| Operation | When | Stub response |
+|-----------|------|---------------|
+| `ValidateStateMachineDefinition` | Before create | `{"result":"OK","diagnostics":[]}` |
+| `ListStateMachineVersions` | After create (read-back) | `{"stateMachineVersions":[]}` |
+
+A real `ValidateStateMachineDefinition` would parse the ASL and check state references — not needed for local dev since bad definitions surface as `States.Runtime` failures at execution time.
 
 ### Delete path operations (v6 calls these before deleting resources)
 
