@@ -833,6 +833,97 @@ try_match "ESM runner invoked Lambda (invocation recorded)" "$PREFIX" \
 $CLI lambda delete-event-source-mapping --uuid "$ESM_UUID" > /dev/null
 $CLI kinesis delete-stream --stream-name "$ESM_STREAM"
 
+# ── Step Functions ────────────────────────────────────────────────────────────
+
+section "Step Functions"
+SFN_NAME="$PREFIX-nimbus-sm"
+SFN_PASS_DEF='{"Comment":"smoke","StartAt":"Hello","States":{"Hello":{"Type":"Pass","Result":{"msg":"ok"},"Next":"Done"},"Done":{"Type":"Succeed"}}}'
+SFN_FAIL_DEF='{"Comment":"smoke","StartAt":"Boom","States":{"Boom":{"Type":"Fail","Error":"SmokeError","Cause":"intentional"}}}'
+
+# Clean up any leftover state machine from a previous run
+$CLI stepfunctions delete-state-machine \
+  --state-machine-arn "arn:aws:states:${REGION:-us-east-1}:000000000000:stateMachine:$SFN_NAME" \
+  2>/dev/null || true
+
+SFN_ARN=$($CLI stepfunctions create-state-machine \
+  --name "$SFN_NAME" \
+  --definition "$SFN_PASS_DEF" \
+  --role-arn "arn:aws:iam::000000000000:role/sfn-role" \
+  --type STANDARD \
+  --query stateMachineArn --output text)
+try_match "CreateStateMachine returns ARN" "$SFN_NAME" \
+  echo "$SFN_ARN"
+
+try_match "ListStateMachines contains SM" "$SFN_NAME" \
+  $CLI stepfunctions list-state-machines \
+    --query "stateMachines[*].name" --output text
+
+try_match "DescribeStateMachine status ACTIVE" "ACTIVE" \
+  $CLI stepfunctions describe-state-machine \
+    --state-machine-arn "$SFN_ARN" \
+    --query status --output text
+
+# StartExecution — Pass → Succeed
+EXEC_ARN=$($CLI stepfunctions start-execution \
+  --state-machine-arn "$SFN_ARN" \
+  --input '{"x":1}' \
+  --query executionArn --output text)
+try_match "StartExecution returns ARN" "$SFN_NAME" \
+  echo "$EXEC_ARN"
+
+# Poll until not RUNNING (max ~3 s)
+for _i in 1 2 3 4 5 6; do
+  EXEC_STATUS=$($CLI stepfunctions describe-execution \
+    --execution-arn "$EXEC_ARN" \
+    --query status --output text)
+  [ "$EXEC_STATUS" != "RUNNING" ] && break
+  sleep 0.5
+done
+try_match "Execution status SUCCEEDED" "SUCCEEDED" \
+  echo "$EXEC_STATUS"
+
+try_match "Execution output contains msg=ok" "ok" \
+  $CLI stepfunctions describe-execution \
+    --execution-arn "$EXEC_ARN" \
+    --query "output" --output text
+
+try_match "GetExecutionHistory has ExecutionStarted event" "ExecutionStarted" \
+  $CLI stepfunctions get-execution-history \
+    --execution-arn "$EXEC_ARN" \
+    --query "events[*].type" --output text
+
+# StartExecution — Fail state
+FAIL_SM_ARN=$($CLI stepfunctions create-state-machine \
+  --name "${SFN_NAME}-fail" \
+  --definition "$SFN_FAIL_DEF" \
+  --role-arn "arn:aws:iam::000000000000:role/sfn-role" \
+  --type STANDARD \
+  --query stateMachineArn --output text)
+FAIL_EXEC=$($CLI stepfunctions start-execution \
+  --state-machine-arn "$FAIL_SM_ARN" \
+  --query executionArn --output text)
+for _i in 1 2 3 4 5 6; do
+  FAIL_STATUS=$($CLI stepfunctions describe-execution \
+    --execution-arn "$FAIL_EXEC" --query status --output text)
+  [ "$FAIL_STATUS" != "RUNNING" ] && break
+  sleep 0.5
+done
+try_match "Fail state execution status FAILED" "FAILED" \
+  echo "$FAIL_STATUS"
+
+# Tag / list tags / untag
+$CLI stepfunctions tag-resource \
+  --resource-arn "$SFN_ARN" \
+  --tags "key=env,value=smoke" > /dev/null
+try_match "ListTagsForResource contains env=smoke" "smoke" \
+  $CLI stepfunctions list-tags-for-resource \
+    --resource-arn "$SFN_ARN" \
+    --query "tags[?key=='env'].value" --output text
+
+# Clean up
+$CLI stepfunctions delete-state-machine --state-machine-arn "$SFN_ARN" > /dev/null
+$CLI stepfunctions delete-state-machine --state-machine-arn "$FAIL_SM_ARN" > /dev/null
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
