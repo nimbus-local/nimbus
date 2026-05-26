@@ -487,6 +487,35 @@ func TestReset(t *testing.T) {
 	}
 }
 
+// ── Mount target security groups ──────────────────────────────────────────────
+
+func TestDescribeMountTargetSecurityGroups(t *testing.T) {
+	svc := newTestService()
+	wFS := efsReq(t, svc, http.MethodPost, "/2015-02-01/file-systems", map[string]any{"CreationToken": "sg-token-fs"})
+	fsID := str(parseBody(t, wFS), "FileSystemId")
+	wMT := efsReq(t, svc, http.MethodPost, "/2015-02-01/mount-targets", map[string]any{
+		"FileSystemId": fsID, "SubnetId": "subnet-aaa",
+	})
+	mtID := str(parseBody(t, wMT), "MountTargetId")
+
+	w := efsReq(t, svc, http.MethodGet, fmt.Sprintf("/2015-02-01/mount-targets/%s/security-groups", mtID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	b := parseBody(t, w)
+	if _, ok := b["SecurityGroups"]; !ok {
+		t.Error("SecurityGroups missing from response")
+	}
+}
+
+func TestDescribeMountTargetSecurityGroupsNotFound(t *testing.T) {
+	svc := newTestService()
+	w := efsReq(t, svc, http.MethodGet, "/2015-02-01/mount-targets/fsmt-notexist/security-groups", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
 // ── Lifecycle configuration ───────────────────────────────────────────────────
 
 func TestDescribeLifecycleConfiguration(t *testing.T) {

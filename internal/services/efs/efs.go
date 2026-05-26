@@ -165,6 +165,17 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
 		}
+	case strings.HasPrefix(p, "/2015-02-01/mount-targets/") && strings.HasSuffix(p, "/security-groups"):
+		rest := strings.TrimPrefix(p, "/2015-02-01/mount-targets/")
+		id := strings.TrimSuffix(rest, "/security-groups")
+		switch r.Method {
+		case http.MethodGet:
+			s.describeMountTargetSecurityGroups(w, r, id)
+		case http.MethodPut:
+			s.putMountTargetSecurityGroups(w, r, id)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
+		}
 	case strings.HasPrefix(p, "/2015-02-01/mount-targets/"):
 		id := strings.TrimPrefix(p, "/2015-02-01/mount-targets/")
 		switch r.Method {
@@ -424,6 +435,32 @@ func (s *Service) deleteMountTarget(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	delete(s.mountTargets, id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Mount target security groups (stub) ──────────────────────────────────────
+
+func (s *Service) describeMountTargetSecurityGroups(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	_, ok := s.mountTargets[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "MountTargetNotFound",
+			fmt.Sprintf("Mount target '%s' does not exist.", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"SecurityGroups": []any{}})
+}
+
+func (s *Service) putMountTargetSecurityGroups(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	_, ok := s.mountTargets[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "MountTargetNotFound",
+			fmt.Sprintf("Mount target '%s' does not exist.", id))
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
