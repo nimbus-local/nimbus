@@ -19,6 +19,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/cloudwatchmetrics"
 	"github.com/nimbus-local/nimbus/internal/services/cognito"
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
+	"github.com/nimbus-local/nimbus/internal/services/ec2"
 	"github.com/nimbus-local/nimbus/internal/services/ecr"
 	"github.com/nimbus-local/nimbus/internal/services/ecs"
 	"github.com/nimbus-local/nimbus/internal/services/efs"
@@ -138,6 +139,7 @@ func main() {
 	efsSvc := efs.New(cfg.DefaultRegion)
 	r.Register(efsSvc)              // EFS (/2015-02-01/) must precede the S3 catch-all
 	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
+	r.Register(ec2.New())           // EC2 (POST / form-encoded) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
 	// Standard endpoints
