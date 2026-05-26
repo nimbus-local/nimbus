@@ -487,6 +487,34 @@ func TestReset(t *testing.T) {
 	}
 }
 
+// ── Lifecycle configuration ───────────────────────────────────────────────────
+
+func TestDescribeLifecycleConfiguration(t *testing.T) {
+	svc := newTestService()
+	w := efsReq(t, svc, http.MethodPost, "/2015-02-01/file-systems", map[string]any{
+		"CreationToken": "lc-token-1",
+	})
+	b := parseBody(t, w)
+	id := str(b, "FileSystemId")
+
+	w2 := efsReq(t, svc, http.MethodGet, fmt.Sprintf("/2015-02-01/file-systems/%s/lifecycle-configuration", id), nil)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+	b2 := parseBody(t, w2)
+	if _, ok := b2["LifecyclePolicies"]; !ok {
+		t.Error("LifecyclePolicies missing from lifecycle configuration response")
+	}
+}
+
+func TestDescribeLifecycleConfigurationNotFound(t *testing.T) {
+	svc := newTestService()
+	w := efsReq(t, svc, http.MethodGet, "/2015-02-01/file-systems/fs-notexist/lifecycle-configuration", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func contains(s, sub string) bool {

@@ -133,6 +133,17 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
 		}
+	case strings.HasPrefix(p, "/2015-02-01/file-systems/") && strings.HasSuffix(p, "/lifecycle-configuration"):
+		rest := strings.TrimPrefix(p, "/2015-02-01/file-systems/")
+		id := strings.TrimSuffix(rest, "/lifecycle-configuration")
+		switch r.Method {
+		case http.MethodGet:
+			s.describeLifecycleConfiguration(w, r, id)
+		case http.MethodPut:
+			s.putLifecycleConfiguration(w, r, id)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
+		}
 	case strings.HasPrefix(p, "/2015-02-01/file-systems/"):
 		id := strings.TrimPrefix(p, "/2015-02-01/file-systems/")
 		switch r.Method {
@@ -303,6 +314,32 @@ func (s *Service) deleteFileSystem(w http.ResponseWriter, r *http.Request, id st
 	}
 	delete(s.fileSystems, id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Lifecycle configuration (stub — no lifecycle policies stored) ─────────────
+
+func (s *Service) describeLifecycleConfiguration(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	_, ok := s.fileSystems[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "FileSystemNotFound",
+			fmt.Sprintf("File system '%s' does not exist.", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"LifecyclePolicies": []any{}})
+}
+
+func (s *Service) putLifecycleConfiguration(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	_, ok := s.fileSystems[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "FileSystemNotFound",
+			fmt.Sprintf("File system '%s' does not exist.", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"LifecyclePolicies": []any{}})
 }
 
 // ── Mount target operations ───────────────────────────────────────────────────
