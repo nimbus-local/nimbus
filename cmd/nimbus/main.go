@@ -21,6 +21,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/dynamodb"
 	"github.com/nimbus-local/nimbus/internal/services/ecr"
 	"github.com/nimbus-local/nimbus/internal/services/ecs"
+	"github.com/nimbus-local/nimbus/internal/services/efs"
 	"github.com/nimbus-local/nimbus/internal/services/elasticache"
 	"github.com/nimbus-local/nimbus/internal/services/eventbridge"
 	"github.com/nimbus-local/nimbus/internal/services/iam"
@@ -134,6 +135,8 @@ func main() {
 	r.Register(cognito.New(cfg.DefaultRegion))
 	sfnSvc := sfn.New(cfg.DefaultRegion, nimbusBaseURL)
 	r.Register(sfnSvc)
+	efsSvc := efs.New(cfg.DefaultRegion)
+	r.Register(efsSvc)              // EFS (/2015-02-01/) must precede the S3 catch-all
 	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
 	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
 
@@ -246,6 +249,7 @@ func main() {
 			EventBridgeBuses    int               `json:"eventbridge_buses"`
 			SFNStateMachines    int               `json:"sfn_state_machines"`
 			Secrets             int               `json:"secrets"`
+			EFSFileSystems      int               `json:"efs_file_systems"`
 		}
 		resp := stateResponse{
 			Functions:           lambdaSvc.CRUD.FunctionNames(),
@@ -259,6 +263,7 @@ func main() {
 			EventBridgeBuses:    ebSvc.BusCount(),
 			SFNStateMachines:    sfnSvc.StateMachineCount(),
 			Secrets:             smSvc.SecretCount(),
+			EFSFileSystems:      efsSvc.FileSystemCount(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp) //nolint:errcheck
@@ -281,6 +286,7 @@ func main() {
 		ebSvc.Reset()
 		sfnSvc.Reset()
 		smSvc.Reset()
+		efsSvc.Reset()
 		w.WriteHeader(http.StatusNoContent)
 	})
 
