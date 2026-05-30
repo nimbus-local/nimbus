@@ -70,6 +70,13 @@ func newV2Store() *v2store {
 	return &v2store{apis: make(map[string]*v2apiRecord)}
 }
 
+// Reset clears all HTTP API (v2) state.
+func (s *v2store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apis = map[string]*v2apiRecord{}
+}
+
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }

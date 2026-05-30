@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -23,6 +24,13 @@ func New(dataDir string) *Service {
 }
 
 func (s *Service) Name() string { return "s3" }
+
+// Reset removes all stored objects by wiping the S3 data directory and
+// recreating it empty.
+func (s *Service) Reset() {
+	_ = os.RemoveAll(s.dataDir)
+	_ = os.MkdirAll(s.dataDir, 0755)
+}
 
 // Detect identifies S3 requests by:
 // 1. Virtual-hosted style: bucket.s3*.amazonaws.com or bucket.localhost

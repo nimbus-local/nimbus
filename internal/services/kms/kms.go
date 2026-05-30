@@ -72,6 +72,15 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "kms" }
 
+// Reset clears all keys, aliases, and grants.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keys = map[string]*cmk{}
+	s.aliases = map[string]string{}
+	s.grants = map[string][]*grant{}
+}
+
 // Detect identifies KMS requests by X-Amz-Target header (TrentService.*).
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "TrentService.")

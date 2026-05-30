@@ -98,6 +98,17 @@ func New(region, valkeyHost string, valkeyPort int) *Service {
 
 func (s *Service) Name() string { return "elasticache" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subnetGroups = map[string]*cacheSubnetGroup{}
+	s.paramGroups = map[string]*cacheParamGroup{}
+	s.clusters = map[string]*cacheCluster{}
+	s.replGroups = map[string]*replicationGroup{}
+	s.tags = map[string]map[string]string{}
+}
+
 func (s *Service) Detect(r *http.Request) bool {
 	if !strings.Contains(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 		return false

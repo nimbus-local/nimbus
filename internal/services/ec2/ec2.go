@@ -118,6 +118,18 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "ec2" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vpcs = map[string]*vpc{}
+	s.subnets = map[string]*subnet{}
+	s.igws = map[string]*internetGateway{}
+	s.secGroups = map[string]*securityGroup{}
+	s.routeTables = map[string]*routeTable{}
+	s.associations = map[string]*rtAssociation{}
+}
+
 // Detect identifies EC2 query-protocol requests:
 // POST / with Content-Type application/x-www-form-urlencoded.
 func (s *Service) Detect(r *http.Request) bool {

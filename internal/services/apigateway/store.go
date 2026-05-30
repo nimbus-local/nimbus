@@ -94,6 +94,13 @@ func newStore() *store {
 	return &store{apis: make(map[string]*apiRecord)}
 }
 
+// Reset clears all REST API (v1) state.
+func (s *store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apis = map[string]*apiRecord{}
+}
+
 func (s *store) createAPI(name, description string) *RestAPI {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -53,6 +53,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, "no service matched this request", http.StatusBadRequest)
 }
 
+// ResetAll calls Reset() on every registered service. Used by /_nimbus/reset.
+// Because Reset() is part of the Service interface, any service missing it
+// will fail to compile — ensuring coverage is always complete.
+func (r *Router) ResetAll() {
+	for _, svc := range r.services {
+		svc.Reset()
+	}
+}
+
 // Health endpoint — used by Docker healthcheck
 func (r *Router) HealthHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

@@ -64,6 +64,15 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "ecr" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repos = map[string]*repository{}
+	s.blobs = map[string][]byte{}
+	s.uploads = map[string]*upload{}
+}
+
 // Detect claims ECR management API requests (X-Amz-Target) and Docker V2
 // registry requests (/v2/...). /v2/email/ is excluded so SES v2 still works.
 func (s *Service) Detect(r *http.Request) bool {

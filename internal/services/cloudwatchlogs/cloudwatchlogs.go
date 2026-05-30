@@ -62,6 +62,13 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "cloudwatchlogs" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groups = map[string]*logGroup{}
+}
+
 // Detect identifies CloudWatch Logs requests by X-Amz-Target header.
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "Logs_20140328.")

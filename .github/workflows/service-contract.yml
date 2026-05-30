@@ -1,0 +1,48 @@
+name: Service Contract
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+# Every Nimbus service must implement the services.Service interface, which
+# includes Reset(). This workflow enforces the contract at compile time:
+# go build fails if any registered service is missing Reset(), so no separate
+# reflection check is needed.
+
+jobs:
+  service-contract:
+    name: All services implement Service interface (incl. Reset)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # go build is the enforcement mechanism. services.Service requires Reset(),
+      # so any service missing Reset() fails compilation here.
+      - name: Build (enforces Service interface compliance)
+        run: go build ./...
+
+      # Belt-and-suspenders: also verify the interface definition itself still
+      # contains Reset() so someone can't remove it to "fix" a build failure.
+      - name: Verify Reset() is in the Service interface
+        run: |
+          if ! grep -q 'Reset()' internal/services/service.go; then
+            echo "::error file=internal/services/service.go::Reset() was removed from the Service interface. Every service must implement Reset() so /_nimbus/reset clears all state."
+            exit 1
+          fi
+          echo "✓ Reset() present in Service interface"
+
+      # Verify ResetAll() is in the router so the reset handler stays wired.
+      - name: Verify router.ResetAll() exists
+        run: |
+          if ! grep -q 'func.*ResetAll' internal/router/router.go; then
+            echo "::error file=internal/router/router.go::ResetAll() was removed from the router. The /_nimbus/reset endpoint requires it."
+            exit 1
+          fi
+          echo "✓ router.ResetAll() present"

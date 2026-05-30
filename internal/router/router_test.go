@@ -17,6 +17,7 @@ type mockService struct {
 
 func (m *mockService) Name() string                { return m.name }
 func (m *mockService) Detect(r *http.Request) bool { return m.detect(r) }
+func (m *mockService) Reset()                      {}
 func (m *mockService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.called = true
 	w.WriteHeader(http.StatusOK)

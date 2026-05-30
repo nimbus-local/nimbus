@@ -62,6 +62,17 @@ func New() *Service {
 
 func (s *Service) Name() string { return "iam" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roles = map[string]*role{}
+	s.attachments = map[string][]string{}
+	s.managedPolicies = map[string]*managedPolicy{}
+	s.inlinePolicies = map[string]map[string]string{}
+	s.instanceProfiles = map[string]*instanceProfile{}
+}
+
 // Detect identifies IAM (2010-05-08) and STS (2011-06-15) requests.
 // Both services use the query protocol: form-encoded body with a Version parameter.
 func (s *Service) Detect(r *http.Request) bool {

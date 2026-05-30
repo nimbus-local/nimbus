@@ -56,6 +56,14 @@ func New() *Service {
 
 func (s *Service) Name() string { return "route53" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.zones = map[string]*hostedZone{}
+	s.tags = map[string]map[string]string{}
+}
+
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/2013-04-01/")
 }

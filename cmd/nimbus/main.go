@@ -78,7 +78,8 @@ func main() {
 	r.Register(acmSvc)
 	cfSvc := cloudfront.New(cfg.DefaultRegion)
 	r.Register(cfSvc)
-	r.Register(iam.New())
+	iamSvc := iam.New()
+	r.Register(iamSvc)
 	cwlSvc := cloudwatchlogs.New(cfg.DefaultRegion)
 	r.Register(cwlSvc)
 	cwmSvc := cloudwatchmetrics.New(cfg.DefaultRegion)
@@ -86,15 +87,18 @@ func main() {
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	r.Register(lambdaSvc)
-	r.Register(apigateway.New(cfg.DefaultRegion, lambdaSvc.Invocation))
+	apiGwSvc := apigateway.New(cfg.DefaultRegion, lambdaSvc.Invocation)
+	r.Register(apiGwSvc)
 	sesSvc := ses.New(cfg.DefaultRegion)
 	r.Register(sesSvc)
-	r.Register(ecr.New(cfg.DefaultRegion))
+	ecrSvc := ecr.New(cfg.DefaultRegion)
+	r.Register(ecrSvc)
 	ecsSvc := ecs.New(cfg.DefaultRegion)
 	r.Register(ecsSvc)
 	smSvc := secretsmanager.New(cfg.DefaultRegion)
 	r.Register(smSvc)
-	r.Register(kms.New(cfg.DefaultRegion))
+	kmsSvc := kms.New(cfg.DefaultRegion)
+	r.Register(kmsSvc)
 	ssmSvc := ssm.New(cfg.DefaultRegion)
 	r.Register(ssmSvc)
 	sqsSvc := sqs.New(cfg.DefaultRegion)
@@ -128,19 +132,24 @@ func main() {
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
 	r.Register(rdsSvc)
-	r.Register(route53.New())
+	r53Svc := route53.New()
+	r.Register(r53Svc)
 	ecSvc := elasticache.New(cfg.DefaultRegion, cfg.ValkeyHost, cfg.ValkeyPort)
 	r.Register(ecSvc)
 	ebSvc := eventbridge.New(cfg.DefaultRegion)
 	r.Register(ebSvc)
-	r.Register(cognito.New(cfg.DefaultRegion))
+	cognitoSvc := cognito.New(cfg.DefaultRegion)
+	r.Register(cognitoSvc)
 	sfnSvc := sfn.New(cfg.DefaultRegion, nimbusBaseURL)
 	r.Register(sfnSvc)
 	efsSvc := efs.New(cfg.DefaultRegion)
-	r.Register(efsSvc)                     // EFS (/2015-02-01/) must precede the S3 catch-all
-	r.Register(s3control.New())            // S3 Control (/v20180820/) must precede the S3 catch-all
-	r.Register(ec2.New(cfg.DefaultRegion)) // EC2 (POST / form-encoded) must precede the S3 catch-all
-	r.Register(s3.New(cfg.DataDir))        // S3 is the catch-all, register last
+	r.Register(efsSvc) // EFS (/2015-02-01/) must precede the S3 catch-all
+	s3ControlSvc := s3control.New()
+	r.Register(s3ControlSvc) // S3 Control (/v20180820/) must precede the S3 catch-all
+	ec2Svc := ec2.New(cfg.DefaultRegion)
+	r.Register(ec2Svc) // EC2 (POST / form-encoded) must precede the S3 catch-all
+	s3Svc := s3.New(cfg.DataDir)
+	r.Register(s3Svc) // S3 is the catch-all, register last
 
 	// Standard endpoints
 	mux := http.NewServeMux()
@@ -271,24 +280,13 @@ func main() {
 		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	})
 
-	// /_nimbus/reset — clear all in-memory state (S3 filesystem objects untouched)
+	// /_nimbus/reset — clear all in-memory state across every service
 	mux.HandleFunc("/_nimbus/reset", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		lambdaSvc.CRUD.Reset()
-		lambdaSvc.Invocation.Reset()
-		lambdaSvc.EventSources.Reset()
-		snsSvc.Reset()
-		sqsSvc.Reset()
-		ssmSvc.Reset()
-		kinesisSvc.Reset()
-		schedSvc.Reset()
-		ebSvc.Reset()
-		sfnSvc.Reset()
-		smSvc.Reset()
-		efsSvc.Reset()
+		r.ResetAll() // calls Reset() on every registered service
 		w.WriteHeader(http.StatusNoContent)
 	})
 
