@@ -554,6 +554,43 @@ else
   fail "describe-cache-subnet-groups (subnet group not found — run 'make apply' first)"
 fi
 
+# Tags — AddTagsToResource / ListTagsForResource / RemoveTagsFromResource
+SG_ARN="arn:aws:elasticache:${REGION}:000000000000:subnetgroup:${PREFIX}"
+RG_ARN="arn:aws:elasticache:${REGION}:000000000000:replicationgroup:${PREFIX}"
+
+try "AddTagsToResource (subnet group)" \
+  $CLI elasticache add-tags-to-resource \
+    --resource-name "$SG_ARN" \
+    --tags "Key=env,Value=smoke" "Key=app,Value=nimbus"
+
+try_match "ListTagsForResource (subnet group) contains env=smoke" "smoke" \
+  $CLI elasticache list-tags-for-resource \
+    --resource-name "$SG_ARN" \
+    --query "TagList[?Key=='env'].Value" --output text
+
+try "RemoveTagsFromResource (subnet group)" \
+  $CLI elasticache remove-tags-from-resource \
+    --resource-name "$SG_ARN" \
+    --tag-keys "app"
+
+SG_TAGS=$($CLI elasticache list-tags-for-resource --resource-name "$SG_ARN" \
+  --query "TagList[*].Key" --output text 2>/dev/null)
+if echo "$SG_TAGS" | grep -q "app"; then
+  fail "RemoveTagsFromResource did not remove 'app' tag"
+else
+  ok "RemoveTagsFromResource removed 'app' tag"
+fi
+
+try "AddTagsToResource (replication group)" \
+  $CLI elasticache add-tags-to-resource \
+    --resource-name "$RG_ARN" \
+    --tags "Key=env,Value=smoke"
+
+try_match "ListTagsForResource (replication group) contains env=smoke" "smoke" \
+  $CLI elasticache list-tags-for-resource \
+    --resource-name "$RG_ARN" \
+    --query "TagList[?Key=='env'].Value" --output text
+
 try_match "/_nimbus/elasticache/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/elasticache/clusters"
 
