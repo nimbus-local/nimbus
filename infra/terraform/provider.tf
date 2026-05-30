@@ -34,5 +34,12 @@ provider "aws" {
     cognitoidp     = var.nimbus_endpoint
     kinesis        = var.nimbus_endpoint
     sfn            = var.nimbus_endpoint
+    route53        = var.nimbus_endpoint
+    acm            = var.nimbus_endpoint
+    elasticache    = var.nimbus_endpoint
+    rds            = var.nimbus_endpoint
+    efs            = var.nimbus_endpoint
+    ec2            = var.nimbus_endpoint
+    elb            = var.nimbus_endpoint
   }
 }

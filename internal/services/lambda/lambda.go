@@ -63,6 +63,13 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "lambda" }
 
+// Reset clears all Lambda state across all sub-services.
+func (s *Service) Reset() {
+	s.CRUD.Reset()
+	s.Invocation.Reset()
+	s.EventSources.Reset()
+}
+
 // Detect identifies Lambda requests by API date-versioned path prefixes.
 // AWS added newer operations under /2020-06-30/ (e.g. GetFunctionCodeSigningConfig).
 func (s *Service) Detect(r *http.Request) bool {

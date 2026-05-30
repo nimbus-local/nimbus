@@ -111,6 +111,28 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "alb" }
 
+// Reset clears all in-memory state and shuts down active proxies.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	proxiesToStop := make(map[string]*activeProxy, len(s.proxies))
+	for port, p := range s.proxies {
+		proxiesToStop[port] = p
+	}
+	s.lbs = map[string]*lb{}
+	s.listeners = map[string]*listener{}
+	s.rules = map[string]*rule{}
+	s.targetGroups = map[string]*targetGroup{}
+	s.proxies = map[string]*activeProxy{}
+	s.mu.Unlock()
+	for port, p := range proxiesToStop {
+		go func(port string, p *activeProxy) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = p.srv.Shutdown(ctx)
+		}(port, p)
+	}
+}
+
 // Detect claims ELBv2 requests — form-encoded body with Version=2015-12-01.
 // Uses ParseForm (idempotent) so body is not double-consumed if a prior service
 // already called ParseForm (e.g. SQS).

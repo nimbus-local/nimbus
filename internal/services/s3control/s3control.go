@@ -21,6 +21,9 @@ func New() *Service { return &Service{} }
 
 func (s *Service) Name() string { return "s3control" }
 
+// Reset is a no-op: s3control has no in-memory state.
+func (s *Service) Reset() {}
+
 // Detect identifies S3 Control requests by the x-amz-account-id header or
 // the /v20180820/ path prefix used by the S3 Control API.
 func (s *Service) Detect(r *http.Request) bool {

@@ -119,6 +119,19 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "ecs" }
 
+// Reset clears all in-memory state and re-creates the default cluster.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clusters = map[string]*cluster{}
+	s.taskDefs = map[string]*taskDef{}
+	s.taskFams = map[string]int{}
+	s.tasks = map[string]*ecsTask{}
+	s.services = map[string]*ecsService{}
+	s.tags = map[string]map[string]string{}
+	s.makeCluster("default")
+}
+
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), ecsTarget)
 }

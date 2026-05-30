@@ -7,11 +7,13 @@ Thank you for helping make local AWS development free for everyone.
 1. Create `internal/services/<name>/` and implement the `services.Service` interface:
    ```go
    type Service interface {
-       Name()                        string
-       Detect(r *http.Request)       bool
+       Name()    string
+       Detect(r *http.Request) bool
        ServeHTTP(w http.ResponseWriter, r *http.Request)
+       Reset()   // clears ALL in-memory state — required for /_nimbus/reset
    }
    ```
+   **`Reset()` is mandatory.** The `Service Contract` CI check (a required PR check) enforces this at compile time — `go build` fails if `Reset()` is missing.
 2. Register it in `cmd/nimbus/main.go` — more specific detectors before less specific ones. S3 is the catch-all and must stay last.
 3. Write tests alongside the implementation (`<name>_test.go`).
 4. **Document the service** — see the [Documentation](#documentation) section below.

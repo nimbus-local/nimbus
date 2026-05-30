@@ -51,6 +51,14 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "acm" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.certs = map[string]*certificate{}
+	s.tags = map[string]map[string]string{}
+}
+
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "CertificateManager.")
 }

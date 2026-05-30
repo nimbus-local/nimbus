@@ -41,6 +41,12 @@ func New(region string, lambda LambdaInvoker) *Service {
 
 func (s *Service) Name() string { return "apigateway" }
 
+// Reset clears all in-memory state (both REST and HTTP API stores).
+func (s *Service) Reset() {
+	s.db.Reset()
+	s.v2.Reset()
+}
+
 // Detect claims /restapis/* (REST API v1) and /apis/* (HTTP API v2).
 // AWS SDK Go v2 (used by Pulumi) prefixes HTTP API paths with /v2/.
 func (s *Service) Detect(r *http.Request) bool {

@@ -98,6 +98,18 @@ func New(region, postgresHost string, postgresPort int) *Service {
 
 func (s *Service) Name() string { return "rds" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subnetGroups = map[string]*dbSubnetGroup{}
+	s.clusterParamGrps = map[string]*dbParamGroup{}
+	s.paramGrps = map[string]*dbParamGroup{}
+	s.clusters = map[string]*dbCluster{}
+	s.instances = map[string]*dbInstance{}
+	s.tags = map[string]map[string]string{}
+}
+
 func (s *Service) Detect(r *http.Request) bool {
 	if !strings.Contains(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 		return false

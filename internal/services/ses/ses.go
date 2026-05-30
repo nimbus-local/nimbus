@@ -64,6 +64,14 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "ses" }
 
+// Reset clears all captured messages and verified identities.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = nil
+	s.identities = map[string]bool{}
+}
+
 // Detect identifies SES requests by X-Amz-Target header or Action param.
 // SES v1 uses query-param style (Action=SendEmail).
 // SES v2 uses X-Amz-Target: AmazonSimpleEmailService.* or path /v2/email/...

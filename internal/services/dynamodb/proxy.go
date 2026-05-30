@@ -50,6 +50,11 @@ func New(endpoint string, logger *slog.Logger) *Service {
 
 func (s *Service) Name() string { return "dynamodb" }
 
+// Reset is a no-op for the DynamoDB proxy — DynamoDB Local is a separate
+// process managed outside Nimbus. To reset DynamoDB state, restart the
+// dynamodb-local container or delete tables individually via the AWS CLI.
+func (s *Service) Reset() {}
+
 // Detect identifies DynamoDB requests by the X-Amz-Target header prefix.
 // All DynamoDB operations use DynamoDB_20120810.<OperationName>
 func (s *Service) Detect(r *http.Request) bool {

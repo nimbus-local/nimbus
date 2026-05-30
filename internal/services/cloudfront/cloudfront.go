@@ -53,6 +53,13 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "cloudfront" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.distributions = map[string]*dist{}
+}
+
 // Detect claims CloudFront REST API requests by path prefix /2020-05-31/.
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/2020-05-31/")

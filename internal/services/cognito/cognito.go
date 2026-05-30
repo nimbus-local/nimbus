@@ -94,6 +94,17 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "cognito" }
 
+// Reset clears all in-memory state.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pools = map[string]*userPool{}
+	s.clients = map[string]*poolClient{}
+	s.users = map[string]map[string]*user{}
+	s.groups = map[string]map[string]*poolGroup{}
+	s.tokens = map[string]*tokenRecord{}
+}
+
 // Detect identifies Cognito User Pool requests.
 func (s *Service) Detect(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSCognitoIdentityProviderService.") ||
