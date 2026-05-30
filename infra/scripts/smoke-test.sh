@@ -594,6 +594,145 @@ try_match "ListTagsForResource (replication group) contains env=smoke" "smoke" \
 try_match "/_nimbus/elasticache/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/elasticache/clusters"
 
+# ── EC2 / VPC ─────────────────────────────────────────────────────────────────
+
+section "EC2 / VPC"
+
+try_match "describe-availability-zones returns us-east-1a" "us-east-1a" \
+  $CLI ec2 describe-availability-zones \
+    --filters Name=state,Values=available \
+    --query "AvailabilityZones[0].ZoneName" --output text
+
+VPC_ID=$($CLI ec2 create-vpc --cidr-block 10.99.0.0/16 \
+  --query Vpc.VpcId --output text 2>/dev/null)
+if [ -n "${VPC_ID:-}" ] && [ "$VPC_ID" != "None" ]; then
+  ok "create-vpc"
+
+  try "modify-vpc-attribute (EnableDnsHostnames)" \
+    $CLI ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames
+
+  try_match "describe-vpc-attribute (enableDnsHostnames)" "True" \
+    $CLI ec2 describe-vpc-attribute --vpc-id "$VPC_ID" \
+      --attribute enableDnsHostnames \
+      --query "EnableDnsHostnames.Value" --output text
+
+  try_match "describe-vpcs finds vpc" "$VPC_ID" \
+    $CLI ec2 describe-vpcs --vpc-ids "$VPC_ID" \
+      --query "Vpcs[0].VpcId" --output text
+
+  SUBNET_ID=$($CLI ec2 create-subnet \
+    --vpc-id "$VPC_ID" --cidr-block 10.99.1.0/24 \
+    --availability-zone us-east-1a \
+    --query Subnet.SubnetId --output text 2>/dev/null)
+  if [ -n "${SUBNET_ID:-}" ] && [ "$SUBNET_ID" != "None" ]; then
+    ok "create-subnet"
+
+    try "modify-subnet-attribute (MapPublicIpOnLaunch)" \
+      $CLI ec2 modify-subnet-attribute --subnet-id "$SUBNET_ID" --map-public-ip-on-launch
+
+    try_match "describe-subnets finds subnet" "$SUBNET_ID" \
+      $CLI ec2 describe-subnets --subnet-ids "$SUBNET_ID" \
+        --query "Subnets[0].SubnetId" --output text
+  else
+    fail "create-subnet"
+  fi
+
+  IGW_ID=$($CLI ec2 create-internet-gateway \
+    --query InternetGateway.InternetGatewayId --output text 2>/dev/null)
+  if [ -n "${IGW_ID:-}" ] && [ "$IGW_ID" != "None" ]; then
+    ok "create-internet-gateway"
+
+    try "attach-internet-gateway" \
+      $CLI ec2 attach-internet-gateway \
+        --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
+
+    try_match "describe-internet-gateways finds igw" "$IGW_ID" \
+      $CLI ec2 describe-internet-gateways \
+        --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
+        --query "InternetGateways[0].InternetGatewayId" --output text
+  else
+    fail "create-internet-gateway"
+  fi
+
+  RT_ID=$($CLI ec2 create-route-table --vpc-id "$VPC_ID" \
+    --query RouteTable.RouteTableId --output text 2>/dev/null)
+  if [ -n "${RT_ID:-}" ] && [ "$RT_ID" != "None" ]; then
+    ok "create-route-table"
+
+    try "create-route" \
+      $CLI ec2 create-route --route-table-id "$RT_ID" \
+        --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
+
+    ASSOC_ID=$($CLI ec2 associate-route-table \
+      --route-table-id "$RT_ID" --subnet-id "$SUBNET_ID" \
+      --query AssociationId --output text 2>/dev/null)
+    if [ -n "${ASSOC_ID:-}" ] && [ "$ASSOC_ID" != "None" ]; then
+      ok "associate-route-table"
+
+      try_match "describe-route-tables includes association" "$ASSOC_ID" \
+        $CLI ec2 describe-route-tables --route-table-ids "$RT_ID" \
+          --query "RouteTables[0].Associations[0].RouteTableAssociationId" --output text
+
+      try "disassociate-route-table" \
+        $CLI ec2 disassociate-route-table --association-id "$ASSOC_ID"
+    else
+      fail "associate-route-table"
+    fi
+
+    try "delete-route" \
+      $CLI ec2 delete-route --route-table-id "$RT_ID" \
+        --destination-cidr-block 0.0.0.0/0
+    try "delete-route-table" \
+      $CLI ec2 delete-route-table --route-table-id "$RT_ID"
+  else
+    fail "create-route-table"
+  fi
+
+  SG_ID=$($CLI ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=default" \
+    --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
+  if [ -n "${SG_ID:-}" ] && [ "$SG_ID" != "None" ]; then
+    ok "default security group auto-created with VPC"
+
+    try "authorize-security-group-egress" \
+      $CLI ec2 authorize-security-group-egress --group-id "$SG_ID" \
+        --ip-permissions "IpProtocol=-1,FromPort=0,ToPort=0,IpRanges=[{CidrIp=0.0.0.0/0}]"
+
+    try_match "describe-security-group-rules finds rule" "sgr-" \
+      $CLI ec2 describe-security-group-rules \
+        --filters "Name=group-id,Values=$SG_ID" \
+        --query "SecurityGroupRules[0].SecurityGroupRuleId" --output text
+  else
+    fail "default security group auto-created with VPC"
+  fi
+
+  try "create-tags on VPC" \
+    $CLI ec2 create-tags \
+      --resources "$VPC_ID" \
+      --tags "Key=env,Value=smoke" "Key=app,Value=nimbus"
+
+  try_match "describe-vpcs shows tag" "smoke" \
+    $CLI ec2 describe-vpcs --vpc-ids "$VPC_ID" \
+      --query "Vpcs[0].Tags[?Key=='env'].Value" --output text
+
+  # Cleanup
+  if [ -n "${IGW_ID:-}" ] && [ "$IGW_ID" != "None" ]; then
+    try "detach-internet-gateway" \
+      $CLI ec2 detach-internet-gateway \
+        --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
+    try "delete-internet-gateway" \
+      $CLI ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID"
+  fi
+  if [ -n "${SUBNET_ID:-}" ] && [ "$SUBNET_ID" != "None" ]; then
+    try "delete-subnet" \
+      $CLI ec2 delete-subnet --subnet-id "$SUBNET_ID"
+  fi
+  try "delete-vpc" \
+    $CLI ec2 delete-vpc --vpc-id "$VPC_ID"
+else
+  fail "create-vpc"
+fi
+
 # ── ACM ───────────────────────────────────────────────────────────────────────
 
 section "ACM"

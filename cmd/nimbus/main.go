@@ -137,10 +137,10 @@ func main() {
 	sfnSvc := sfn.New(cfg.DefaultRegion, nimbusBaseURL)
 	r.Register(sfnSvc)
 	efsSvc := efs.New(cfg.DefaultRegion)
-	r.Register(efsSvc)              // EFS (/2015-02-01/) must precede the S3 catch-all
-	r.Register(s3control.New())     // S3 Control (/v20180820/) must precede the S3 catch-all
-	r.Register(ec2.New())           // EC2 (POST / form-encoded) must precede the S3 catch-all
-	r.Register(s3.New(cfg.DataDir)) // S3 is the catch-all, register last
+	r.Register(efsSvc)                     // EFS (/2015-02-01/) must precede the S3 catch-all
+	r.Register(s3control.New())            // S3 Control (/v20180820/) must precede the S3 catch-all
+	r.Register(ec2.New(cfg.DefaultRegion)) // EC2 (POST / form-encoded) must precede the S3 catch-all
+	r.Register(s3.New(cfg.DataDir))        // S3 is the catch-all, register last
 
 	// Standard endpoints
 	mux := http.NewServeMux()
