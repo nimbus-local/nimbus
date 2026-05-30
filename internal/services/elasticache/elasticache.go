@@ -688,7 +688,7 @@ func (s *Service) addTagsToResource(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.storeTags(r, arn)
 	s.mu.Unlock()
-	writeXML(w, http.StatusOK, wrap("AddTagsToResource", `<TagList/>`))
+	writeXML(w, http.StatusOK, wrap("AddTagsToResource", `<AddTagsToResourceResult/>`))
 }
 
 func (s *Service) listTagsForResource(w http.ResponseWriter, r *http.Request) {
@@ -720,12 +720,13 @@ func (s *Service) removeTagsFromResource(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	s.mu.Unlock()
-	writeXML(w, http.StatusOK, wrap("RemoveTagsFromResource", ""))
+	writeXML(w, http.StatusOK, wrap("RemoveTagsFromResource", `<RemoveTagsFromResourceResult/>`))
 }
 
 func (s *Service) storeTags(r *http.Request, arn string) {
 	tags := map[string]string{}
 	for i := 1; ; i++ {
+		// ElastiCache query protocol uses locationName "Tag" for list members.
 		key := r.FormValue(fmt.Sprintf("Tags.Tag.%d.Key", i))
 		if key == "" {
 			break

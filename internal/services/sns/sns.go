@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	xmlNS     = "https://sns.amazonaws.com/doc/2010-03-31/"
-	xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>`
-	accountID = "000000000000"
+	xmlNS      = "https://sns.amazonaws.com/doc/2010-03-31/"
+	xmlHeader  = `<?xml version="1.0" encoding="UTF-8"?>`
+	accountID  = "000000000000"
+	apiVersion = "2010-03-31"
 )
 
 // Service implements the AWS SNS emulator.
@@ -89,20 +90,39 @@ func (s *Service) TopicCount() int {
 func (s *Service) Name() string { return "sns" }
 
 // Detect identifies SNS requests by X-Amz-Target header or Action param.
+// Actions shared with other query-protocol services (e.g. ListTagsForResource
+// with ElastiCache) additionally require Version=2010-03-31 to avoid
+// stealing requests destined for other services.
 func (s *Service) Detect(r *http.Request) bool {
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonSimpleNotificationService.") {
 		return true
 	}
 	r.ParseForm()
-	return isSNSAction(r.Form.Get("Action"))
+	action := r.Form.Get("Action")
+	if isSNSOnlyAction(action) {
+		return true
+	}
+	// Shared actions: require explicit SNS API version.
+	return r.Form.Get("Version") == apiVersion && isSharedSNSAction(action)
 }
 
-func isSNSAction(action string) bool {
+// isSNSOnlyAction returns true for actions that exist only in SNS.
+func isSNSOnlyAction(action string) bool {
 	switch action {
 	case "CreateTopic", "DeleteTopic", "ListTopics", "GetTopicAttributes", "SetTopicAttributes",
 		"Subscribe", "Unsubscribe", "ListSubscriptions", "ListSubscriptionsByTopic",
 		"GetSubscriptionAttributes", "ConfirmSubscription",
-		"Publish", "PublishBatch", "ListTagsForResource", "TagResource":
+		"Publish", "PublishBatch":
+		return true
+	}
+	return false
+}
+
+// isSharedSNSAction returns true for actions shared with other AWS services.
+// These require a version check to avoid routing conflicts.
+func isSharedSNSAction(action string) bool {
+	switch action {
+	case "ListTagsForResource", "TagResource":
 		return true
 	}
 	return false
