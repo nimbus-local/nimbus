@@ -61,7 +61,7 @@ func TestAddTagsToResource_ResponseShape(t *testing.T) {
 	svc := newSvc()
 	arn := "arn:aws:elasticache:us-east-1:000000000000:subnetgroup:sg1"
 	w := ecReq(t, svc, "AddTagsToResource", url.Values{
-		"ResourceName":      {arn},
+		"ResourceName":     {arn},
 		"Tags.Tag.1.Key":   {"env"},
 		"Tags.Tag.1.Value": {"dev"},
 	})
@@ -82,7 +82,7 @@ func TestAddTagsToResource_StoredAndRetrievable(t *testing.T) {
 	svc := newSvc()
 	arn := "arn:aws:elasticache:us-east-1:000000000000:subnetgroup:sg1"
 	ecReq(t, svc, "AddTagsToResource", url.Values{
-		"ResourceName":      {arn},
+		"ResourceName":     {arn},
 		"Tags.Tag.1.Key":   {"env"},
 		"Tags.Tag.1.Value": {"staging"},
 	})
@@ -93,7 +93,7 @@ func TestAddTagsToResource_MultipleTagsStored(t *testing.T) {
 	svc := newSvc()
 	arn := "arn:aws:elasticache:us-east-1:000000000000:replicationgroup:rg1"
 	ecReq(t, svc, "AddTagsToResource", url.Values{
-		"ResourceName":      {arn},
+		"ResourceName":     {arn},
 		"Tags.Tag.1.Key":   {"app"},
 		"Tags.Tag.1.Value": {"myapp"},
 		"Tags.Tag.2.Key":   {"env"},
@@ -138,7 +138,7 @@ func TestRemoveTagsFromResource(t *testing.T) {
 	svc := newSvc()
 	arn := "arn:aws:elasticache:us-east-1:000000000000:subnetgroup:sg1"
 	ecReq(t, svc, "AddTagsToResource", url.Values{
-		"ResourceName":      {arn},
+		"ResourceName":     {arn},
 		"Tags.Tag.1.Key":   {"env"},
 		"Tags.Tag.1.Value": {"dev"},
 		"Tags.Tag.2.Key":   {"app"},
@@ -170,8 +170,8 @@ func TestCreateSubnetGroup_TagsStored(t *testing.T) {
 	w := ecReq(t, svc, "CreateCacheSubnetGroup", url.Values{
 		"CacheSubnetGroupName":        {"my-sg"},
 		"CacheSubnetGroupDescription": {"test"},
-		"Tags.Tag.1.Key":             {"forge:app"},
-		"Tags.Tag.1.Value":           {"myapp"},
+		"Tags.Tag.1.Key":              {"forge:app"},
+		"Tags.Tag.1.Value":            {"myapp"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateCacheSubnetGroup: expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -185,8 +185,8 @@ func TestCreateParameterGroup_TagsStored(t *testing.T) {
 		"CacheParameterGroupName":   {"my-pg"},
 		"CacheParameterGroupFamily": {"valkey7"},
 		"Description":               {"test"},
-		"Tags.Tag.1.Key":           {"forge:stage"},
-		"Tags.Tag.1.Value":         {"ci"},
+		"Tags.Tag.1.Key":            {"forge:stage"},
+		"Tags.Tag.1.Value":          {"ci"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateCacheParameterGroup: expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -199,8 +199,8 @@ func TestCreateReplicationGroup_TagsStored(t *testing.T) {
 	w := ecReq(t, svc, "CreateReplicationGroup", url.Values{
 		"ReplicationGroupId":          {"my-rg"},
 		"ReplicationGroupDescription": {"test"},
-		"Tags.Tag.1.Key":             {"forge:name"},
-		"Tags.Tag.1.Value":           {"Cache"},
+		"Tags.Tag.1.Key":              {"forge:name"},
+		"Tags.Tag.1.Value":            {"Cache"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateReplicationGroup: expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -211,9 +211,9 @@ func TestCreateReplicationGroup_TagsStored(t *testing.T) {
 func TestCreateCacheCluster_TagsStored(t *testing.T) {
 	svc := newSvc()
 	w := ecReq(t, svc, "CreateCacheCluster", url.Values{
-		"CacheClusterId":    {"my-cluster"},
-		"Engine":            {"valkey"},
-		"CacheNodeType":     {"cache.t3.micro"},
+		"CacheClusterId":   {"my-cluster"},
+		"Engine":           {"valkey"},
+		"CacheNodeType":    {"cache.t3.micro"},
 		"Tags.Tag.1.Key":   {"forge:app"},
 		"Tags.Tag.1.Value": {"smoke"},
 	})
