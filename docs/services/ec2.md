@@ -21,6 +21,7 @@ existing smoke stacks that pass hardcoded subnet IDs continue to work.
 | `CreateRouteTable` / `DescribeRouteTables` / `DeleteRouteTable` | Includes local route; supports filter by `vpc-id`, `route-table-id`, and `association.*` |
 | `CreateRoute` / `DeleteRoute` | Stored per route table; local route is never deleted |
 | `AssociateRouteTable` / `DisassociateRouteTable` | Associations tracked by `rtbassoc-` ID |
+| `DescribeNetworkInterfaces` | Always returns an empty set — no real ENIs exist; unblocks subnet/VPC teardown |
 | `CreateTags` / `DeleteTags` | Applied to VPCs, subnets, IGWs, security groups, and route tables |
 
 ## Example
