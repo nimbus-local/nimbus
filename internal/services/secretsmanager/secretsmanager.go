@@ -198,10 +198,11 @@ func (s *Service) getSecretValue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"ARN":         sec.arn,
-		"Name":        sec.name,
-		"VersionId":   sec.versionID,
-		"CreatedDate": sec.createdAt.Unix(),
+		"ARN":           sec.arn,
+		"Name":          sec.name,
+		"VersionId":     sec.versionID,
+		"VersionStages": []string{"AWSCURRENT"},
+		"CreatedDate":   sec.createdAt.Unix(),
 	}
 
 	if sec.value.secretString != nil {
@@ -217,9 +218,10 @@ func (s *Service) getSecretValue(w http.ResponseWriter, r *http.Request) {
 // PutSecretValue — stores a new value for an existing secret
 func (s *Service) putSecretValue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SecretId     string  `json:"SecretId"`
-		SecretString *string `json:"SecretString"`
-		SecretBinary []byte  `json:"SecretBinary"`
+		SecretId           string  `json:"SecretId"`
+		SecretString       *string `json:"SecretString"`
+		SecretBinary       []byte  `json:"SecretBinary"`
+		ClientRequestToken string  `json:"ClientRequestToken"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -241,14 +243,16 @@ func (s *Service) putSecretValue(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	versionID := uid.New()
+	versionID := req.ClientRequestToken
+	if versionID == "" {
+		versionID = uid.New()
+	}
 	sec.value = &secretValue{
 		secretString: req.SecretString,
 		secretBinary: req.SecretBinary,
 	}
 	sec.versionID = versionID
 	sec.updatedAt = time.Now().UTC()
-
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"ARN":       sec.arn,
 		"Name":      sec.name,
@@ -433,6 +437,12 @@ func (s *Service) describeSecret(w http.ResponseWriter, r *http.Request) {
 		"Description":     sec.description,
 		"CreatedDate":     sec.createdAt.Unix(),
 		"LastChangedDate": sec.updatedAt.Unix(),
+	}
+
+	if sec.versionID != "" {
+		resp["VersionIdsToStages"] = map[string][]string{
+			sec.versionID: {"AWSCURRENT"},
+		}
 	}
 
 	if sec.deletedAt != nil {

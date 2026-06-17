@@ -511,6 +511,97 @@ func TestDescribeSecret_NotFound(t *testing.T) {
 	}
 }
 
+func TestDescribeSecret_VersionIdsToStages(t *testing.T) {
+	svc := newTestService()
+
+	smRequest(t, svc, "CreateSecret", map[string]interface{}{
+		"Name":         "stages-test",
+		"SecretString": "value",
+	})
+
+	// PutSecretValue with a ClientRequestToken (TF provider v6 flow)
+	token := "terraform-20260617000000000000000001"
+	smRequest(t, svc, "PutSecretValue", map[string]interface{}{
+		"SecretId":           "stages-test",
+		"SecretString":       "updated",
+		"ClientRequestToken": token,
+	})
+
+	w := smRequest(t, svc, "DescribeSecret", map[string]interface{}{
+		"SecretId": "stages-test",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("DescribeSecret: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	body := responseBody(t, w)
+	stages, ok := body["VersionIdsToStages"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected VersionIdsToStages in DescribeSecret response, got %v", body["VersionIdsToStages"])
+	}
+	if _, found := stages[token]; !found {
+		t.Errorf("expected token %q in VersionIdsToStages, got keys: %v", token, stages)
+	}
+}
+
+func TestGetSecretValue_ReturnsVersionStages(t *testing.T) {
+	svc := newTestService()
+
+	smRequest(t, svc, "CreateSecret", map[string]interface{}{
+		"Name":         "stages-get-test",
+		"SecretString": "value",
+	})
+
+	w := smRequest(t, svc, "GetSecretValue", map[string]interface{}{
+		"SecretId": "stages-get-test",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetSecretValue: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	body := responseBody(t, w)
+	stages, ok := body["VersionStages"].([]interface{})
+	if !ok || len(stages) == 0 {
+		t.Errorf("expected non-empty VersionStages in GetSecretValue response, got %v", body["VersionStages"])
+	}
+}
+
+func TestPutSecretValue_HonorsClientRequestToken(t *testing.T) {
+	svc := newTestService()
+
+	smRequest(t, svc, "CreateSecret", map[string]interface{}{
+		"Name":         "token-test",
+		"SecretString": "v1",
+	})
+
+	token := "terraform-20260617000000000000000002"
+	pw := smRequest(t, svc, "PutSecretValue", map[string]interface{}{
+		"SecretId":           "token-test",
+		"SecretString":       "v2",
+		"ClientRequestToken": token,
+	})
+
+	if pw.Code != http.StatusOK {
+		t.Fatalf("PutSecretValue: expected 200, got %d\n%s", pw.Code, pw.Body.String())
+	}
+
+	pbody := responseBody(t, pw)
+	if pbody["VersionId"] != token {
+		t.Errorf("expected VersionId=%q, got %v", token, pbody["VersionId"])
+	}
+
+	// GetSecretValue must return the same VersionId
+	gw := smRequest(t, svc, "GetSecretValue", map[string]interface{}{
+		"SecretId": "token-test",
+	})
+	gbody := responseBody(t, gw)
+	if gbody["VersionId"] != token {
+		t.Errorf("GetSecretValue: expected VersionId=%q, got %v", token, gbody["VersionId"])
+	}
+}
+
 // --- Detect ---
 
 func TestDetect(t *testing.T) {

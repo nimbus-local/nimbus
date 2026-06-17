@@ -630,6 +630,36 @@ func TestDeleteTagsOnVpc(t *testing.T) {
 	}
 }
 
+// ── Network Interfaces ────────────────────────────────────────────────────────
+
+func TestDescribeNetworkInterfacesEmpty(t *testing.T) {
+	svc := newSvc()
+	w := ec2Req(t, svc, "Action=DescribeNetworkInterfaces")
+	body := must200(t, w)
+	mustContain(t, body, "DescribeNetworkInterfacesResponse")
+	mustContain(t, body, "networkInterfaceSet")
+}
+
+func TestDescribeNetworkInterfacesWithSubnetFilter(t *testing.T) {
+	svc := newSvc()
+	w := ec2Req(t, svc,
+		"Action=DescribeNetworkInterfaces"+
+			"&Filter.1.Name=subnet-id&Filter.1.Value.1=subnet-abc123")
+	body := must200(t, w)
+	mustContain(t, body, "DescribeNetworkInterfacesResponse")
+	mustContain(t, body, "networkInterfaceSet")
+}
+
+func TestDescribeNetworkInterfacesWithVpcFilter(t *testing.T) {
+	svc := newSvc()
+	w := ec2Req(t, svc,
+		"Action=DescribeNetworkInterfaces"+
+			"&Filter.1.Name=vpc-id&Filter.1.Value.1=vpc-abc123")
+	body := must200(t, w)
+	mustContain(t, body, "DescribeNetworkInterfacesResponse")
+	mustContain(t, body, "networkInterfaceSet")
+}
+
 // ── Unsupported action ────────────────────────────────────────────────────────
 
 func TestUnsupportedAction(t *testing.T) {

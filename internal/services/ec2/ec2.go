@@ -208,6 +208,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.associateRouteTable(w, r)
 	case "DisassociateRouteTable":
 		s.disassociateRouteTable(w, r)
+	// Network interfaces
+	case "DescribeNetworkInterfaces":
+		s.describeNetworkInterfaces(w, r)
 	// Tags
 	case "CreateTags":
 		s.createTags(w, r)
@@ -1046,6 +1049,17 @@ func (s *Service) routeTableXML(rt *routeTable) string {
       %s`,
 		rt.id, rt.vpcID, accountID,
 		routeItems.String(), assocItems.String(), tagsXML(rt.tags))
+}
+
+// ── Network Interfaces ────────────────────────────────────────────────────────
+
+// describeNetworkInterfaces returns an empty NetworkInterfaceSet.
+// Nimbus has no real EC2 instances, so there are never any ENIs attached to
+// subnets. Returning an empty set is enough for the Terraform/Pulumi provider
+// to proceed through the subnet-delete path without error.
+func (s *Service) describeNetworkInterfaces(w http.ResponseWriter, _ *http.Request) {
+	writeXML(w, http.StatusOK, ec2Resp("DescribeNetworkInterfaces",
+		"<networkInterfaceSet/>"))
 }
 
 // ── Tags ──────────────────────────────────────────────────────────────────────
