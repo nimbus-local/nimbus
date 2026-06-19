@@ -429,6 +429,65 @@ func TestDeleteQueue_JSONProtocol(t *testing.T) {
 	}
 }
 
+// TestGetQueueAttributes_JSONProtocol_DeletedQueue verifies that GetQueueAttributes
+// on a deleted queue returns the long error code "AWS.SimpleQueueService.NonExistentQueue"
+// in JSON protocol. Terraform's waitQueueDeleted polls GetQueueAttributes and checks
+// tfawserr.ErrCodeEquals(err, "AWS.SimpleQueueService.NonExistentQueue"). That check
+// only succeeds when the SDK falls through to smithy.GenericAPIError (default case in
+// the deserializer switch), which happens only when the body __type is the long code.
+// If we return "QueueDoesNotExist" here, the SDK produces *types.QueueDoesNotExist
+// whose ErrorCode() is "QueueDoesNotExist" — a non-retriable error that fails terraform destroy.
+func TestGetQueueAttributes_JSONProtocol_DeletedQueue(t *testing.T) {
+	svc := newTestService()
+	qURL := createQueue(t, svc, "gqa-deleted-test")
+
+	w := sqsJSONRequest(t, svc, "DeleteQueue", map[string]interface{}{"QueueUrl": qURL})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteQueue: expected 200, got %d", w.Code)
+	}
+
+	w = sqsJSONRequest(t, svc, "GetQueueAttributes", map[string]interface{}{
+		"QueueUrl":       qURL,
+		"AttributeNames": []string{"All"},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("GetQueueAttributes after delete: expected 400, got %d", w.Code)
+	}
+	var errBody map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if errBody["__type"] != "AWS.SimpleQueueService.NonExistentQueue" {
+		t.Errorf("expected __type=AWS.SimpleQueueService.NonExistentQueue, got %q (Terraform waitQueueDeleted will fail with the short code)", errBody["__type"])
+	}
+}
+
+// TestGetQueueUrl_JSONProtocol_DeletedQueue verifies that GetQueueUrl on a non-existent
+// queue returns the short code "QueueDoesNotExist" in JSON protocol. The AWS SDK Go v2
+// QueueDeletedWaiter (used by GetQueueUrl, not GetQueueAttributes) checks via
+// strings.EqualFold("QueueDoesNotExist", errorCode) and requires the short form.
+func TestGetQueueUrl_JSONProtocol_DeletedQueue(t *testing.T) {
+	svc := newTestService()
+	qURL := createQueue(t, svc, "gqu-deleted-test")
+
+	w := sqsJSONRequest(t, svc, "DeleteQueue", map[string]interface{}{"QueueUrl": qURL})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteQueue: expected 200, got %d", w.Code)
+	}
+
+	w = sqsJSONRequest(t, svc, "GetQueueUrl", map[string]interface{}{"QueueName": "gqu-deleted-test"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("GetQueueUrl after delete: expected 400, got %d", w.Code)
+	}
+	var errBody map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if errBody["__type"] != "QueueDoesNotExist" {
+		t.Errorf("expected __type=QueueDoesNotExist, got %q (SDK QueueDeletedWaiter won't match the long form-protocol code)", errBody["__type"])
+	}
+}
+
 // --- Service detection ---
 
 func TestDetect(t *testing.T) {

@@ -214,11 +214,6 @@ func (c *sqsCtx) writeOK(w http.ResponseWriter, jsonVal interface{}, xmlVal inte
 // writeError writes a protocol-appropriate error response.
 func (c *sqsCtx) writeError(w http.ResponseWriter, status int, code, msg string) {
 	if c.useJSON {
-		// AWS SDK Go v2 (sqs v1.44+) uses JSON protocol and expects short error
-		// codes without the "AWS.SimpleQueueService." prefix.
-		if code == "AWS.SimpleQueueService.NonExistentQueue" {
-			code = "QueueDoesNotExist"
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": msg})
@@ -369,8 +364,14 @@ func (s *Service) getQueueURL(w http.ResponseWriter, r *http.Request, ctx sqsCtx
 	s.mu.RUnlock()
 
 	if !ok {
-		ctx.writeError(w, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
-			"The specified queue does not exist.")
+		// GetQueueUrl SDK waiter checks for "QueueDoesNotExist" (short JSON code).
+		// Other operations (e.g. GetQueueAttributes) must keep returning the long code
+		// so Terraform's waitQueueDeleted (tfawserr.ErrCodeEquals) works correctly.
+		errCode := "AWS.SimpleQueueService.NonExistentQueue"
+		if ctx.useJSON {
+			errCode = "QueueDoesNotExist"
+		}
+		ctx.writeError(w, http.StatusBadRequest, errCode, "The specified queue does not exist.")
 		return
 	}
 
