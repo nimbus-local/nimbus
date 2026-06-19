@@ -321,7 +321,7 @@ with urllib.request.urlopen(req, timeout=3) as r:
 
 conn_id = None
 for inv in reversed(invocs):
-    payload = json.loads(inv.get('payload', '{}'))
+    payload = inv.get('Payload', {})
     rc = payload.get('requestContext', {})
     if rc.get('eventType') == 'CONNECT':
         conn_id = rc.get('connectionId')
