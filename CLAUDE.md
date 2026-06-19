@@ -158,6 +158,29 @@ Affected sub-resources confirmed so far:
 
 Do **not** rely on the generic sub-resource DELETE catch-all (`len(r.URL.Query()) > 0 → 204`) for sub-resources that have a provider-side delete waiter — it returns 204 but doesn't remove stored state, so subsequent GETs still return 200.
 
+### JSON protocol error codes must match what the SDK waiter expects
+
+AWS SDK Go v2 services that were historically query/form protocol (SQS, SES, SNS, CloudWatch) have been migrating to **JSON protocol** (`awsJson1.0`). When a service switches, its error codes change from long service-prefixed strings to short names. SDK waiters check for the short name via `strings.EqualFold`:
+
+```go
+// aws-sdk-go-v2/service/sqs/deserializers.go
+case strings.EqualFold("QueueDoesNotExist", errorCode):
+```
+
+If Nimbus returns the old form-protocol code (`AWS.SimpleQueueService.NonExistentQueue`) in a JSON response, the waiter never matches and retries until timeout — manifesting as a ~129s block per resource deletion.
+
+**Fix pattern**: in the service's `writeError`, map the long code to the short one when `useJSON=true`:
+
+```go
+if code == "AWS.SimpleQueueService.NonExistentQueue" {
+    code = "QueueDoesNotExist"
+}
+```
+
+**How to diagnose**: if resource creation or deletion blocks for a suspiciously round number of seconds and eventually succeeds, check `aws-sdk-go-v2/service/{service}/deserializers.go` for the `case strings.EqualFold(...)` lines — those are the exact strings SDK waiters match against. If Nimbus returns a code that doesn't appear there, the waiter will time out.
+
+**Test requirement**: whenever a service has a `useJSON` branch in error handling, add a JSON-protocol test that asserts the exact `__type` value returned — not just that the response contains a substring (which passes for both the old and new code).
+
 ## Implementation strategy — parts, not phases
 
 Every phase is split into numbered parts in the roadmap. **Each part is one working
