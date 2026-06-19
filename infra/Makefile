@@ -40,8 +40,8 @@ destroy: init
 smoke-test:
 	./scripts/smoke-test.sh
 
-# Provision everything then run smoke tests
-test: apply smoke-test
+# Full clean + provision + smoke tests. Always starts from a clean slate.
+test: nuke smoke-test
 
 # Tear down + stop containers
 clean: destroy stop
@@ -67,4 +67,4 @@ reset:
 
 # nuke — full reset then re-provision. Use this before running smoke tests
 # to guarantee a completely clean environment.
-nuke: reset apply
+nuke: start reset apply

@@ -85,12 +85,16 @@ go vet ./...
 ```bash
 cd infra
 make start        # boot Nimbus + DynamoDB Local
-make apply        # provision all test resources
+make nuke         # clean slate: reset state + re-provision resources
 make smoke-test   # run the full suite
 make clean        # tear everything down when done
 ```
 
-After Go code changes, rebuild before re-running: `make stop && make start && make apply`.
+`make test` does all three middle steps in one shot (`nuke` + `smoke-test`).
+
+If `make apply` fails with "already exists" errors from a previous partial run, run `make nuke` to wipe state and re-provision before retrying.
+
+After Go code changes, rebuild before re-running: `make stop && make start && make nuke`.
 
 The smoke test suite is also a required CI check on every PR — it runs automatically via GitHub Actions.
 
