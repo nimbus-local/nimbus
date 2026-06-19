@@ -164,6 +164,29 @@ else
   fail "get-rest-apis (API not found — run 'make apply' first)"
 fi
 
+# ── WebSocket API ─────────────────────────────────────────────────────────────
+
+section "WebSocket API"
+WS_API_ID=$($CLI apigatewayv2 get-apis \
+  --query "Items[?Name=='${PREFIX}-ws'].ApiId" --output text 2>/dev/null)
+if [ -n "$WS_API_ID" ]; then
+  try "get-apis finds WebSocket API" true
+  try_match "get-api protocol is WEBSOCKET" "WEBSOCKET" \
+    $CLI apigatewayv2 get-api --api-id "$WS_API_ID"
+  try_match "get-routes finds \$connect" "connect" \
+    $CLI apigatewayv2 get-routes --api-id "$WS_API_ID"
+  try_match "get-routes finds \$disconnect" "disconnect" \
+    $CLI apigatewayv2 get-routes --api-id "$WS_API_ID"
+  try_match "get-routes finds \$default" "default" \
+    $CLI apigatewayv2 get-routes --api-id "$WS_API_ID"
+  try_match "get-integrations finds Lambda integration" "AWS_PROXY" \
+    $CLI apigatewayv2 get-integrations --api-id "$WS_API_ID"
+  try_match "get-stages finds prod" "prod" \
+    $CLI apigatewayv2 get-stages --api-id "$WS_API_ID"
+else
+  fail "get-apis (WebSocket API not found — run 'make apply' first)"
+fi
+
 # ── ECR ───────────────────────────────────────────────────────────────────────
 
 section "ECR"

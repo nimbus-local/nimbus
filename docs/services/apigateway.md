@@ -1,10 +1,10 @@
 # API Gateway
 
-In-memory API Gateway emulator. Supports both **REST API (v1)** and **HTTP API (v2)** — management plane and execute-api runtime.
+In-memory API Gateway emulator. Supports **REST API (v1)**, **HTTP API (v2)**, and **WebSocket API (v2)** — management plane and execute-api runtime.
 
 Detection:
 - REST API (v1): `/restapis` path prefix
-- HTTP API (v2): `/apis` path prefix
+- HTTP API (v2) / WebSocket API: `/apis` path prefix (same endpoint, `protocolType` field differentiates)
 
 ## Execute URL format
 
@@ -196,4 +196,37 @@ nimbuslocal apigatewayv2 create-stage \
   --api-id $API --stage-name dev --auto-deploy
 
 curl http://localhost:4566/apis/$API/dev/_user_request_/hello
+```
+
+---
+
+## WebSocket API (v2)
+
+Same control plane as HTTP API (v2) — routes, integrations, stages, and deployments are identical. `protocolType: WEBSOCKET` is stored and returned correctly so Terraform drift detection passes. The data plane (WebSocket upgrade, `$connect`/`$disconnect`/`$default` dispatch, `@connections` management API) is implemented in Part 2.
+
+Route keys for WebSocket APIs:
+- `$connect` — invoked when a client establishes a connection
+- `$disconnect` — invoked when a client disconnects
+- `$default` — catch-all for unmatched messages
+- Custom route keys matched against `routeSelectionExpression`
+
+### Example (WebSocket control plane)
+
+```bash
+WS=$(nimbuslocal apigatewayv2 create-api \
+  --name my-ws-api \
+  --protocol-type WEBSOCKET \
+  --route-selection-expression '$request.body.action' \
+  --query 'ApiId' --output text)
+
+INTEG=$(nimbuslocal apigatewayv2 create-integration \
+  --api-id $WS --integration-type AWS_PROXY \
+  --integration-uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:my-func/invocations" \
+  --query 'IntegrationId' --output text)
+
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$connect'  --target "integrations/$INTEG"
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$disconnect' --target "integrations/$INTEG"
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$default'  --target "integrations/$INTEG"
+
+nimbuslocal apigatewayv2 create-stage --api-id $WS --stage-name prod --auto-deploy
 ```

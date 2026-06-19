@@ -11,12 +11,13 @@ import (
 // HTTP API (v2) data models
 
 type HTTPApi struct {
-	ApiId        string `json:"apiId"`
-	Name         string `json:"name"`
-	Description  string `json:"description,omitempty"`
-	ProtocolType string `json:"protocolType"` // always "HTTP"
-	ApiEndpoint  string `json:"apiEndpoint"`
-	CreatedDate  string `json:"createdDate"` // RFC3339
+	ApiId                    string `json:"apiId"`
+	Name                     string `json:"name"`
+	Description              string `json:"description,omitempty"`
+	ProtocolType             string `json:"protocolType"` // "HTTP" or "WEBSOCKET"
+	RouteSelectionExpression string `json:"routeSelectionExpression,omitempty"`
+	ApiEndpoint              string `json:"apiEndpoint"`
+	CreatedDate              string `json:"createdDate"` // RFC3339
 }
 
 type V2Route struct {
@@ -83,17 +84,21 @@ func nowRFC3339() string {
 
 // API operations
 
-func (s *v2store) createAPI(name, description string, port int) *HTTPApi {
+func (s *v2store) createAPI(name, description, protocolType, routeSelectionExpr string, port int) *HTTPApi {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if protocolType == "" {
+		protocolType = "HTTP"
+	}
 	id := shortID()
 	api := &HTTPApi{
-		ApiId:        id,
-		Name:         name,
-		Description:  description,
-		ProtocolType: "HTTP",
-		ApiEndpoint:  apiEndpoint(id, port),
-		CreatedDate:  nowRFC3339(),
+		ApiId:                    id,
+		Name:                     name,
+		Description:              description,
+		ProtocolType:             protocolType,
+		RouteSelectionExpression: routeSelectionExpr,
+		ApiEndpoint:              apiEndpoint(id, protocolType, port),
+		CreatedDate:              nowRFC3339(),
 	}
 	s.apis[id] = &v2apiRecord{
 		api:          api,
@@ -105,11 +110,15 @@ func (s *v2store) createAPI(name, description string, port int) *HTTPApi {
 	return api
 }
 
-func apiEndpoint(apiID string, port int) string {
+func apiEndpoint(apiID, protocolType string, port int) string {
 	if port == 0 {
 		port = 4566
 	}
-	return "http://localhost:" + itoa(port) + "/apis/" + apiID
+	scheme := "http"
+	if protocolType == "WEBSOCKET" {
+		scheme = "ws"
+	}
+	return scheme + "://localhost:" + itoa(port) + "/apis/" + apiID
 }
 
 func itoa(n int) string {

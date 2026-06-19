@@ -485,7 +485,7 @@ Supports both AWS SDK Go v2 path prefix (`/v2/apis/`) and direct (`/apis/`).
 
 | Work item | Status |
 |-----------|--------|
-| `CreateApi` (WebSocket protocol) — reuse v2 store with `protocolType: WEBSOCKET` | |
+| `CreateApi` (WebSocket protocol) — reuse v2 store with `protocolType: WEBSOCKET`, store `routeSelectionExpression` | ✅ |
 | WebSocket upgrade via `net/http` hijacker — `$connect` / `$disconnect` / `$default` route dispatch | |
 | Lambda event envelope for WebSocket events | |
 | Connection registry: `sync.Map[connectionId → conn]` | |
