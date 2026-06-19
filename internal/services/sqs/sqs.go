@@ -214,6 +214,11 @@ func (c *sqsCtx) writeOK(w http.ResponseWriter, jsonVal interface{}, xmlVal inte
 // writeError writes a protocol-appropriate error response.
 func (c *sqsCtx) writeError(w http.ResponseWriter, status int, code, msg string) {
 	if c.useJSON {
+		// AWS SDK Go v2 (sqs v1.44+) uses JSON protocol and expects short error
+		// codes without the "AWS.SimpleQueueService." prefix.
+		if code == "AWS.SimpleQueueService.NonExistentQueue" {
+			code = "QueueDoesNotExist"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": msg})
