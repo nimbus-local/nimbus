@@ -481,16 +481,16 @@ Supports both AWS SDK Go v2 path prefix (`/v2/apis/`) and direct (`/apis/`).
 | `CreateDeployment` / `GetDeployments` / `GetDeployment` / `DeleteDeployment` | ✅ |
 | HTTP API data plane: payload format v1.0 and v2.0, path parameter extraction, cookie forwarding | ✅ |
 
-### Part 3 — WebSocket API
+### Part 3 — WebSocket API ✅ shipped
 
 | Work item | Status |
 |-----------|--------|
 | `CreateApi` (WebSocket protocol) — reuse v2 store with `protocolType: WEBSOCKET`, store `routeSelectionExpression` | ✅ |
-| WebSocket upgrade via `net/http` hijacker — `$connect` / `$disconnect` / `$default` route dispatch | |
-| Lambda event envelope for WebSocket events | |
-| Connection registry: `sync.Map[connectionId → conn]` | |
-| Management API: `POST /v1/apis/{apiId}/@connections/{connectionId}` → send frame | |
-| Management API: `DELETE /v1/apis/{apiId}/@connections/{connectionId}` → close | |
+| WebSocket upgrade via `net/http` hijacker — `$connect` / `$disconnect` / `$default` route dispatch | ✅ |
+| Lambda event envelope for WebSocket events | ✅ |
+| Connection registry: `sync.Map[connectionId → conn]` | ✅ |
+| Management API: `POST /{stage}/@connections/{connectionId}` → send frame | ✅ |
+| Management API: `DELETE /{stage}/@connections/{connectionId}` → close | ✅ |
 
 ---
 

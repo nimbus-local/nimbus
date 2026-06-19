@@ -183,6 +183,190 @@ if [ -n "$WS_API_ID" ]; then
     $CLI apigatewayv2 get-integrations --api-id "$WS_API_ID"
   try_match "get-stages finds prod" "prod" \
     $CLI apigatewayv2 get-stages --api-id "$WS_API_ID"
+
+  # WebSocket connection lifecycle ──────────────────────────────────────────
+  # Clear Lambda invocations so we get a clean baseline.
+  curl -sf -X DELETE "$NIMBUS/_nimbus/lambda/invocations" >/dev/null 2>&1 || true
+
+  WS_RESULT=$(python3 - "$WS_API_ID" "prod" "$NIMBUS" <<'PYEOF'
+import sys, socket, base64, hashlib, struct, os, time, urllib.parse
+
+api_id, stage, nimbus = sys.argv[1], sys.argv[2], sys.argv[3]
+parsed = urllib.parse.urlparse(nimbus)
+host = parsed.hostname
+port = parsed.port or 80
+
+ws_key = base64.b64encode(os.urandom(16)).decode()
+path = f'/apis/{api_id}/{stage}/_user_request_/'
+request = (
+    f'GET {path} HTTP/1.1\r\n'
+    f'Host: {host}:{port}\r\n'
+    f'Upgrade: websocket\r\n'
+    f'Connection: Upgrade\r\n'
+    f'Sec-WebSocket-Key: {ws_key}\r\n'
+    f'Sec-WebSocket-Version: 13\r\n'
+    f'\r\n'
+)
+
+s = socket.create_connection((host, port), timeout=5)
+s.sendall(request.encode())
+
+resp = b''
+while b'\r\n\r\n' not in resp:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    resp += chunk
+
+status_line = resp.split(b'\r\n')[0].decode()
+if '101' not in status_line:
+    print(f'FAIL_UPGRADE: {status_line}', flush=True)
+    s.close()
+    sys.exit(1)
+
+def send_frame(s, opcode, payload):
+    if isinstance(payload, str):
+        payload = payload.encode()
+    mask = os.urandom(4)
+    masked = bytes([b ^ mask[i % 4] for i, b in enumerate(payload)])
+    n = len(payload)
+    if n <= 125:
+        hdr = struct.pack('BB', 0x80 | opcode, 0x80 | n)
+    elif n <= 65535:
+        hdr = struct.pack('!BBH', 0x80 | opcode, 0x80 | 126, n)
+    else:
+        hdr = struct.pack('!BBQ', 0x80 | opcode, 0x80 | 127, n)
+    s.sendall(hdr + mask + masked)
+
+# Send a text frame (triggers $default route).
+send_frame(s, 0x1, '{"action":"ping"}')
+time.sleep(0.2)
+
+# Send close frame (triggers $disconnect).
+send_frame(s, 0x8, struct.pack('!H', 1000))
+time.sleep(0.2)
+s.close()
+print('OK', flush=True)
+PYEOF
+  )
+
+  if [ "$WS_RESULT" = "OK" ]; then
+    try "WebSocket upgrade succeeds (101 Switching Protocols)" true
+  else
+    fail "WebSocket upgrade" "$WS_RESULT"
+  fi
+
+  # Give Nimbus a moment to record invocations asynchronously.
+  sleep 0.3
+  WS_INVOCATIONS=$(curl -sf "$NIMBUS/_nimbus/lambda/invocations" 2>/dev/null || echo "")
+  if echo "$WS_INVOCATIONS" | grep -q "CONNECT"; then
+    try "\$connect Lambda invoked" true
+  else
+    fail "\$connect Lambda invoked (no CONNECT event in invocations)"
+  fi
+  if echo "$WS_INVOCATIONS" | grep -q "MESSAGE"; then
+    try "\$default Lambda invoked on text frame" true
+  else
+    fail "\$default Lambda invoked on text frame (no MESSAGE event)"
+  fi
+  if echo "$WS_INVOCATIONS" | grep -q "DISCONNECT"; then
+    try "\$disconnect Lambda invoked on close" true
+  else
+    fail "\$disconnect Lambda invoked on close (no DISCONNECT event)"
+  fi
+
+  # Management API — post to a live connection ──────────────────────────────
+  CONN_RESULT=$(python3 - "$WS_API_ID" "prod" "$NIMBUS" <<'PYEOF'
+import sys, socket, base64, hashlib, struct, os, time, threading, urllib.request, urllib.parse
+
+api_id, stage, nimbus = sys.argv[1], sys.argv[2], sys.argv[3]
+parsed = urllib.parse.urlparse(nimbus)
+host = parsed.hostname
+port = parsed.port or 80
+
+ws_key = base64.b64encode(os.urandom(16)).decode()
+path = f'/apis/{api_id}/{stage}/_user_request_/'
+request = (
+    f'GET {path} HTTP/1.1\r\n'
+    f'Host: {host}:{port}\r\n'
+    f'Upgrade: websocket\r\n'
+    f'Connection: Upgrade\r\n'
+    f'Sec-WebSocket-Key: {ws_key}\r\n'
+    f'Sec-WebSocket-Version: 13\r\n'
+    f'\r\n'
+)
+
+s = socket.create_connection((host, port), timeout=5)
+s.sendall(request.encode())
+
+resp = b''
+while b'\r\n\r\n' not in resp:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    resp += chunk
+
+if '101' not in resp.split(b'\r\n')[0].decode():
+    print('FAIL_UPGRADE', flush=True)
+    sys.exit(1)
+
+# Read response headers to get connection-id from invocations endpoint.
+time.sleep(0.3)
+
+# Fetch the connection id from invocations.
+req = urllib.request.Request(f'{nimbus}/_nimbus/lambda/invocations')
+with urllib.request.urlopen(req, timeout=3) as r:
+    import json
+    invocs = json.loads(r.read())
+
+conn_id = None
+for inv in reversed(invocs):
+    payload = json.loads(inv.get('payload', '{}'))
+    rc = payload.get('requestContext', {})
+    if rc.get('eventType') == 'CONNECT':
+        conn_id = rc.get('connectionId')
+        break
+
+if not conn_id:
+    print('FAIL_NO_CONN_ID', flush=True)
+    sys.exit(1)
+
+# POST to @connections management API.
+mgmt_url = f'{nimbus}/prod/@connections/{conn_id}'
+data = b'hello from management API'
+req = urllib.request.Request(mgmt_url, data=data, method='POST')
+try:
+    with urllib.request.urlopen(req, timeout=3) as r:
+        status = r.status
+except Exception as e:
+    print(f'FAIL_POST: {e}', flush=True)
+    sys.exit(1)
+
+if status != 200:
+    print(f'FAIL_STATUS: {status}', flush=True)
+    sys.exit(1)
+
+# DELETE @connections — should close the connection.
+req = urllib.request.Request(mgmt_url, method='DELETE')
+try:
+    with urllib.request.urlopen(req, timeout=3) as r:
+        delete_status = r.status
+except Exception as e:
+    print(f'FAIL_DELETE: {e}', flush=True)
+    sys.exit(1)
+
+s.close()
+print('OK', flush=True)
+PYEOF
+  )
+
+  if [ "$CONN_RESULT" = "OK" ]; then
+    try "management API POST /@connections sends to client" true
+    try "management API DELETE /@connections closes connection" true
+  else
+    fail "management API" "$CONN_RESULT"
+    fail "management API DELETE /@connections closes connection"
+  fi
 else
   fail "get-apis (WebSocket API not found — run 'make apply' first)"
 fi

@@ -21,9 +21,10 @@ type LambdaInvoker interface {
 type Service struct {
 	region  string
 	account string
-	db      *store   // REST API (v1) state
-	v2      *v2store // HTTP API (v2) state
+	db      *store      // REST API (v1) state
+	v2      *v2store    // HTTP API (v2) state
 	lambda  LambdaInvoker
+	wsConns *wsRegistry // active WebSocket connections
 }
 
 func New(region string, lambda LambdaInvoker) *Service {
@@ -36,6 +37,7 @@ func New(region string, lambda LambdaInvoker) *Service {
 		db:      newStore(),
 		v2:      newV2Store(),
 		lambda:  lambda,
+		wsConns: &wsRegistry{},
 	}
 }
 
@@ -45,18 +47,27 @@ func (s *Service) Name() string { return "apigateway" }
 func (s *Service) Reset() {
 	s.db.Reset()
 	s.v2.Reset()
+	s.wsConns.reset()
 }
 
-// Detect claims /restapis/* (REST API v1) and /apis/* (HTTP API v2).
+// Detect claims /restapis/* (REST API v1), /apis/* (HTTP/WebSocket API v2),
+// and any path containing @connections (WebSocket management API).
 // AWS SDK Go v2 (used by Pulumi) prefixes HTTP API paths with /v2/.
 func (s *Service) Detect(r *http.Request) bool {
 	p := r.URL.Path
 	return p == "/restapis" || strings.HasPrefix(p, "/restapis/") ||
 		p == "/apis" || strings.HasPrefix(p, "/apis/") ||
-		p == "/v2/apis" || strings.HasPrefix(p, "/v2/apis/")
+		p == "/v2/apis" || strings.HasPrefix(p, "/v2/apis/") ||
+		strings.Contains(p, "@connections")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Management API — Lambda calls this to push data to WebSocket clients.
+	if strings.Contains(r.URL.Path, "@connections") {
+		s.serveConnections(w, r)
+		return
+	}
+
 	// Strip /v2 prefix — AWS SDK Go v2 sends /v2/apis/... instead of /apis/...
 	if strings.HasPrefix(r.URL.Path, "/v2/") {
 		r2 := *r
