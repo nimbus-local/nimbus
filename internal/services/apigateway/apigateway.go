@@ -21,8 +21,8 @@ type LambdaInvoker interface {
 type Service struct {
 	region  string
 	account string
-	db      *store      // REST API (v1) state
-	v2      *v2store    // HTTP API (v2) state
+	db      *store   // REST API (v1) state
+	v2      *v2store // HTTP API (v2) state
 	lambda  LambdaInvoker
 	wsConns *wsRegistry // active WebSocket connections
 }

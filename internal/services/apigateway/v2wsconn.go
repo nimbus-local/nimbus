@@ -41,8 +41,8 @@ func (c *wsConn) closeGracefully(code uint16, reason string) {
 // wsRegistry is a thread-safe store of active WebSocket connections keyed by connectionId.
 type wsRegistry struct{ m sync.Map }
 
-func (reg *wsRegistry) add(c *wsConn)           { reg.m.Store(c.id, c) }
-func (reg *wsRegistry) del(id string)            { reg.m.Delete(id) }
+func (reg *wsRegistry) add(c *wsConn) { reg.m.Store(c.id, c) }
+func (reg *wsRegistry) del(id string) { reg.m.Delete(id) }
 func (reg *wsRegistry) reset() {
 	reg.m.Range(func(k, v any) bool {
 		v.(*wsConn).conn.Close()
@@ -150,10 +150,10 @@ func (s *Service) selectWSRoute(api *HTTPApi, body []byte) string {
 
 // wsEventPayload is the JSON body sent to Lambda for WebSocket invocations.
 type wsEventPayload struct {
-	RequestContext  wsRequestContext   `json:"requestContext"`
-	Headers         map[string]string  `json:"headers,omitempty"`
-	Body            string             `json:"body,omitempty"`
-	IsBase64Encoded bool               `json:"isBase64Encoded"`
+	RequestContext  wsRequestContext  `json:"requestContext"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	Body            string            `json:"body,omitempty"`
+	IsBase64Encoded bool              `json:"isBase64Encoded"`
 }
 
 type wsRequestContext struct {
