@@ -56,3 +56,41 @@ resource "aws_api_gateway_stage" "v1" {
   deployment_id = aws_api_gateway_deployment.nimbus_test.id
   stage_name    = "v1"
 }
+
+# ── WebSocket API (v2, protocolType=WEBSOCKET) ────────────────────────────────
+
+resource "aws_apigatewayv2_api" "nimbus_ws" {
+  name                       = "${var.prefix}-ws"
+  protocol_type              = "WEBSOCKET"
+  route_selection_expression = "$request.body.action"
+}
+
+resource "aws_apigatewayv2_integration" "ws_lambda" {
+  api_id           = aws_apigatewayv2_api.nimbus_ws.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.nimbus_test.invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "ws_connect" {
+  api_id    = aws_apigatewayv2_api.nimbus_ws.id
+  route_key = "$connect"
+  target    = "integrations/${aws_apigatewayv2_integration.ws_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "ws_disconnect" {
+  api_id    = aws_apigatewayv2_api.nimbus_ws.id
+  route_key = "$disconnect"
+  target    = "integrations/${aws_apigatewayv2_integration.ws_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "ws_default" {
+  api_id    = aws_apigatewayv2_api.nimbus_ws.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.ws_lambda.id}"
+}
+
+resource "aws_apigatewayv2_stage" "ws_prod" {
+  api_id      = aws_apigatewayv2_api.nimbus_ws.id
+  name        = "prod"
+  auto_deploy = true
+}

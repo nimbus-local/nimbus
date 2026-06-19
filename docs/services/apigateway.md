@@ -1,10 +1,10 @@
 # API Gateway
 
-In-memory API Gateway emulator. Supports both **REST API (v1)** and **HTTP API (v2)** — management plane and execute-api runtime.
+In-memory API Gateway emulator. Supports **REST API (v1)**, **HTTP API (v2)**, and **WebSocket API (v2)** — management plane and execute-api runtime.
 
 Detection:
 - REST API (v1): `/restapis` path prefix
-- HTTP API (v2): `/apis` path prefix
+- HTTP API (v2) / WebSocket API: `/apis` path prefix (same endpoint, `protocolType` field differentiates)
 
 ## Execute URL format
 
@@ -196,4 +196,110 @@ nimbuslocal apigatewayv2 create-stage \
   --api-id $API --stage-name dev --auto-deploy
 
 curl http://localhost:4566/apis/$API/dev/_user_request_/hello
+```
+
+---
+
+## WebSocket API (v2)
+
+Same control plane as HTTP API (v2) — routes, integrations, stages, and deployments are identical. `protocolType: WEBSOCKET` is stored and returned correctly so Terraform drift detection passes.
+
+**Data plane** — WebSocket upgrade, Lambda dispatch, and the `@connections` management API are fully implemented.
+
+### Connection lifecycle
+
+| Event | Route key | Lambda event `requestContext.eventType` |
+|-------|-----------|----------------------------------------|
+| Client connects | `$connect` | `CONNECT` |
+| Client sends a frame | matched route or `$default` | `MESSAGE` |
+| Client disconnects | `$disconnect` | `DISCONNECT` |
+
+Route selection for `MESSAGE` events: the `routeSelectionExpression` (e.g. `$request.body.action`) is evaluated against the JSON body. If a route with that key exists it is used; otherwise `$default` is used.
+
+`$connect` Lambda response: if the function returns a non-2xx `statusCode` the connection is rejected with close code 1008.
+
+### Lambda event shape
+
+```json
+{
+  "requestContext": {
+    "connectionId": "abc123",
+    "eventType": "CONNECT | MESSAGE | DISCONNECT",
+    "routeKey": "$connect | $default | ...",
+    "apiId": "...",
+    "stage": "prod",
+    "domainName": "localhost:4566",
+    "connectedAt": 1700000000000,
+    "requestTimeEpoch": 1700000000100,
+    "requestId": "...",
+    "extendedRequestId": "...",
+    "messageId": "...",          // MESSAGE only
+    "disconnectStatusCode": 1000 // DISCONNECT only
+  },
+  "headers": { ... },   // CONNECT only
+  "body": "...",        // MESSAGE only
+  "isBase64Encoded": false
+}
+```
+
+### Management API (`@connections`)
+
+Lambda functions push data back to clients or close connections via:
+
+| Method | Path | Action |
+|--------|------|--------|
+| `POST` | `/{stage}/@connections/{connectionId}` | Send data to client |
+| `DELETE` | `/{stage}/@connections/{connectionId}` | Disconnect client |
+| `GET` | `/{stage}/@connections/{connectionId}` | Get connection metadata |
+
+Configure the management client endpoint as `http://localhost:4566/{stage}`:
+
+```python
+# Python Lambda handler example
+import boto3, json, os
+
+def handler(event, context):
+    rc = event['requestContext']
+    if rc['eventType'] == 'CONNECT':
+        return {'statusCode': 200}
+    if rc['eventType'] == 'MESSAGE':
+        client = boto3.client(
+            'apigatewaymanagementapi',
+            endpoint_url=f"http://{rc['domainName']}/{rc['stage']}",
+        )
+        client.post_to_connection(
+            ConnectionId=rc['connectionId'],
+            Data=json.dumps({'echo': event.get('body')}),
+        )
+    return {'statusCode': 200}
+```
+
+### Execute URL
+
+```
+ws://localhost:4566/apis/{apiId}/{stage}/_user_request_/
+```
+
+### Example
+
+```bash
+WS=$(nimbuslocal apigatewayv2 create-api \
+  --name my-ws-api \
+  --protocol-type WEBSOCKET \
+  --route-selection-expression '$request.body.action' \
+  --query 'ApiId' --output text)
+
+INTEG=$(nimbuslocal apigatewayv2 create-integration \
+  --api-id $WS --integration-type AWS_PROXY \
+  --integration-uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:my-func/invocations" \
+  --query 'IntegrationId' --output text)
+
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$connect'    --target "integrations/$INTEG"
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$disconnect' --target "integrations/$INTEG"
+nimbuslocal apigatewayv2 create-route --api-id $WS --route-key '$default'    --target "integrations/$INTEG"
+
+nimbuslocal apigatewayv2 create-stage --api-id $WS --stage-name prod --auto-deploy
+
+# Connect with any WebSocket client:
+# wscat -c ws://localhost:4566/apis/$WS/prod/_user_request_/
 ```

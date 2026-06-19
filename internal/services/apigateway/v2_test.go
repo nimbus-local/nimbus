@@ -578,6 +578,105 @@ func TestV2DeploymentLifecycle(t *testing.T) {
 	}
 }
 
+func TestCreateWebSocketApi(t *testing.T) {
+	svc, _ := newTestService()
+
+	w := do(svc, http.MethodPost, "/apis", map[string]string{
+		"name":                     "my-ws-api",
+		"protocolType":             "WEBSOCKET",
+		"routeSelectionExpression": "$request.body.action",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateApi (WEBSOCKET): want 201, got %d — %s", w.Code, w.Body)
+	}
+
+	var api HTTPApi
+	json.NewDecoder(w.Body).Decode(&api)
+	if api.ApiId == "" {
+		t.Fatal("expected non-empty apiId")
+	}
+	if api.ProtocolType != "WEBSOCKET" {
+		t.Fatalf("want protocolType WEBSOCKET, got %q", api.ProtocolType)
+	}
+	if api.RouteSelectionExpression != "$request.body.action" {
+		t.Fatalf("want routeSelectionExpression '$request.body.action', got %q", api.RouteSelectionExpression)
+	}
+	if !strings.HasPrefix(api.ApiEndpoint, "ws://") {
+		t.Fatalf("want ws:// endpoint for WEBSOCKET API, got %q", api.ApiEndpoint)
+	}
+
+	// GetApi round-trips the fields correctly
+	w2 := do(svc, http.MethodGet, "/apis/"+api.ApiId, nil)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GetApi (WEBSOCKET): want 200, got %d", w2.Code)
+	}
+	var fetched HTTPApi
+	json.NewDecoder(w2.Body).Decode(&fetched)
+	if fetched.ProtocolType != "WEBSOCKET" {
+		t.Fatalf("GetApi: want protocolType WEBSOCKET, got %q", fetched.ProtocolType)
+	}
+	if fetched.RouteSelectionExpression != "$request.body.action" {
+		t.Fatalf("GetApi: want routeSelectionExpression round-tripped, got %q", fetched.RouteSelectionExpression)
+	}
+}
+
+func TestWebSocketApiWsRoutes(t *testing.T) {
+	svc, _ := newTestService()
+
+	w := do(svc, http.MethodPost, "/apis", map[string]string{
+		"name":                     "ws",
+		"protocolType":             "WEBSOCKET",
+		"routeSelectionExpression": "$request.body.action",
+	})
+	var api HTTPApi
+	json.NewDecoder(w.Body).Decode(&api)
+
+	for _, routeKey := range []string{"$connect", "$disconnect", "$default"} {
+		wr := do(svc, http.MethodPost, fmt.Sprintf("/apis/%s/routes", api.ApiId),
+			map[string]string{"routeKey": routeKey})
+		if wr.Code != http.StatusCreated {
+			t.Fatalf("CreateRoute %q: want 201, got %d — %s", routeKey, wr.Code, wr.Body)
+		}
+		var route V2Route
+		json.NewDecoder(wr.Body).Decode(&route)
+		if route.RouteKey != routeKey {
+			t.Fatalf("want routeKey %q, got %q", routeKey, route.RouteKey)
+		}
+	}
+
+	// All three routes present
+	wl := do(svc, http.MethodGet, fmt.Sprintf("/apis/%s/routes", api.ApiId), nil)
+	var list map[string]any
+	json.NewDecoder(wl.Body).Decode(&list)
+	if len(list["items"].([]any)) != 3 {
+		t.Fatalf("want 3 WebSocket routes, got %d", len(list["items"].([]any)))
+	}
+}
+
+func TestHttpApiEndpointScheme(t *testing.T) {
+	svc, _ := newTestService()
+
+	wHttp := do(svc, http.MethodPost, "/apis", map[string]string{
+		"name":         "http-api",
+		"protocolType": "HTTP",
+	})
+	var httpAPI HTTPApi
+	json.NewDecoder(wHttp.Body).Decode(&httpAPI)
+	if !strings.HasPrefix(httpAPI.ApiEndpoint, "http://") {
+		t.Fatalf("HTTP API: want http:// endpoint, got %q", httpAPI.ApiEndpoint)
+	}
+
+	wWs := do(svc, http.MethodPost, "/apis", map[string]string{
+		"name":         "ws-api",
+		"protocolType": "WEBSOCKET",
+	})
+	var wsAPI HTTPApi
+	json.NewDecoder(wWs.Body).Decode(&wsAPI)
+	if !strings.HasPrefix(wsAPI.ApiEndpoint, "ws://") {
+		t.Fatalf("WEBSOCKET API: want ws:// endpoint, got %q", wsAPI.ApiEndpoint)
+	}
+}
+
 // setupV2API creates an HTTP API and returns its ID.
 func setupV2API(t *testing.T, svc *Service) string {
 	t.Helper()

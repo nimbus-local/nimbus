@@ -14,10 +14,18 @@ import (
 
 // executeV2 handles /apis/{apiId}/{stage}/_user_request_/{proxy+}.
 func (s *Service) executeV2(w http.ResponseWriter, r *http.Request, apiID, stageName, proxyPath string) {
-	if _, ok := s.v2.getAPI(apiID); !ok {
+	api, ok := s.v2.getAPI(apiID)
+	if !ok {
 		jsonhttp.Error(w, http.StatusNotFound, "NotFoundException", "HTTP API not found: "+apiID)
 		return
 	}
+
+	// WebSocket upgrade — hand off to the WS handler.
+	if api.ProtocolType == "WEBSOCKET" && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		s.handleWebSocket(w, r, apiID, stageName)
+		return
+	}
+
 	if _, ok := s.v2.getStage(apiID, stageName); !ok {
 		jsonhttp.Error(w, http.StatusNotFound, "NotFoundException", "Stage not found: "+stageName)
 		return
