@@ -65,7 +65,7 @@ services:
     image: amazon/dynamodb-local:latest
     container_name: nimbus-dynamodb
     # -inMemory avoids SQLite on-disk issues (ARM/Apple-Silicon compatibility)
-    command: "-jar DynamoDBLocal.jar -inMemory"
+    command: "-jar DynamoDBLocal.jar -inMemory -sharedDb"
     networks:
       - nimbus-net
     healthcheck:
