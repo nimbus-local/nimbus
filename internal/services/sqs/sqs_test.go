@@ -1,6 +1,7 @@
 package sqs
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,22 @@ func sqsRequest(t *testing.T, svc *Service, params map[string]string) *httptest.
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+	return w
+}
+
+// sqsJSONRequest builds a JSON-body POST request simulating AWS SDK Go v2 (sqs v1.44+)
+// which uses X-Amz-Target and application/x-amz-json-1.0.
+func sqsJSONRequest(t *testing.T, svc *Service, target string, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal JSON body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "AmazonSQS."+target)
 	w := httptest.NewRecorder()
 	svc.ServeHTTP(w, req)
 	return w
@@ -380,6 +397,35 @@ func TestChangeMessageVisibility(t *testing.T) {
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("ChangeMessageVisibility: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+// --- JSON protocol (AWS SDK Go v2 SQS v1.44+) ---
+
+// TestDeleteQueue_JSONProtocol verifies that after DeleteQueue, GetQueueUrl via
+// JSON protocol returns "QueueDoesNotExist" (not "AWS.SimpleQueueService.NonExistentQueue").
+// The AWS SDK Go v2 QueueDeletedWaiter checks for exactly "QueueDoesNotExist"; the
+// old form-protocol code causes the waiter to retry for ~129s until it times out.
+func TestDeleteQueue_JSONProtocol(t *testing.T) {
+	svc := newTestService()
+	qURL := createQueue(t, svc, "json-delete-test")
+
+	w := sqsJSONRequest(t, svc, "DeleteQueue", map[string]interface{}{"QueueUrl": qURL})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteQueue JSON: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// GetQueueUrl after deletion must return the short error code so the SDK waiter exits.
+	w = sqsJSONRequest(t, svc, "GetQueueUrl", map[string]interface{}{"QueueName": "json-delete-test"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("GetQueueUrl after delete: expected 400, got %d", w.Code)
+	}
+	var errBody map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if errBody["__type"] != "QueueDoesNotExist" {
+		t.Errorf("expected __type=QueueDoesNotExist, got %q (SDK QueueDeletedWaiter won't recognise the old form-protocol code)", errBody["__type"])
 	}
 }
 
