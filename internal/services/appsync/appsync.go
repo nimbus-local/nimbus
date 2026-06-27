@@ -16,10 +16,17 @@ import (
 
 const accountID = "000000000000"
 
+// LambdaInvoker is satisfied by the Lambda invocation service, letting AppSync
+// execute GraphQL resolvers backed by Lambda without an HTTP round-trip.
+type LambdaInvoker interface {
+	DirectInvoke(functionName string, payload []byte) ([]byte, error)
+}
+
 // Service implements the AppSync emulator.
 type Service struct {
 	mu        sync.RWMutex
 	region    string
+	lambda    LambdaInvoker
 	apis      map[string]*graphqlAPI       // apiId -> api
 	sources   map[string]*dataSource       // apiId+"/"+name -> dataSource
 	resolvers map[string]*resolver         // apiId+"/"+typeName+"/"+fieldName -> resolver
@@ -70,13 +77,15 @@ type apiKey struct {
 	Deletes     int64  `json:"deletes"`
 }
 
-// New creates a new AppSync service instance.
-func New(region string) *Service {
+// New creates a new AppSync service instance. Pass a LambdaInvoker to enable
+// GraphQL execution for Lambda-backed resolvers; pass nil to disable execution.
+func New(region string, lambda LambdaInvoker) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
 	return &Service{
 		region:    region,
+		lambda:    lambda,
 		apis:      map[string]*graphqlAPI{},
 		sources:   map[string]*dataSource{},
 		resolvers: map[string]*resolver{},
@@ -98,15 +107,33 @@ func (s *Service) Reset() {
 	s.tags = map[string]map[string]string{}
 }
 
-// Detect claims requests whose path starts with /v1/apis or /v1/tags (AppSync REST paths).
+// Detect claims management-plane requests (/v1/apis, /v1/tags) and GraphQL
+// execution requests — either via the path-based alias
+// (/_appsync/{apiId}/graphql) or the virtual-host pattern
+// (<apiId>.appsync-api.<region>.nimbus.local).
 func (s *Service) Detect(r *http.Request) bool {
 	p := r.URL.Path
-	return p == "/v1/apis" || strings.HasPrefix(p, "/v1/apis/") ||
-		strings.HasPrefix(p, "/v1/tags/")
+	if p == "/v1/apis" || strings.HasPrefix(p, "/v1/apis/") || strings.HasPrefix(p, "/v1/tags/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/_appsync/") && strings.HasSuffix(p, "/graphql") {
+		return true
+	}
+	host := r.Host
+	if i := strings.LastIndex(host, ":"); i != -1 {
+		host = host[:i]
+	}
+	return strings.HasSuffix(host, ".appsync-api."+s.region+".nimbus.local")
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
+
+	// GraphQL execution endpoint
+	if p == "/graphql" || strings.HasPrefix(p, "/_appsync/") {
+		s.executeGraphQL(w, r)
+		return
+	}
 
 	// Tags: POST/GET /v1/tags/{resourceArn}
 	if strings.HasPrefix(p, "/v1/tags/") {

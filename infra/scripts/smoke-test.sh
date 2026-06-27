@@ -1467,7 +1467,34 @@ if [ -n "$SMOKE_API_ID" ]; then
   try_match "/_nimbus/appsync/apis lists API" "$SMOKE_API_ID" \
     curl -sf "$NIMBUS/_nimbus/appsync/apis"
 
+  # GraphQL execution — NONE data source (no Lambda required)
+  try "create-data-source (NONE)" \
+    $CLI appsync create-data-source \
+      --api-id "$SMOKE_API_ID" \
+      --name NoneDS \
+      --type NONE
+  try "create-resolver (NONE/ping)" \
+    $CLI appsync create-resolver \
+      --api-id "$SMOKE_API_ID" \
+      --type-name Query \
+      --field-name ping \
+      --data-source-name NoneDS \
+      --kind UNIT \
+      --request-mapping-template '{"version":"2018-05-29","payload":null}' \
+      --response-mapping-template '"pong"'
+  if [ -n "$SMOKE_KEY_ID" ]; then
+    try_match "graphql execution (path-based)" "pong" \
+      curl -sf -X POST "$NIMBUS/_appsync/${SMOKE_API_ID}/graphql" \
+        -H "Content-Type: application/json" \
+        -H "x-api-key: ${SMOKE_KEY_ID}" \
+        -d '{"query":"query { ping }"}'
+  fi
+
   # Teardown
+  $CLI appsync delete-resolver \
+    --api-id "$SMOKE_API_ID" --type-name Query --field-name ping > /dev/null 2>&1
+  $CLI appsync delete-data-source \
+    --api-id "$SMOKE_API_ID" --name NoneDS > /dev/null 2>&1
   try "delete-resolver" \
     $CLI appsync delete-resolver \
       --api-id "$SMOKE_API_ID" --type-name Query --field-name hello

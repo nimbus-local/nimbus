@@ -1,8 +1,10 @@
 # AppSync
 
-In-memory AppSync GraphQL API management plane emulator. All resources (APIs, schemas, data sources, resolvers, API keys) are stored in memory and reset on restart or via `/_nimbus/reset`. No GraphQL queries are executed — this is a control-plane stub for Pulumi/Terraform lifecycle testing.
+In-memory AppSync emulator covering both the management plane (CRUD for APIs, schemas, data sources, resolvers, API keys) and the GraphQL execution plane (running queries and mutations against Lambda-backed resolvers). All state is held in memory and resets on restart or via `/_nimbus/reset`.
 
-Detection: `/v1/apis` path prefix (REST JSON protocol, no `X-Amz-Target` header).
+**Detection:**
+- Management plane: `/v1/apis` or `/v1/tags/` path prefix.
+- Execution plane: path `/_appsync/{apiId}/graphql` (path-based, no DNS required) or `Host: {apiId}.appsync-api.{region}.nimbus.local` with path `/graphql` (virtual-host, matches real AppSync URL pattern).
 
 ## Supported operations
 
@@ -31,6 +33,19 @@ Detection: `/v1/apis` path prefix (REST JSON protocol, no `X-Amz-Target` header)
 | `ListTagsForResource` | `GET /v1/tags/{resourceArn}` |
 | `UntagResource` | `DELETE /v1/tags/{resourceArn}?tagKeys=...` |
 
+## GraphQL execution
+
+When a resolver is configured with an `AWS_LAMBDA` data source, Nimbus:
+
+1. Validates the `x-api-key` header against stored API keys for `API_KEY`-auth APIs.
+2. Parses the incoming GraphQL query/mutation to extract the operation type, field name, and arguments.
+3. Evaluates the request mapping template — supports `$util.toJson($context.arguments)`, `$context.arguments`, `$context.info.fieldName`, and `$context.info.parentTypeName`.
+4. Invokes the Lambda function (via mock response or live registered endpoint).
+5. Evaluates the response mapping template — supports `$util.toJson($context.result)` and `$context.result`.
+6. Returns `{"data": {"<fieldName>": <result>}}`.
+
+The path-based endpoint `/_appsync/{apiId}/graphql` avoids the DNS setup that `*.nimbus.local` requires from a Mac host.
+
 ## Example
 
 ```bash
@@ -52,8 +67,23 @@ nimbuslocal appsync create-data-source \
   --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000000:function:myFn \
   --service-role-arn arn:aws:iam::000000000000:role/AppSyncRole
 
+# Create a resolver
+nimbuslocal appsync create-resolver \
+  --api-id <apiId> \
+  --type-name Mutation \
+  --field-name createNote \
+  --data-source-name myLambdaSource \
+  --request-mapping-template '{"version":"2017-02-28","operation":"Invoke","payload":{"field":"createNote","args":$util.toJson($context.arguments)}}' \
+  --response-mapping-template '$util.toJson($context.result)'
+
 # Create an API key
 nimbuslocal appsync create-api-key --api-id <apiId>
+
+# Run a GraphQL mutation (path-based, no DNS needed)
+curl -X POST http://localhost:4566/_appsync/<apiId>/graphql \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <keyId>" \
+  -d '{"query":"mutation { createNote(id: \"1\", content: \"hi\") { id content } }"}'
 ```
 
 ## Inspection endpoint
