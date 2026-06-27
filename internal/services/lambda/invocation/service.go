@@ -1,8 +1,10 @@
 package invocation
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -155,7 +157,8 @@ func (s *Service) InvocationsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DirectInvoke invokes a function synchronously without going through HTTP.
-// It records the invocation and returns the configured mock response.
+// If a live endpoint is registered for the function, it proxies there; otherwise
+// it returns the configured mock response.
 func (s *Service) DirectInvoke(functionName string, payload []byte) ([]byte, error) {
 	if !s.checker.FunctionExists(functionName) {
 		return nil, fmt.Errorf("function not found: %s", functionName)
@@ -169,10 +172,28 @@ func (s *Service) DirectInvoke(functionName string, payload []byte) ([]byte, err
 		InvokedAt:      time.Now().UTC(),
 	})
 	response := s.responses[functionName]
+	endpoint := s.liveEndpoints[functionName]
 	s.mu.Unlock()
 
+	if endpoint != "" {
+		return directProxyInvoke(endpoint, payload)
+	}
 	if response == nil {
 		return json.RawMessage(`null`), nil
 	}
 	return response, nil
+}
+
+func directProxyInvoke(endpoint string, payload []byte) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("live endpoint unreachable: %v", err)
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }

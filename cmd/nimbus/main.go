@@ -88,7 +88,7 @@ func main() {
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	r.Register(lambdaSvc)
-	appSyncSvc := appsync.New(cfg.DefaultRegion)
+	appSyncSvc := appsync.New(cfg.DefaultRegion, lambdaSvc.Invocation)
 	r.Register(appSyncSvc)
 	apiGwSvc := apigateway.New(cfg.DefaultRegion, lambdaSvc.Invocation)
 	r.Register(apiGwSvc)
