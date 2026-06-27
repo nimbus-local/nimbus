@@ -41,5 +41,6 @@ provider "aws" {
     efs            = var.nimbus_endpoint
     ec2            = var.nimbus_endpoint
     elb            = var.nimbus_endpoint
+    appsync        = var.nimbus_endpoint
   }
 }
