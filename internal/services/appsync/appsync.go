@@ -18,13 +18,13 @@ const accountID = "000000000000"
 
 // Service implements the AppSync emulator.
 type Service struct {
-	mu         sync.RWMutex
-	region     string
-	apis       map[string]*graphqlAPI       // apiId -> api
-	sources    map[string]*dataSource       // apiId+"/"+name -> dataSource
-	resolvers  map[string]*resolver         // apiId+"/"+typeName+"/"+fieldName -> resolver
-	apiKeys    map[string]*apiKey           // apiId+"/"+keyId -> apiKey
-	tags       map[string]map[string]string // resourceArn -> tags
+	mu        sync.RWMutex
+	region    string
+	apis      map[string]*graphqlAPI       // apiId -> api
+	sources   map[string]*dataSource       // apiId+"/"+name -> dataSource
+	resolvers map[string]*resolver         // apiId+"/"+typeName+"/"+fieldName -> resolver
+	apiKeys   map[string]*apiKey           // apiId+"/"+keyId -> apiKey
+	tags      map[string]map[string]string // resourceArn -> tags
 }
 
 type graphqlAPI struct {
@@ -38,13 +38,13 @@ type graphqlAPI struct {
 }
 
 type dataSource struct {
-	APIId             string `json:"apiId"`
-	Name              string `json:"name"`
-	Type              string `json:"type"`
-	Description       string `json:"description,omitempty"`
-	ServiceRoleArn    string `json:"serviceRoleArn,omitempty"`
-	LambdaConfig      *lambdaDataSourceConfig `json:"lambdaConfig,omitempty"`
-	DataSourceArn     string `json:"dataSourceArn"`
+	APIId          string                  `json:"apiId"`
+	Name           string                  `json:"name"`
+	Type           string                  `json:"type"`
+	Description    string                  `json:"description,omitempty"`
+	ServiceRoleArn string                  `json:"serviceRoleArn,omitempty"`
+	LambdaConfig   *lambdaDataSourceConfig `json:"lambdaConfig,omitempty"`
+	DataSourceArn  string                  `json:"dataSourceArn"`
 }
 
 type lambdaDataSourceConfig struct {

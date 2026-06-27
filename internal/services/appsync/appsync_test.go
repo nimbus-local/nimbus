@@ -45,9 +45,9 @@ func TestCreateAndGetGraphqlAPI(t *testing.T) {
 	}
 	var createResp struct {
 		GraphqlApi struct {
-			ApiId string `json:"apiId"`
-			Name  string `json:"name"`
-			ARN   string `json:"arn"`
+			ApiId string            `json:"apiId"`
+			Name  string            `json:"name"`
+			ARN   string            `json:"arn"`
 			Uris  map[string]string `json:"uris"`
 		} `json:"graphqlApi"`
 	}
@@ -71,7 +71,9 @@ func TestDeleteGraphqlAPI(t *testing.T) {
 	svc := newSvc()
 	w := doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]string{"name": "MyAPI"})
 	var resp struct {
-		GraphqlApi struct{ ApiId string `json:"apiId"` } `json:"graphqlApi"`
+		GraphqlApi struct {
+			ApiId string `json:"apiId"`
+		} `json:"graphqlApi"`
 	}
 	decode(t, w, &resp)
 	apiID := resp.GraphqlApi.ApiId
@@ -94,7 +96,9 @@ func TestSchemaCreation(t *testing.T) {
 	svc := newSvc()
 	w := doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]string{"name": "MyAPI"})
 	var resp struct {
-		GraphqlApi struct{ ApiId string `json:"apiId"` } `json:"graphqlApi"`
+		GraphqlApi struct {
+			ApiId string `json:"apiId"`
+		} `json:"graphqlApi"`
 	}
 	decode(t, w, &resp)
 	apiID := resp.GraphqlApi.ApiId
@@ -110,7 +114,9 @@ func TestSchemaCreation(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("getSchemaCreationStatus: want 200 got %d", w.Code)
 	}
-	var statusResp struct{ Status string `json:"status"` }
+	var statusResp struct {
+		Status string `json:"status"`
+	}
 	decode(t, w, &statusResp)
 	if statusResp.Status != "SUCCESS" {
 		t.Fatalf("schema status: want SUCCESS got %s", statusResp.Status)
@@ -123,7 +129,9 @@ func createAPI(t *testing.T, svc *appsync.Service) string {
 	t.Helper()
 	w := doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]string{"name": "MyAPI"})
 	var resp struct {
-		GraphqlApi struct{ ApiId string `json:"apiId"` } `json:"graphqlApi"`
+		GraphqlApi struct {
+			ApiId string `json:"apiId"`
+		} `json:"graphqlApi"`
 	}
 	decode(t, w, &resp)
 	return resp.GraphqlApi.ApiId
@@ -152,7 +160,9 @@ func TestDataSourceCRUD(t *testing.T) {
 		t.Fatalf("get datasource: want 200 got %d", w.Code)
 	}
 	var dsResp struct {
-		DataSource struct{ Name string `json:"name"` } `json:"dataSource"`
+		DataSource struct {
+			Name string `json:"name"`
+		} `json:"dataSource"`
 	}
 	decode(t, w, &dsResp)
 	if dsResp.DataSource.Name != "myLambda" {
@@ -215,7 +225,9 @@ func TestApiKeyCRUD(t *testing.T) {
 		t.Fatalf("create apikey: want 200 got %d: %s", w.Code, w.Body)
 	}
 	var keyResp struct {
-		ApiKey struct{ ID string `json:"id"` } `json:"apiKey"`
+		ApiKey struct {
+			ID string `json:"id"`
+		} `json:"apiKey"`
 	}
 	decode(t, w, &keyResp)
 	keyID := keyResp.ApiKey.ID
@@ -229,7 +241,9 @@ func TestApiKeyCRUD(t *testing.T) {
 		t.Fatalf("list apikeys: want 200 got %d", w.Code)
 	}
 	var listResp struct {
-		ApiKeys []struct{ ID string `json:"id"` } `json:"apiKeys"`
+		ApiKeys []struct {
+			ID string `json:"id"`
+		} `json:"apiKeys"`
 	}
 	decode(t, w, &listResp)
 	if len(listResp.ApiKeys) != 1 {
