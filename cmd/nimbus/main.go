@@ -14,6 +14,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/acm"
 	"github.com/nimbus-local/nimbus/internal/services/alb"
 	"github.com/nimbus-local/nimbus/internal/services/apigateway"
+	"github.com/nimbus-local/nimbus/internal/services/appsync"
 	"github.com/nimbus-local/nimbus/internal/services/cloudfront"
 	"github.com/nimbus-local/nimbus/internal/services/cloudwatchlogs"
 	"github.com/nimbus-local/nimbus/internal/services/cloudwatchmetrics"
@@ -87,6 +88,8 @@ func main() {
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	r.Register(lambdaSvc)
+	appSyncSvc := appsync.New(cfg.DefaultRegion)
+	r.Register(appSyncSvc)
 	apiGwSvc := apigateway.New(cfg.DefaultRegion, lambdaSvc.Invocation)
 	r.Register(apiGwSvc)
 	sesSvc := ses.New(cfg.DefaultRegion)
@@ -209,6 +212,9 @@ func main() {
 	// Lambda live function registration — not AWS API, Nimbus-specific (forge dev tunnel)
 	mux.HandleFunc("/_nimbus/lambda/register", lambdaSvc.Invocation.RegisterHandler)
 	mux.HandleFunc("/_nimbus/lambda/register/", lambdaSvc.Invocation.RegisterHandler)
+
+	// AppSync inspection endpoint — not AWS API, Nimbus-specific
+	mux.HandleFunc("/_nimbus/appsync/apis", appSyncSvc.APIsHandler)
 
 	// ACM inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/acm/certs/", acmSvc.CertHandler)

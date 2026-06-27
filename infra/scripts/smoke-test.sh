@@ -1363,6 +1363,123 @@ $CLI stepfunctions delete-state-machine --state-machine-arn "$FAIL_SM_ARN" > /de
 $CLI stepfunctions delete-state-machine --state-machine-arn "$PARALLEL_SM_ARN" > /dev/null
 $CLI stepfunctions delete-state-machine --state-machine-arn "$MAP_SM_ARN" > /dev/null
 
+# ── AppSync ───────────────────────────────────────────────────────────────────
+
+section "AppSync"
+
+# Verify Terraform-provisioned API is visible
+APPSYNC_API_ID=$($CLI appsync list-graphql-apis \
+  --query "graphqlApis[?name=='${PREFIX}-appsync'].apiId | [0]" \
+  --output text 2>/dev/null)
+if [ -n "$APPSYNC_API_ID" ] && [ "$APPSYNC_API_ID" != "None" ]; then
+  ok "list-graphql-apis finds TF-provisioned API"
+else
+  fail "list-graphql-apis finds TF-provisioned API" "API '${PREFIX}-appsync' not found"
+  APPSYNC_API_ID=""
+fi
+
+if [ -n "$APPSYNC_API_ID" ]; then
+  try_match "get-graphql-api returns API_KEY auth" "API_KEY" \
+    $CLI appsync get-graphql-api --api-id "$APPSYNC_API_ID" \
+      --query "graphqlApi.authenticationType" --output text
+
+  try_match "list-api-keys finds TF-provisioned key" "da2-" \
+    $CLI appsync list-api-keys --api-id "$APPSYNC_API_ID" \
+      --query "apiKeys[0].id" --output text
+
+  try_match "get-data-source NimbusLambda" "AWS_LAMBDA" \
+    $CLI appsync get-data-source \
+      --api-id "$APPSYNC_API_ID" --name NimbusLambda \
+      --query "dataSource.type" --output text
+fi
+
+# Inline lifecycle: create → schema → datasource → resolver → api-key → delete
+SMOKE_API_ID=$($CLI appsync create-graphql-api \
+  --name "${PREFIX}-smoke-$$" \
+  --authentication-type API_KEY \
+  --query "graphqlApi.apiId" --output text 2>/dev/null)
+if [ -n "$SMOKE_API_ID" ] && [ "$SMOKE_API_ID" != "None" ]; then
+  ok "create-graphql-api (inline)"
+else
+  fail "create-graphql-api (inline)"
+  SMOKE_API_ID=""
+fi
+
+if [ -n "$SMOKE_API_ID" ]; then
+  # Schema
+  SCHEMA_B64=$(printf 'type Query { hello: String }' | base64)
+  try "start-schema-creation" \
+    $CLI appsync start-schema-creation \
+      --api-id "$SMOKE_API_ID" \
+      --definition "$SCHEMA_B64"
+  try_match "get-schema-creation-status SUCCESS" "SUCCESS" \
+    $CLI appsync get-schema-creation-status \
+      --api-id "$SMOKE_API_ID" --query status --output text
+
+  # Data source
+  try "create-data-source" \
+    $CLI appsync create-data-source \
+      --api-id "$SMOKE_API_ID" \
+      --name SmokeDS \
+      --type AWS_LAMBDA \
+      --service-role-arn "arn:aws:iam::000000000000:role/appsync-role" \
+      --lambda-config "lambdaFunctionArn=arn:aws:lambda:${REGION}:000000000000:function:${PREFIX}"
+  try_match "get-data-source" "AWS_LAMBDA" \
+    $CLI appsync get-data-source \
+      --api-id "$SMOKE_API_ID" --name SmokeDS \
+      --query "dataSource.type" --output text
+
+  # Resolver
+  try "create-resolver" \
+    $CLI appsync create-resolver \
+      --api-id "$SMOKE_API_ID" \
+      --type-name Query \
+      --field-name hello \
+      --data-source-name SmokeDS \
+      --kind UNIT
+  try_match "get-resolver" "SmokeDS" \
+    $CLI appsync get-resolver \
+      --api-id "$SMOKE_API_ID" --type-name Query --field-name hello \
+      --query "resolver.dataSourceName" --output text
+
+  # API key
+  SMOKE_KEY_ID=$($CLI appsync create-api-key \
+    --api-id "$SMOKE_API_ID" \
+    --description "smoke-$$" \
+    --query "apiKey.id" --output text 2>/dev/null)
+  try "create-api-key" [ -n "$SMOKE_KEY_ID" ]
+  try_match "list-api-keys" "$SMOKE_KEY_ID" \
+    $CLI appsync list-api-keys \
+      --api-id "$SMOKE_API_ID" --query "apiKeys[0].id" --output text
+
+  # Tags
+  SMOKE_ARN="arn:aws:appsync:${REGION}:000000000000:apis/${SMOKE_API_ID}"
+  try "tag-resource" \
+    $CLI appsync tag-resource \
+      --resource-arn "$SMOKE_ARN" \
+      --tags env=smoke
+  try_match "list-tags-for-resource" "smoke" \
+    $CLI appsync list-tags-for-resource \
+      --resource-arn "$SMOKE_ARN" \
+      --query "tags.env" --output text
+
+  # Inspect via Nimbus endpoint
+  try_match "/_nimbus/appsync/apis lists API" "$SMOKE_API_ID" \
+    curl -sf "$NIMBUS/_nimbus/appsync/apis"
+
+  # Teardown
+  try "delete-resolver" \
+    $CLI appsync delete-resolver \
+      --api-id "$SMOKE_API_ID" --type-name Query --field-name hello
+  try "delete-data-source" \
+    $CLI appsync delete-data-source \
+      --api-id "$SMOKE_API_ID" --name SmokeDS
+  [ -n "$SMOKE_KEY_ID" ] && $CLI appsync delete-api-key \
+    --api-id "$SMOKE_API_ID" --id "$SMOKE_KEY_ID" > /dev/null 2>&1
+  try "delete-graphql-api" \
+    $CLI appsync delete-graphql-api --api-id "$SMOKE_API_ID"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
