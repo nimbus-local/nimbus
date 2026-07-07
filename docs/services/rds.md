@@ -14,11 +14,25 @@ Detection: form-encoded body, `Version=2014-10-31`.
 | `CreateDBParameterGroup` / `DescribeDBParameterGroups` / `DeleteDBParameterGroup` | Accepted verbatim; `DescribeDBParameters` returns empty list |
 | `ModifyDBParameterGroup` | Accepted, no-op |
 | `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId` |
-| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint from parent cluster; assigns an immutable `DbiResourceId` |
+| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint from parent cluster; assigns an immutable `DbiResourceId`; standalone instances echo `EngineVersion`, `MasterUsername`, `DBName`, `AllocatedStorage` |
 | `AddTagsToResource` / `ListTagsForResource` / `RemoveTagsFromResource` | Per-ARN tag store |
 | `DescribeDBEngineVersions` | Returns a single matching version entry |
 | `DescribeOrderableDBInstanceOptions` | Returns a minimal valid response |
 | `DescribeDBClusterSnapshots` / `DescribeOptionGroups` | Returns empty lists |
+
+## Describe filters
+
+`DescribeDBInstances` and `DescribeDBClusters` honor the `Filters` parameter the Terraform AWS provider uses for reads (instead of the identifier params). Values match by name **or** ARN; multiple values are OR-ed; a filter that matches nothing returns an empty list (not an error). Unknown filter names are ignored.
+
+| Operation | Supported filters |
+|-----------|-------------------|
+| `DescribeDBInstances` | `db-instance-id`, `db-cluster-id`, `dbi-resource-id` |
+| `DescribeDBClusters` | `db-cluster-id`, `db-cluster-resource-id` |
+
+```bash
+nimbuslocal rds describe-db-instances \
+  --filters "Name=db-instance-id,Values=my-instance-1"
+```
 
 ## Performance Insights
 

@@ -748,6 +748,21 @@ else
   fail "describe-db-instances (instance not found — run 'make apply' first)"
 fi
 
+# Describe filters (#95) — the TF provider reads instances via Filters, not
+# the identifier param; with 2+ instances an ignored filter returns them all.
+try_match "db-instance-id filter finds standalone" "${PREFIX}-standalone" \
+  $CLI rds describe-db-instances \
+    --filters "Name=db-instance-id,Values=${PREFIX}-standalone" \
+    --query "DBInstances[0].DBInstanceIdentifier" --output text
+try_match "db-instance-id filter returns exactly one" "^1$" \
+  $CLI rds describe-db-instances \
+    --filters "Name=db-instance-id,Values=${PREFIX}-standalone" \
+    --query "length(DBInstances)" --output text
+try_match "db-cluster-id filter finds cluster member" "${PREFIX}-instance-1" \
+  $CLI rds describe-db-instances \
+    --filters "Name=db-cluster-id,Values=${PREFIX}" \
+    --query "DBInstances[].DBInstanceIdentifier" --output text
+
 try_match "/_nimbus/rds/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/rds/clusters"
 
