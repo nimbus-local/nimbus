@@ -728,6 +728,12 @@ if [ -n "${DB_INSTANCE:-}" ] && [ "$DB_INSTANCE" != "None" ]; then
   try_match "instance status available" "available" \
     $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
       --query "DBInstances[0].DBInstanceStatus" --output text
+  try_match "instance Performance Insights enabled" "True" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].PerformanceInsightsEnabled" --output text
+  try_match "instance has DbiResourceId" "db-" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].DbiResourceId" --output text
 else
   fail "describe-db-instances (instance not found — run 'make apply' first)"
 fi

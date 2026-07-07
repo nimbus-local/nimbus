@@ -13,12 +13,18 @@ Detection: form-encoded body, `Version=2014-10-31`.
 | `ModifyDBClusterParameterGroup` | Accepted, no-op |
 | `CreateDBParameterGroup` / `DescribeDBParameterGroups` / `DeleteDBParameterGroup` | Accepted verbatim; `DescribeDBParameters` returns empty list |
 | `ModifyDBParameterGroup` | Accepted, no-op |
-| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar |
-| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint from parent cluster |
+| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId` |
+| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint from parent cluster; assigns an immutable `DbiResourceId` |
 | `AddTagsToResource` / `ListTagsForResource` / `RemoveTagsFromResource` | Per-ARN tag store |
 | `DescribeDBEngineVersions` | Returns a single matching version entry |
 | `DescribeOrderableDBInstanceOptions` | Returns a minimal valid response |
 | `DescribeDBClusterSnapshots` / `DescribeOptionGroups` | Returns empty lists |
+
+## Performance Insights
+
+Clusters and instances accept `EnablePerformanceInsights`, `PerformanceInsightsKMSKeyId`, and `PerformanceInsightsRetentionPeriod` on create and modify, and round-trip them through the Describe responses (`PerformanceInsightsEnabled` etc.). Retention defaults to `7` when PI is enabled without an explicit value. Modify calls that don't include PI fields leave the stored values untouched, so `performance_insights_enabled = true` in Terraform applies and re-applies cleanly.
+
+The `DbiResourceId` returned by `DescribeDBInstances` (and `DbClusterResourceId` on clusters) is the identifier the [Performance Insights API](pi.md) keys off.
 
 ## Example
 
@@ -42,12 +48,17 @@ nimbuslocal rds describe-db-clusters \
   --db-cluster-identifier my-cluster \
   --query "DBClusters[0].Endpoint"
 
-# DB instance
+# DB instance with Performance Insights
 nimbuslocal rds create-db-instance \
   --db-instance-identifier my-instance-1 \
   --db-cluster-identifier my-cluster \
   --db-instance-class db.serverless \
-  --engine aurora-postgresql
+  --engine aurora-postgresql \
+  --enable-performance-insights
+
+nimbuslocal rds describe-db-instances \
+  --db-instance-identifier my-instance-1 \
+  --query "DBInstances[0].[DbiResourceId,PerformanceInsightsEnabled]"
 ```
 
 ## Inspection
