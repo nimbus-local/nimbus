@@ -20,7 +20,7 @@ registered target. Registered targets are immediately `healthy`.
 | `ModifyLoadBalancerAttributes` | Accepted and ignored |
 | `DescribeCapacityReservation` | Returns stub empty reservation state |
 | `CreateTargetGroup` | Stores name, protocol, port, VPC, target type |
-| `DescribeTargetGroups` | Filter by `TargetGroupArns` or `Names` |
+| `DescribeTargetGroups` | Filter by `TargetGroupArns` or `Names`; `LoadBalancerArns` lists every LB attached via a listener default action or rule |
 | `DeleteTargetGroup` | Removes from in-memory store |
 | `ModifyTargetGroup` | Returns existing target group unchanged; required by TF provider v6 re-apply |
 | `DescribeTargetGroupAttributes` | Returns sensible defaults (deregistration delay 300 s, stickiness off, etc.) |
