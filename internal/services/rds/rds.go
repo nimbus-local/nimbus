@@ -7,6 +7,7 @@ package rds
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type dbParamGroup struct {
 type dbCluster struct {
 	identifier    string
 	arn           string
+	resourceID    string // DbClusterResourceId, e.g. cluster-ABC...
 	engine        string
 	engineVersion string
 	dbName        string
@@ -57,11 +59,16 @@ type dbCluster struct {
 	port          int
 	status        string
 	createdAt     time.Time
+
+	perfInsights          bool
+	perfInsightsKMS       string
+	perfInsightsRetention int
 }
 
 type dbInstance struct {
 	identifier string
 	arn        string
+	resourceID string // DbiResourceId, e.g. db-ABC...
 	clusterID  string
 	engine     string
 	class      string
@@ -69,6 +76,10 @@ type dbInstance struct {
 	port       int
 	status     string
 	createdAt  time.Time
+
+	perfInsights          bool
+	perfInsightsKMS       string
+	perfInsightsRetention int
 }
 
 // New creates an RDS service. postgresHost:postgresPort point at the Postgres
@@ -463,6 +474,7 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 	c := &dbCluster{
 		identifier:    id,
 		arn:           arn,
+		resourceID:    newResourceID("cluster"),
 		engine:        engine,
 		engineVersion: engineVersion,
 		dbName:        dbName,
@@ -472,6 +484,7 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 		status:        "available",
 		createdAt:     time.Now().UTC(),
 	}
+	applyPerformanceInsights(r, &c.perfInsights, &c.perfInsightsKMS, &c.perfInsightsRetention)
 
 	s.mu.Lock()
 	s.clusters[id] = c
@@ -509,9 +522,12 @@ func (s *Service) describeDBClusters(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) modifyDBCluster(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("DBClusterIdentifier")
-	s.mu.RLock()
+	s.mu.Lock()
 	c, ok := s.clusters[id]
-	s.mu.RUnlock()
+	if ok {
+		applyPerformanceInsights(r, &c.perfInsights, &c.perfInsightsKMS, &c.perfInsightsRetention)
+	}
+	s.mu.Unlock()
 	if !ok {
 		rdsError(w, http.StatusNotFound, "DBClusterNotFoundFault",
 			fmt.Sprintf("DBCluster '%s' not found.", id))
@@ -544,6 +560,7 @@ func (s *Service) clusterXML(c *dbCluster) string {
 	return fmt.Sprintf(`
         <DBClusterArn>%s</DBClusterArn>
         <DBClusterIdentifier>%s</DBClusterIdentifier>
+        <DbClusterResourceId>%s</DbClusterResourceId>
         <Engine>%s</Engine>
         <EngineVersion>%s</EngineVersion>
         <DatabaseName>%s</DatabaseName>
@@ -554,15 +571,16 @@ func (s *Service) clusterXML(c *dbCluster) string {
         <Port>%d</Port>
         <MultiAZ>false</MultiAZ>
         <StorageEncrypted>false</StorageEncrypted>
-        <ClusterCreateTime>%s</ClusterCreateTime>
+        <ClusterCreateTime>%s</ClusterCreateTime>%s
         <DBClusterMembers/>
         <VpcSecurityGroups/>
         <AvailabilityZones>
           <AvailabilityZone>%s</AvailabilityZone>
         </AvailabilityZones>`,
-		c.arn, c.identifier, c.engine, c.engineVersion, c.dbName, c.masterUser,
+		c.arn, c.identifier, c.resourceID, c.engine, c.engineVersion, c.dbName, c.masterUser,
 		c.status, c.endpoint, c.endpoint, c.port,
 		c.createdAt.Format(time.RFC3339),
+		performanceInsightsXML(c.perfInsights, c.perfInsightsKMS, c.perfInsightsRetention),
 		s.region+"a")
 }
 
@@ -592,6 +610,7 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 	inst := &dbInstance{
 		identifier: id,
 		arn:        arn,
+		resourceID: newResourceID("db"),
 		clusterID:  clusterID,
 		engine:     engine,
 		class:      class,
@@ -600,6 +619,7 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 		status:     "available",
 		createdAt:  time.Now().UTC(),
 	}
+	applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
 
 	s.mu.Lock()
 	s.instances[id] = inst
@@ -637,9 +657,12 @@ func (s *Service) describeDBInstances(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) modifyDBInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("DBInstanceIdentifier")
-	s.mu.RLock()
+	s.mu.Lock()
 	inst, ok := s.instances[id]
-	s.mu.RUnlock()
+	if ok {
+		applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
+	}
+	s.mu.Unlock()
 	if !ok {
 		rdsError(w, http.StatusNotFound, "DBInstanceNotFound",
 			fmt.Sprintf("DBInstance '%s' not found.", id))
@@ -672,6 +695,7 @@ func (s *Service) instanceXML(inst *dbInstance) string {
 	return fmt.Sprintf(`
         <DBInstanceArn>%s</DBInstanceArn>
         <DBInstanceIdentifier>%s</DBInstanceIdentifier>
+        <DbiResourceId>%s</DbiResourceId>
         <DBClusterIdentifier>%s</DBClusterIdentifier>
         <Engine>%s</Engine>
         <DBInstanceClass>%s</DBInstanceClass>
@@ -682,13 +706,14 @@ func (s *Service) instanceXML(inst *dbInstance) string {
         </Endpoint>
         <MultiAZ>false</MultiAZ>
         <StorageEncrypted>false</StorageEncrypted>
-        <InstanceCreateTime>%s</InstanceCreateTime>
+        <InstanceCreateTime>%s</InstanceCreateTime>%s
         <DBParameterGroups/>
         <VpcSecurityGroups/>
         <AvailabilityZone>%s</AvailabilityZone>`,
-		inst.arn, inst.identifier, inst.clusterID, inst.engine, inst.class,
+		inst.arn, inst.identifier, inst.resourceID, inst.clusterID, inst.engine, inst.class,
 		inst.status, inst.endpoint, inst.port,
 		inst.createdAt.Format(time.RFC3339),
+		performanceInsightsXML(inst.perfInsights, inst.perfInsightsKMS, inst.perfInsightsRetention),
 		s.region+"a")
 }
 
@@ -800,6 +825,72 @@ func (s *Service) storeTags(r *http.Request, arn string) {
 			s.tags[arn][k] = v
 		}
 	}
+}
+
+// ── Performance Insights ──────────────────────────────────────────────────────
+
+// HasResourceID reports whether any instance or cluster owns the given
+// Performance Insights resource ID (DbiResourceId / DbClusterResourceId).
+// Used by the PI service to validate identifiers.
+func (s *Service) HasResourceID(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.instances {
+		if inst.resourceID == id {
+			return true
+		}
+	}
+	for _, c := range s.clusters {
+		if c.resourceID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// applyPerformanceInsights copies Performance Insights form fields into the
+// target fields. Only keys present in the form are applied, so Modify calls
+// that don't touch PI leave existing values intact. Retention defaults to 7
+// days (the AWS free-tier default) when PI is enabled without an explicit value.
+func applyPerformanceInsights(r *http.Request, enabled *bool, kmsKeyID *string, retention *int) {
+	if r.Form.Has("EnablePerformanceInsights") {
+		*enabled = r.FormValue("EnablePerformanceInsights") == "true"
+	}
+	if r.Form.Has("PerformanceInsightsKMSKeyId") {
+		*kmsKeyID = r.FormValue("PerformanceInsightsKMSKeyId")
+	}
+	if r.Form.Has("PerformanceInsightsRetentionPeriod") {
+		if n, err := strconv.Atoi(r.FormValue("PerformanceInsightsRetentionPeriod")); err == nil {
+			*retention = n
+		}
+	}
+	if *enabled && *retention == 0 {
+		*retention = 7
+	}
+}
+
+func performanceInsightsXML(enabled bool, kmsKeyID string, retention int) string {
+	if !enabled {
+		return `
+        <PerformanceInsightsEnabled>false</PerformanceInsightsEnabled>`
+	}
+	var b strings.Builder
+	b.WriteString(`
+        <PerformanceInsightsEnabled>true</PerformanceInsightsEnabled>`)
+	if kmsKeyID != "" {
+		fmt.Fprintf(&b, `
+        <PerformanceInsightsKMSKeyId>%s</PerformanceInsightsKMSKeyId>`, kmsKeyID)
+	}
+	fmt.Fprintf(&b, `
+        <PerformanceInsightsRetentionPeriod>%d</PerformanceInsightsRetentionPeriod>`, retention)
+	return b.String()
+}
+
+// newResourceID generates an immutable AWS-style resource ID such as
+// db-3NHX0G0S8X8DE2DSQFVIL5EBBU or cluster-....
+func newResourceID(prefix string) string {
+	hex := strings.ToUpper(strings.ReplaceAll(uid.New(), "-", ""))
+	return prefix + "-" + hex[:26]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

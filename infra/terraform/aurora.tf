@@ -43,4 +43,7 @@ resource "aws_rds_cluster_instance" "nimbus_test" {
   instance_class     = "db.serverless"
   engine             = aws_rds_cluster.nimbus_test.engine
   engine_version     = aws_rds_cluster.nimbus_test.engine_version
+
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
 }

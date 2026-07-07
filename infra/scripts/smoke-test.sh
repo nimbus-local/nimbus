@@ -48,6 +48,16 @@ try_match() {
   fi
 }
 
+# try_fail passes when the command exits non-zero (expected-error assertions).
+try_fail() {
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    fail "$label" "command unexpectedly succeeded"
+  else
+    ok "$label"
+  fi
+}
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 echo "=== Nimbus smoke test  $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
@@ -728,12 +738,54 @@ if [ -n "${DB_INSTANCE:-}" ] && [ "$DB_INSTANCE" != "None" ]; then
   try_match "instance status available" "available" \
     $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
       --query "DBInstances[0].DBInstanceStatus" --output text
+  try_match "instance Performance Insights enabled" "True" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].PerformanceInsightsEnabled" --output text
+  try_match "instance has DbiResourceId" "db-" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].DbiResourceId" --output text
 else
   fail "describe-db-instances (instance not found — run 'make apply' first)"
 fi
 
 try_match "/_nimbus/rds/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/rds/clusters"
+
+# ── Performance Insights ─────────────────────────────────────────────────────
+
+section "Performance Insights"
+DBI_RESOURCE_ID=$($CLI rds describe-db-instances \
+  --db-instance-identifier "${PREFIX}-instance-1" \
+  --query "DBInstances[0].DbiResourceId" --output text 2>/dev/null)
+if [ -n "${DBI_RESOURCE_ID:-}" ] && [ "$DBI_RESOURCE_ID" != "None" ]; then
+  PI_START=$(($(date +%s) - 3600))
+  PI_END=$(date +%s)
+  try_match "get-resource-metrics returns datapoints" "db.load.avg" \
+    $CLI pi get-resource-metrics --service-type RDS --identifier "$DBI_RESOURCE_ID" \
+      --metric-queries '[{"Metric":"db.load.avg"}]' \
+      --start-time "$PI_START" --end-time "$PI_END" --period-in-seconds 300 \
+      --query "MetricList[0].Key.Metric" --output text
+  try_match "get-resource-metrics echoes identifier" "$DBI_RESOURCE_ID" \
+    $CLI pi get-resource-metrics --service-type RDS --identifier "$DBI_RESOURCE_ID" \
+      --metric-queries '[{"Metric":"db.load.avg"}]' \
+      --start-time "$PI_START" --end-time "$PI_END" --period-in-seconds 300 \
+      --query "Identifier" --output text
+  try_match "describe-dimension-keys returns wait events" "CPU" \
+    $CLI pi describe-dimension-keys --service-type RDS --identifier "$DBI_RESOURCE_ID" \
+      --metric db.load.avg --group-by '{"Group":"db.wait_event"}' \
+      --start-time "$PI_START" --end-time "$PI_END" \
+      --query "Keys[0].Dimensions.\"db.wait_event.name\"" --output text
+  try_match "list-available-resource-metrics lists db.load.avg" "db.load.avg" \
+    $CLI pi list-available-resource-metrics --service-type RDS \
+      --identifier "$DBI_RESOURCE_ID" --metric-types db \
+      --query "Metrics[].Metric" --output text
+  try_fail "get-resource-metrics rejects unknown identifier" \
+    $CLI pi get-resource-metrics --service-type RDS --identifier "db-DOESNOTEXIST00000000000000" \
+      --metric-queries '[{"Metric":"db.load.avg"}]' \
+      --start-time "$PI_START" --end-time "$PI_END"
+else
+  fail "pi get-resource-metrics (DbiResourceId not found — run 'make apply' first)"
+fi
 
 section "ElastiCache / Valkey"
 EC_RG=$($CLI elasticache describe-replication-groups --replication-group-id "$PREFIX" \
