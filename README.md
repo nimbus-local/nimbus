@@ -199,7 +199,8 @@ All configuration is via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NIMBUS_PORT` | `4566` | Edge port |
+| `NIMBUS_PORT` | `4566` | Edge port (also advertised in generated SQS queue URLs) |
+| `NIMBUS_EXTERNAL_URL` | *(none)* | Base URL advertised in generated resource URLs (SQS queue URLs) when it differs from the listen address — reverse proxies, remapped Docker ports |
 | `NIMBUS_DATA_DIR` | `/var/lib/nimbus` (Docker) | Storage root for S3 objects |
 | `AWS_DEFAULT_REGION` | `us-east-1` | Default region |
 | `NIMBUS_DYNAMODB_ENDPOINT` | `http://dynamodb-local:8000` | DynamoDB Local sidecar URL |

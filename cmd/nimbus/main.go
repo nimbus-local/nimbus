@@ -105,7 +105,7 @@ func main() {
 	r.Register(kmsSvc)
 	ssmSvc := ssm.New(cfg.DefaultRegion)
 	r.Register(ssmSvc)
-	sqsSvc := sqs.New(cfg.DefaultRegion)
+	sqsSvc := sqs.New(cfg.DefaultRegion, cfg.Port, cfg.ExternalURL)
 	r.Register(sqsSvc)
 	snsSvc := sns.New(cfg.DefaultRegion)
 	r.Register(snsSvc)

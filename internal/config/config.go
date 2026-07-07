@@ -7,6 +7,7 @@ import (
 
 type Config struct {
 	Port             int
+	ExternalURL      string // advertised base URL when it differs from the listen address
 	DataDir          string
 	DefaultRegion    string
 	DynamoDBEndpoint string
@@ -21,6 +22,7 @@ type Config struct {
 func Load() Config {
 	c := Config{
 		Port:             4566,
+		ExternalURL:      envOr("NIMBUS_EXTERNAL_URL", ""),
 		DataDir:          envOr("NIMBUS_DATA_DIR", defaultDataDir()),
 		DefaultRegion:    envOr("AWS_DEFAULT_REGION", "us-east-1"),
 		DynamoDBEndpoint: envOr("NIMBUS_DYNAMODB_ENDPOINT", "http://dynamodb-local:8000"),
