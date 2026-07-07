@@ -22,6 +22,10 @@ In-memory SQS emulator with visibility timeout support.
 
 Detection: `Action` query param or `X-Amz-Target: AmazonSQS.*`.
 
+## Queue URLs
+
+Generated queue URLs have the form `http://sqs.{region}.localhost:{port}/000000000000/{name}`, where `{port}` is `NIMBUS_PORT` (default `4566`). When the advertised address must differ from the listen address — reverse proxy, remapped Docker port mapping like `4577:4566` — set `NIMBUS_EXTERNAL_URL` (e.g. `http://myhost:4577`) and queue URLs become `{NIMBUS_EXTERNAL_URL}/000000000000/{name}` instead.
+
 ## Example
 
 ```bash

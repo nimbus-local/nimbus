@@ -10,7 +10,7 @@ import (
 )
 
 func newTestService() *Service {
-	return New("us-east-1")
+	return New("us-east-1", 4566, "")
 }
 
 // sqsRequest builds a form-encoded POST request simulating how the AWS SDK
@@ -604,5 +604,51 @@ func TestName(t *testing.T) {
 	svc := newTestService()
 	if svc.Name() != "sqs" {
 		t.Errorf("expected Name()=sqs, got %s", svc.Name())
+	}
+}
+
+// --- Queue URL generation (#96) ---
+
+func TestCreateQueue_URLHonorsConfiguredPort(t *testing.T) {
+	svc := New("us-east-1", 4577, "")
+	w := sqsRequest(t, svc, map[string]string{
+		"Action":    "CreateQueue",
+		"QueueName": "port-check",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateQueue: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	want := "http://sqs.us-east-1.localhost:4577/000000000000/port-check"
+	if !strings.Contains(body, want) {
+		t.Fatalf("queue URL must advertise configured port:\nwant %s\ngot: %s", want, body)
+	}
+	if strings.Contains(body, "4566") {
+		t.Fatalf("queue URL must not contain the default port:\n%s", body)
+	}
+
+	// The generated URL must round-trip as an identifier.
+	w = sqsRequest(t, svc, map[string]string{
+		"Action":          "GetQueueAttributes",
+		"QueueUrl":        want,
+		"AttributeName.1": "QueueArn",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetQueueAttributes via generated URL: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateQueue_ExternalURLOverride(t *testing.T) {
+	svc := New("us-east-1", 4566, "http://nimbus.internal:8080/")
+	w := sqsRequest(t, svc, map[string]string{
+		"Action":    "CreateQueue",
+		"QueueName": "external-check",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateQueue: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	want := "http://nimbus.internal:8080/000000000000/external-check"
+	if !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("queue URL must use NIMBUS_EXTERNAL_URL base:\nwant %s\ngot: %s", want, w.Body.String())
 	}
 }

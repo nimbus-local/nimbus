@@ -20,11 +20,12 @@ import (
 // of the container. For persistence across restarts, mount a volume and
 // set NIMBUS_DATA_DIR — a future version will serialize state to disk.
 type Service struct {
-	mu     sync.RWMutex
-	queues map[string]*queue // keyed by queue URL
-	byName map[string]string // name -> queue URL
-	region string
-	host   string
+	mu          sync.RWMutex
+	queues      map[string]*queue // keyed by queue URL
+	byName      map[string]string // name -> queue URL
+	region      string
+	port        int    // advertised in queue URLs
+	externalURL string // optional base URL override, e.g. behind a reverse proxy
 }
 
 type queue struct {
@@ -60,14 +61,22 @@ const (
 	accountID                = "000000000000"
 )
 
-func New(region string) *Service {
+// New creates an SQS service. port is advertised in generated queue URLs;
+// externalURL, when non-empty, replaces the scheme://host:port part entirely
+// (for reverse proxies or remapped Docker ports).
+func New(region string, port int, externalURL string) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
+	if port == 0 {
+		port = 4566
+	}
 	return &Service{
-		region: region,
-		queues: map[string]*queue{},
-		byName: map[string]string{},
+		region:      region,
+		port:        port,
+		externalURL: strings.TrimRight(externalURL, "/"),
+		queues:      map[string]*queue{},
+		byName:      map[string]string{},
 	}
 }
 
@@ -279,7 +288,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // --- Queue management ---
 
 func (s *Service) queueURL(name string) string {
-	return fmt.Sprintf("http://sqs.%s.localhost:4566/%s/%s", s.region, accountID, name)
+	if s.externalURL != "" {
+		return fmt.Sprintf("%s/%s/%s", s.externalURL, accountID, name)
+	}
+	return fmt.Sprintf("http://sqs.%s.localhost:%d/%s/%s", s.region, s.port, accountID, name)
 }
 
 func (s *Service) queueARN(name string) string {
