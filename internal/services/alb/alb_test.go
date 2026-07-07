@@ -694,3 +694,61 @@ func TestListenersHandler(t *testing.T) {
 		t.Error("expected port in listeners inspection response")
 	}
 }
+
+// --- Target group LoadBalancerArns ---
+
+func TestDescribeTargetGroups_LoadBalancerArns(t *testing.T) {
+	s := newSvc()
+	lbARN := createLB(t, s, "lb-attach")
+	tgDefault := createTG(t, s, "tg-default-action")
+	tgRule := createTG(t, s, "tg-rule-action")
+	tgOrphan := createTG(t, s, "tg-orphan")
+
+	// tgDefault is attached via the listener's default action.
+	lARN := createListener(t, s, lbARN, tgDefault, "49040")
+
+	// tgRule is attached only via a listener rule.
+	w := elbReq(t, s, "CreateRule", map[string]string{
+		"ListenerArn":                         lARN,
+		"Priority":                            "10",
+		"Conditions.member.1.Field":           "path-pattern",
+		"Conditions.member.1.Values.member.1": "/api/*",
+		"Actions.member.1.Type":               "forward",
+		"Actions.member.1.TargetGroupArn":     tgRule,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CreateRule: expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+
+	assertLBArns := func(tgARN string, want string) {
+		t.Helper()
+		w := elbReq(t, s, "DescribeTargetGroups", map[string]string{
+			"TargetGroupArns.member.1": tgARN,
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("DescribeTargetGroups: expected 200, got %d\n%s", w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		if want == "" {
+			if !strings.Contains(body, "<LoadBalancerArns/>") {
+				t.Errorf("expected empty <LoadBalancerArns/> for %s:\n%s", tgARN, body)
+			}
+			return
+		}
+		if !strings.Contains(body, "<LoadBalancerArns><member>"+want+"</member></LoadBalancerArns>") {
+			t.Errorf("expected LoadBalancerArns [%s] for %s:\n%s", want, tgARN, body)
+		}
+	}
+
+	assertLBArns(tgDefault, lbARN)
+	assertLBArns(tgRule, lbARN)
+	assertLBArns(tgOrphan, "")
+
+	// Deleting the listener detaches both (rules belong to the listener, but
+	// the rule store is independent — the rule's listener no longer resolves).
+	w = elbReq(t, s, "DeleteListener", map[string]string{"ListenerArn": lARN})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteListener: expected 200, got %d", w.Code)
+	}
+	assertLBArns(tgDefault, "")
+}

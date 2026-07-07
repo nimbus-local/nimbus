@@ -658,6 +658,9 @@ TG_ARN=$($CLI elbv2 describe-target-groups --names "$PREFIX" \
   --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null)
 if [ -n "${TG_ARN:-}" ] && [ "$TG_ARN" != "None" ]; then
   try "describe-target-groups finds TG" true
+  try_match "target group lists attached LB" "loadbalancer/app" \
+    $CLI elbv2 describe-target-groups --target-group-arns "$TG_ARN" \
+      --query "TargetGroups[0].LoadBalancerArns[0]" --output text
   try_match "describe-target-group-attributes" "deregistration_delay" \
     $CLI elbv2 describe-target-group-attributes --target-group-arn "$TG_ARN" \
       --query "Attributes[].Key" --output text

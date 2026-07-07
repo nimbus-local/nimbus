@@ -731,7 +731,7 @@ func (s *Service) createTargetGroup(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	elbOK(w, "CreateTargetGroupResponse", "CreateTargetGroupResult",
-		"<TargetGroups>"+tgMember(tg)+"</TargetGroups>")
+		"<TargetGroups>"+tgMember(tg, nil)+"</TargetGroups>")
 }
 
 func (s *Service) describeTargetGroups(w http.ResponseWriter, r *http.Request) {
@@ -749,7 +749,7 @@ func (s *Service) describeTargetGroups(w http.ResponseWriter, r *http.Request) {
 		if len(filterNames) > 0 && !contains(filterNames, tg.name) {
 			continue
 		}
-		members = append(members, tgMember(tg))
+		members = append(members, tgMember(tg, s.lbARNsForTG(tg.arn)))
 	}
 
 	if len(filterARNs) > 0 && len(members) == 0 {
@@ -774,13 +774,17 @@ func (s *Service) modifyTargetGroup(w http.ResponseWriter, r *http.Request) {
 	arn := r.FormValue("TargetGroupArn")
 	s.mu.RLock()
 	tg := s.targetGroups[arn]
+	var lbARNs []string
+	if tg != nil {
+		lbARNs = s.lbARNsForTG(arn)
+	}
 	s.mu.RUnlock()
 	if tg == nil {
 		elbError(w, http.StatusBadRequest, "TargetGroupNotFound", "The specified target group does not exist.")
 		return
 	}
 	elbOK(w, "ModifyTargetGroupResponse", "ModifyTargetGroupResult",
-		"<TargetGroups>"+tgMember(tg)+"</TargetGroups>")
+		"<TargetGroups>"+tgMember(tg, lbARNs)+"</TargetGroups>")
 }
 
 func (s *Service) describeTargetGroupAttributes(w http.ResponseWriter, _ *http.Request) {
@@ -1170,10 +1174,46 @@ func ruleMember(ru *rule) string {
 	)
 }
 
-func tgMember(tg *targetGroup) string {
+// lbARNsForTG returns the ARNs of every load balancer attached to the target
+// group — via a listener default action or a listener rule that forwards to
+// it — de-duplicated and sorted. Must be called with s.mu held.
+func (s *Service) lbARNsForTG(tgARN string) []string {
+	set := map[string]bool{}
+	for _, l := range s.listeners {
+		if l.defaultAction.targetGroupARN == tgARN {
+			set[l.lbARN] = true
+		}
+	}
+	for _, ru := range s.rules {
+		if ru.action.targetGroupARN != tgARN {
+			continue
+		}
+		if l, ok := s.listeners[ru.listenerARN]; ok {
+			set[l.lbARN] = true
+		}
+	}
+	arns := make([]string, 0, len(set))
+	for arn := range set {
+		arns = append(arns, arn)
+	}
+	sort.Strings(arns)
+	return arns
+}
+
+func tgMember(tg *targetGroup, lbARNs []string) string {
 	hcProtocol := tg.protocol
 	if hcProtocol == "" {
 		hcProtocol = "HTTP"
+	}
+	lbList := "<LoadBalancerArns/>"
+	if len(lbARNs) > 0 {
+		var b strings.Builder
+		b.WriteString("<LoadBalancerArns>")
+		for _, arn := range lbARNs {
+			b.WriteString("<member>" + xmlEsc(arn) + "</member>")
+		}
+		b.WriteString("</LoadBalancerArns>")
+		lbList = b.String()
 	}
 	return fmt.Sprintf(
 		`<member>`+
@@ -1192,12 +1232,12 @@ func tgMember(tg *targetGroup) string {
 			`<HealthyThresholdCount>5</HealthyThresholdCount>`+
 			`<UnhealthyThresholdCount>2</UnhealthyThresholdCount>`+
 			`<Matcher><HttpCode>200</HttpCode></Matcher>`+
-			`<LoadBalancerArns/>`+
+			`%s`+
 			`<ProtocolVersion>HTTP1</ProtocolVersion>`+
 			`</member>`,
 		xmlEsc(tg.arn), xmlEsc(tg.name),
 		xmlEsc(tg.protocol), xmlEsc(tg.port), xmlEsc(tg.vpcID), xmlEsc(tg.targetType),
-		xmlEsc(hcProtocol),
+		xmlEsc(hcProtocol), lbList,
 	)
 }
 
