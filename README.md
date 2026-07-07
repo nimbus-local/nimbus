@@ -199,7 +199,7 @@ All configuration is via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NIMBUS_PORT` | `4566` | Edge port (also advertised in generated SQS queue URLs) |
+| `NIMBUS_PORT` | `4566` | Edge port — advertised in generated SQS queue URLs and followed by the container `HEALTHCHECK`, so `docker compose up --wait` works on non-default ports (`EXPOSE 4566` remains documentation of the default) |
 | `NIMBUS_EXTERNAL_URL` | *(none)* | Base URL advertised in generated resource URLs (SQS queue URLs) when it differs from the listen address — reverse proxies, remapped Docker ports |
 | `NIMBUS_DATA_DIR` | `/var/lib/nimbus` (Docker) | Storage root for S3 objects |
 | `AWS_DEFAULT_REGION` | `us-east-1` | Default region |

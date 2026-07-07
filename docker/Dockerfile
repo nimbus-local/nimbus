@@ -29,9 +29,11 @@ COPY --from=builder /build/nimbuslocal /usr/local/bin/nimbuslocal
 RUN mkdir -p /var/lib/nimbus
 VOLUME ["/var/lib/nimbus"]
 
+# Documents the default port only — NIMBUS_PORT changes the actual listen port.
 EXPOSE 4566
 
+# Shell-form CMD so NIMBUS_PORT is expanded at check time.
 HEALTHCHECK --interval=5s --timeout=3s --retries=10 \
-  CMD curl -f http://localhost:4566/_nimbus/health || exit 1
+  CMD curl -f "http://localhost:${NIMBUS_PORT:-4566}/_nimbus/health" || exit 1
 
 ENTRYPOINT ["nimbus"]
