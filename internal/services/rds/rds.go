@@ -66,16 +66,20 @@ type dbCluster struct {
 }
 
 type dbInstance struct {
-	identifier string
-	arn        string
-	resourceID string // DbiResourceId, e.g. db-ABC...
-	clusterID  string
-	engine     string
-	class      string
-	endpoint   string
-	port       int
-	status     string
-	createdAt  time.Time
+	identifier    string
+	arn           string
+	resourceID    string // DbiResourceId, e.g. db-ABC...
+	clusterID     string
+	engine        string
+	engineVersion string
+	class         string
+	masterUser    string
+	dbName        string
+	storageGB     string // AllocatedStorage, empty for cluster members
+	endpoint      string
+	port          int
+	status        string
+	createdAt     time.Time
 
 	perfInsights          bool
 	perfInsightsKMS       string
@@ -499,17 +503,23 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) describeDBClusters(w http.ResponseWriter, r *http.Request) {
 	filter := r.FormValue("DBClusterIdentifier")
+	filters := parseFilters(r)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var items []string
+	identifierSeen := false
 	for _, c := range s.clusters {
 		if filter != "" && c.identifier != filter {
 			continue
 		}
+		identifierSeen = true
+		if !clusterMatchesFilters(c, filters) {
+			continue
+		}
 		items = append(items, "<DBCluster>"+s.clusterXML(c)+"</DBCluster>")
 	}
-	if filter != "" && len(items) == 0 {
+	if filter != "" && !identifierSeen {
 		rdsError(w, http.StatusNotFound, "DBClusterNotFoundFault",
 			fmt.Sprintf("DBCluster '%s' not found.", filter))
 		return
@@ -608,16 +618,20 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	inst := &dbInstance{
-		identifier: id,
-		arn:        arn,
-		resourceID: newResourceID("db"),
-		clusterID:  clusterID,
-		engine:     engine,
-		class:      class,
-		endpoint:   endpoint,
-		port:       port,
-		status:     "available",
-		createdAt:  time.Now().UTC(),
+		identifier:    id,
+		arn:           arn,
+		resourceID:    newResourceID("db"),
+		clusterID:     clusterID,
+		engine:        engine,
+		engineVersion: r.FormValue("EngineVersion"),
+		class:         class,
+		masterUser:    r.FormValue("MasterUsername"),
+		dbName:        r.FormValue("DBName"),
+		storageGB:     r.FormValue("AllocatedStorage"),
+		endpoint:      endpoint,
+		port:          port,
+		status:        "available",
+		createdAt:     time.Now().UTC(),
 	}
 	applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
 
@@ -634,17 +648,25 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) describeDBInstances(w http.ResponseWriter, r *http.Request) {
 	filter := r.FormValue("DBInstanceIdentifier")
+	filters := parseFilters(r)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var items []string
+	identifierSeen := false
 	for _, inst := range s.instances {
 		if filter != "" && inst.identifier != filter {
 			continue
 		}
+		identifierSeen = true
+		if !s.instanceMatchesFilters(inst, filters) {
+			continue
+		}
 		items = append(items, "<DBInstance>"+s.instanceXML(inst)+"</DBInstance>")
 	}
-	if filter != "" && len(items) == 0 {
+	// NotFound applies to the identifier param only — a filter that matches
+	// nothing returns an empty list, as real RDS does.
+	if filter != "" && !identifierSeen {
 		rdsError(w, http.StatusNotFound, "DBInstanceNotFound",
 			fmt.Sprintf("DBInstance '%s' not found.", filter))
 		return
@@ -692,6 +714,25 @@ func (s *Service) deleteDBInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) instanceXML(inst *dbInstance) string {
+	// Optional elements only standalone instances carry — cluster members
+	// inherit these from the cluster and the fields stay empty.
+	var opt strings.Builder
+	if inst.engineVersion != "" {
+		fmt.Fprintf(&opt, `
+        <EngineVersion>%s</EngineVersion>`, inst.engineVersion)
+	}
+	if inst.masterUser != "" {
+		fmt.Fprintf(&opt, `
+        <MasterUsername>%s</MasterUsername>`, inst.masterUser)
+	}
+	if inst.dbName != "" {
+		fmt.Fprintf(&opt, `
+        <DBName>%s</DBName>`, inst.dbName)
+	}
+	if inst.storageGB != "" {
+		fmt.Fprintf(&opt, `
+        <AllocatedStorage>%s</AllocatedStorage>`, inst.storageGB)
+	}
 	return fmt.Sprintf(`
         <DBInstanceArn>%s</DBInstanceArn>
         <DBInstanceIdentifier>%s</DBInstanceIdentifier>
@@ -699,7 +740,7 @@ func (s *Service) instanceXML(inst *dbInstance) string {
         <DBClusterIdentifier>%s</DBClusterIdentifier>
         <Engine>%s</Engine>
         <DBInstanceClass>%s</DBInstanceClass>
-        <DBInstanceStatus>%s</DBInstanceStatus>
+        <DBInstanceStatus>%s</DBInstanceStatus>%s
         <Endpoint>
           <Address>%s</Address>
           <Port>%d</Port>
@@ -711,7 +752,7 @@ func (s *Service) instanceXML(inst *dbInstance) string {
         <VpcSecurityGroups/>
         <AvailabilityZone>%s</AvailabilityZone>`,
 		inst.arn, inst.identifier, inst.resourceID, inst.clusterID, inst.engine, inst.class,
-		inst.status, inst.endpoint, inst.port,
+		inst.status, opt.String(), inst.endpoint, inst.port,
 		inst.createdAt.Format(time.RFC3339),
 		performanceInsightsXML(inst.perfInsights, inst.perfInsightsKMS, inst.perfInsightsRetention),
 		s.region+"a")
@@ -825,6 +866,82 @@ func (s *Service) storeTags(r *http.Request, arn string) {
 			s.tags[arn][k] = v
 		}
 	}
+}
+
+// ── Describe filters ──────────────────────────────────────────────────────────
+
+// parseFilters reads Filters.Filter.N.Name / Filters.Filter.N.Values.Value.M
+// query-protocol params into a name -> values map. The TF AWS provider reads
+// resources with these filters instead of the identifier params.
+func parseFilters(r *http.Request) map[string][]string {
+	filters := map[string][]string{}
+	for i := 1; ; i++ {
+		name := r.FormValue(fmt.Sprintf("Filters.Filter.%d.Name", i))
+		if name == "" {
+			break
+		}
+		var vals []string
+		for j := 1; ; j++ {
+			v := r.FormValue(fmt.Sprintf("Filters.Filter.%d.Values.Value.%d", i, j))
+			if v == "" {
+				break
+			}
+			vals = append(vals, v)
+		}
+		filters[name] = vals
+	}
+	return filters
+}
+
+// instanceMatchesFilters reports whether inst satisfies every filter. A
+// filter's values are OR-ed; identifier filters match by name or ARN because
+// the TF provider passes either. Unknown filter names are ignored rather than
+// rejected. Must be called with s.mu held.
+func (s *Service) instanceMatchesFilters(inst *dbInstance, filters map[string][]string) bool {
+	for name, values := range filters {
+		matched := true
+		switch name {
+		case "db-instance-id":
+			matched = containsAny(values, inst.identifier, inst.arn)
+		case "db-cluster-id":
+			matched = inst.clusterID != "" &&
+				containsAny(values, inst.clusterID, s.clusterARN(inst.clusterID))
+		case "dbi-resource-id":
+			matched = containsAny(values, inst.resourceID)
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// clusterMatchesFilters is the DBCluster analogue of instanceMatchesFilters.
+func clusterMatchesFilters(c *dbCluster, filters map[string][]string) bool {
+	for name, values := range filters {
+		matched := true
+		switch name {
+		case "db-cluster-id":
+			matched = containsAny(values, c.identifier, c.arn)
+		case "db-cluster-resource-id":
+			matched = containsAny(values, c.resourceID)
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func containsAny(values []string, candidates ...string) bool {
+	for _, v := range values {
+		for _, c := range candidates {
+			if c != "" && v == c {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ── Performance Insights ──────────────────────────────────────────────────────

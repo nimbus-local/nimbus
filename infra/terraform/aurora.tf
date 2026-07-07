@@ -47,3 +47,19 @@ resource "aws_rds_cluster_instance" "nimbus_test" {
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
 }
+
+# Standalone (non-Aurora) instance. Having a second DB instance locks the
+# regression where DescribeDBInstances ignored the db-instance-id filter and
+# the provider's singleton read failed with "too many results" (#95).
+resource "aws_db_instance" "nimbus_test_standalone" {
+  identifier           = "${var.prefix}-standalone"
+  engine               = "postgres"
+  engine_version       = "16.1"
+  instance_class       = "db.t3.micro"
+  db_name              = "nimbus"
+  username             = "nimbus"
+  password             = "nimbuspass"
+  allocated_storage    = 20
+  skip_final_snapshot  = true
+  db_subnet_group_name = aws_db_subnet_group.nimbus_test.name
+}
