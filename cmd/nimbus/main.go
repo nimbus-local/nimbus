@@ -30,6 +30,7 @@ import (
 	"github.com/nimbus-local/nimbus/internal/services/kinesis"
 	"github.com/nimbus-local/nimbus/internal/services/kms"
 	"github.com/nimbus-local/nimbus/internal/services/lambda"
+	"github.com/nimbus-local/nimbus/internal/services/pi"
 	"github.com/nimbus-local/nimbus/internal/services/rds"
 	"github.com/nimbus-local/nimbus/internal/services/route53"
 	"github.com/nimbus-local/nimbus/internal/services/s3"
@@ -135,6 +136,8 @@ func main() {
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
 	r.Register(rdsSvc)
+	piSvc := pi.New(rdsSvc.HasResourceID)
+	r.Register(piSvc)
 	r53Svc := route53.New()
 	r.Register(r53Svc)
 	ecSvc := elasticache.New(cfg.DefaultRegion, cfg.ValkeyHost, cfg.ValkeyPort)

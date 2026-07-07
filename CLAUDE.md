@@ -62,6 +62,8 @@ Hard-won discoveries. Each entry saved hours of debugging — do not re-derive t
 
 When `endpoints {}` is explicitly configured in `provider.tf`, any service **not listed** hits real AWS instead of Nimbus. Always add `{service_key} = var.nimbus_endpoint` when implementing a new service. The key is usually the lowercase service name (`cloudwatch`, `cloudwatchlogs`, etc.). Pattern: check the existing entries in `infra/terraform/provider.tf`.
 
+**Exception**: services the provider has no resources for (e.g. Performance Insights / `pi`) have **no endpoint key** — adding one fails `terraform apply` with `Unsupported argument`. Skip the entry; TF can't call those services anyway.
+
 ### CloudWatch Metrics — dual protocol (smithy-rpc-v2-cbor vs awsJson1.0)
 
 The AWS CLI uses **awsJson1.0**: `POST /` with `X-Amz-Target: GraniteServiceVersion20100801.{Action}` and `Content-Type: application/x-amz-json-1.0`.

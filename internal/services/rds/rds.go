@@ -829,6 +829,25 @@ func (s *Service) storeTags(r *http.Request, arn string) {
 
 // ── Performance Insights ──────────────────────────────────────────────────────
 
+// HasResourceID reports whether any instance or cluster owns the given
+// Performance Insights resource ID (DbiResourceId / DbClusterResourceId).
+// Used by the PI service to validate identifiers.
+func (s *Service) HasResourceID(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.instances {
+		if inst.resourceID == id {
+			return true
+		}
+	}
+	for _, c := range s.clusters {
+		if c.resourceID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // applyPerformanceInsights copies Performance Insights form fields into the
 // target fields. Only keys present in the form are applied, so Modify calls
 // that don't touch PI leave existing values intact. Retention defaults to 7
