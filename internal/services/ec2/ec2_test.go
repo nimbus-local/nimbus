@@ -342,6 +342,46 @@ func TestDeleteInternetGateway(t *testing.T) {
 
 // ── Security Groups ───────────────────────────────────────────────────────────
 
+func TestCreateSecurityGroup(t *testing.T) {
+	svc := newSvc()
+	w := ec2Req(t, svc, "Action=CreateVpc&CidrBlock=10.0.0.0%2F16")
+	vpcID := extractBetween(must200(t, w), "<vpcId>", "</vpcId>")
+
+	w2 := ec2Req(t, svc,
+		"Action=CreateSecurityGroup&GroupName=my-app&GroupDescription=my+app&VpcId="+vpcID)
+	body := must200(t, w2)
+	mustContain(t, body, "CreateSecurityGroupResponse")
+	sgID := extractBetween(body, "<groupId>", "</groupId>")
+	if sgID == "" || !strings.HasPrefix(sgID, "sg-") {
+		t.Fatalf("expected a sg- groupId, got %q", sgID)
+	}
+
+	w3 := ec2Req(t, svc, "Action=DescribeSecurityGroups&GroupId.1="+sgID)
+	body3 := must200(t, w3)
+	mustContain(t, body3, sgID)
+	mustContain(t, body3, "my-app")
+	mustContain(t, body3, vpcID)
+}
+
+func TestDeleteSecurityGroup(t *testing.T) {
+	svc := newSvc()
+	w := ec2Req(t, svc, "Action=CreateVpc&CidrBlock=10.0.0.0%2F16")
+	vpcID := extractBetween(must200(t, w), "<vpcId>", "</vpcId>")
+
+	w2 := ec2Req(t, svc,
+		"Action=CreateSecurityGroup&GroupName=my-app&GroupDescription=my+app&VpcId="+vpcID)
+	sgID := extractBetween(must200(t, w2), "<groupId>", "</groupId>")
+
+	w3 := ec2Req(t, svc, "Action=DeleteSecurityGroup&GroupId="+sgID)
+	mustContain(t, must200(t, w3), "<return>true</return>")
+
+	w4 := ec2Req(t, svc, "Action=DescribeSecurityGroups&GroupId.1="+sgID)
+	body4 := must200(t, w4)
+	if strings.Contains(body4, sgID) {
+		t.Errorf("expected security group %s to be gone after delete", sgID)
+	}
+}
+
 func TestDescribeSecurityGroups(t *testing.T) {
 	svc := newSvc()
 	// Create a VPC so the default SG exists.

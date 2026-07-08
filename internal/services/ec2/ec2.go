@@ -179,6 +179,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "DeleteInternetGateway":
 		s.deleteInternetGateway(w, r)
 	// Security groups
+	case "CreateSecurityGroup":
+		s.createSecurityGroup(w, r)
+	case "DeleteSecurityGroup":
+		s.deleteSecurityGroup(w, r)
 	case "DescribeSecurityGroups":
 		s.describeSecurityGroups(w, r)
 	case "DescribeSecurityGroupRules":
@@ -691,6 +695,34 @@ func (s *Service) modifySecurityGroupRules(w http.ResponseWriter, r *http.Reques
 	// does not assert on exact rule state, only that the resource deploys.
 	writeXML(w, http.StatusOK, ec2Resp("ModifySecurityGroupRules",
 		"<return>true</return>"))
+}
+
+func (s *Service) createSecurityGroup(w http.ResponseWriter, r *http.Request) {
+	id := "sg-" + shortID()
+	sg := &securityGroup{
+		id:          id,
+		vpcID:       r.FormValue("VpcId"),
+		name:        r.FormValue("GroupName"),
+		description: r.FormValue("GroupDescription"),
+		tags:        parseTags(r),
+	}
+
+	s.mu.Lock()
+	s.secGroups[id] = sg
+	s.mu.Unlock()
+
+	writeXML(w, http.StatusOK, ec2Resp("CreateSecurityGroup",
+		fmt.Sprintf("<groupId>%s</groupId>%s", id, tagsXML(sg.tags))))
+}
+
+func (s *Service) deleteSecurityGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("GroupId")
+
+	s.mu.Lock()
+	delete(s.secGroups, id)
+	s.mu.Unlock()
+
+	writeXML(w, http.StatusOK, ec2Resp("DeleteSecurityGroup", "<return>true</return>"))
 }
 
 func (s *Service) describeSecurityGroups(w http.ResponseWriter, r *http.Request) {
