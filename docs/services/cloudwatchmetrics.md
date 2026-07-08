@@ -2,7 +2,9 @@
 
 In-memory CloudWatch Metrics emulator. `PutMetricData` stores time-series data per namespace/metric/dimension combination (capped at 10,000 points per series). `GetMetricStatistics` and `GetMetricData` aggregate stored points into period buckets. Alarms are structural only — state is always `OK` and no evaluation logic runs. Nothing is ever sent to AWS.
 
-Detection: form-encoded body (`Content-Type: application/x-www-form-urlencoded`) with `Version=2010-08-01`.
+Detection: `X-Amz-Target: GraniteServiceVersion20100801.*` (awsJson1.0, used by the AWS CLI) or `/service/GraniteServiceVersion20100801/operation/*` path (smithy-rpc-v2-cbor, used by AWS SDK Go v2 / Terraform provider v6+).
+
+Timestamp shapes on the CBOR path are CBOR **tag 1** epoch seconds in both directions: the decoder accepts tag-1 uint/float epochs for request fields (`Timestamp`, `StartTime`, `EndTime`), and `GetMetricData`/`GetMetricStatistics` responses emit tag-1 timestamps — the SDK's deserializer rejects RFC3339 strings there.
 
 ## Supported operations
 

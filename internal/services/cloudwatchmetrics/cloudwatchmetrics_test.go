@@ -3,6 +3,7 @@ package cloudwatchmetrics
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -620,5 +621,92 @@ func TestCBOR_DescribeAlarmsForMetric(t *testing.T) {
 	}
 	if len(w.Body.Bytes()) == 0 {
 		t.Error("expected non-empty CBOR body")
+	}
+}
+
+// --- CBOR Timestamp shapes (tag 1) ---
+
+func TestCBOR_DecodeTag1Timestamp(t *testing.T) {
+	// Uint epoch (what CborEpochTime encodes).
+	enc := cborEncodeMap(map[string]interface{}{"Timestamp": CborEpochTime(1751980800)})
+	m, err := cborDecode(enc)
+	if err != nil {
+		t.Fatalf("cborDecode: %v", err)
+	}
+	ts, ok := m["Timestamp"].(time.Time)
+	if !ok || ts.Unix() != 1751980800 {
+		t.Fatalf("Timestamp = %#v, want time.Time at 1751980800", m["Timestamp"])
+	}
+
+	// Float epoch with fractional seconds (how the AWS SDK encodes tag 1).
+	raw := append([]byte{0xa1}, cborText("T")...) // 1-entry map, key "T"
+	raw = append(raw, 0xc1, 0xfb)
+	bits := math.Float64bits(1751980800.5)
+	for i := 7; i >= 0; i-- {
+		raw = append(raw, byte(bits>>(uint(i)*8)))
+	}
+	m, err = cborDecode(raw)
+	if err != nil {
+		t.Fatalf("cborDecode float epoch: %v", err)
+	}
+	ts, ok = m["T"].(time.Time)
+	if !ok || ts.Unix() != 1751980800 || ts.Nanosecond() != 5e8 {
+		t.Fatalf("float epoch = %#v, want 1751980800.5", m["T"])
+	}
+}
+
+func TestCBOR_PutGetMetricData_TimestampRoundTrip(t *testing.T) {
+	s := newSvc()
+	epoch := time.Now().Add(-2 * time.Minute).Truncate(time.Minute).Unix()
+
+	w := cborReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "CBOR_NS",
+		"MetricData": []interface{}{map[string]interface{}{
+			"MetricName": "Requests",
+			"Timestamp":  CborEpochTime(epoch),
+			"Value":      float64(180),
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PutMetricData with Timestamp: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = cborReq(t, s, "GetMetricData", map[string]interface{}{
+		"StartTime": CborEpochTime(epoch - 600),
+		"EndTime":   CborEpochTime(epoch + 600),
+		"MetricDataQueries": []interface{}{map[string]interface{}{
+			"Id": "m0",
+			"MetricStat": map[string]interface{}{
+				"Metric": map[string]interface{}{
+					"Namespace":  "CBOR_NS",
+					"MetricName": "Requests",
+				},
+				"Period": 60,
+				"Stat":   "Sum",
+			},
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMetricData with tag-1 window: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	resp := decodeCBOR(t, w)
+	results, _ := resp["MetricDataResults"].([]interface{})
+	if len(results) != 1 {
+		t.Fatalf("results = %#v", resp)
+	}
+	r := results[0].(map[string]interface{})
+	tsList, _ := r["Timestamps"].([]interface{})
+	vals, _ := r["Values"].([]interface{})
+	if len(tsList) != 1 || len(vals) != 1 {
+		t.Fatalf("datapoints = %#v / %#v, want the seeded point back", tsList, vals)
+	}
+	// Response timestamps must be tag-1 (decode back to time.Time), not strings.
+	ts, ok := tsList[0].(time.Time)
+	if !ok || ts.Unix() != epoch {
+		t.Errorf("response Timestamp = %#v, want tag-1 time at %d", tsList[0], epoch)
+	}
+	if v, _ := vals[0].(float64); v != 180 {
+		t.Errorf("Value = %v, want 180", vals[0])
 	}
 }

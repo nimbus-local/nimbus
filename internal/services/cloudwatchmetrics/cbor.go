@@ -3,6 +3,7 @@ package cloudwatchmetrics
 import (
 	"fmt"
 	"math"
+	"time"
 )
 
 // ── Minimal CBOR decoder ──────────────────────────────────────────────────────
@@ -101,6 +102,27 @@ func cborDecodeValue(data []byte, off int) (interface{}, int, error) {
 		return cborDecodeArray(data, off, n, info == 31)
 	case 5: // map
 		return cborDecodeMap(data, off, n, info == 31)
+	case 6: // tag: n is the tag number, followed by the tagged value
+		v, off, err := cborDecodeValue(data, off)
+		if err != nil {
+			return nil, off, err
+		}
+		if n == 1 {
+			// Tag 1: epoch-based date/time — the wire format for every
+			// Smithy Timestamp shape. The SDK encodes fractional epochs as
+			// float64.
+			switch t := v.(type) {
+			case uint64:
+				return time.Unix(int64(t), 0).UTC(), off, nil
+			case int64:
+				return time.Unix(t, 0).UTC(), off, nil
+			case float64:
+				sec, frac := math.Modf(t)
+				return time.Unix(int64(sec), int64(frac*1e9)).UTC(), off, nil
+			}
+		}
+		// Unknown tags: surface the inner value untagged.
+		return v, off, nil
 	}
 	return nil, off, fmt.Errorf("cbor: unsupported major type %d info %d", major, info)
 }
@@ -375,6 +397,19 @@ func mapFloat(m map[string]interface{}, key string) float64 {
 
 func mapInt(m map[string]interface{}, key string) int {
 	return int(mapFloat(m, key))
+}
+
+// mapTime extracts a Timestamp shape: a time.Time from the CBOR path (tag 1),
+// or an RFC3339 string from JSON-shaped input. Zero time when absent.
+func mapTime(m map[string]interface{}, key string) time.Time {
+	switch v := m[key].(type) {
+	case time.Time:
+		return v
+	case string:
+		t, _ := time.Parse(time.RFC3339, v)
+		return t
+	}
+	return time.Time{}
 }
 
 func mapStrList(m map[string]interface{}, key string) []string {

@@ -894,10 +894,7 @@ func (s *Service) cborPutMetricData(w http.ResponseWriter, params map[string]int
 		if unit == "" {
 			unit = "None"
 		}
-		var ts time.Time
-		if tsStr := mapStr(md, "Timestamp"); tsStr != "" {
-			ts, _ = time.Parse(time.RFC3339, tsStr)
-		}
+		ts := mapTime(md, "Timestamp")
 		if ts.IsZero() {
 			ts = time.Now().UTC()
 		}
@@ -957,13 +954,8 @@ func (s *Service) cborGetMetricStatistics(w http.ResponseWriter, params map[stri
 	ns := mapStr(params, "Namespace")
 	mn := mapStr(params, "MetricName")
 	dims := mapDims(params, "Dimensions")
-	var start, end time.Time
-	if ts := mapStr(params, "StartTime"); ts != "" {
-		start, _ = time.Parse(time.RFC3339, ts)
-	}
-	if ts := mapStr(params, "EndTime"); ts != "" {
-		end, _ = time.Parse(time.RFC3339, ts)
-	}
+	start := mapTime(params, "StartTime")
+	end := mapTime(params, "EndTime")
 	period := mapInt(params, "Period")
 	if period <= 0 {
 		period = 60
@@ -978,7 +970,7 @@ func (s *Service) cborGetMetricStatistics(w http.ResponseWriter, params map[stri
 	if series := s.find(ns, mn, dims); series != nil {
 		for _, b := range aggregateToBuckets(series.points, start, end, period, unitFilter) {
 			dp := map[string]interface{}{
-				"Timestamp":   b.start.UTC().Format(time.RFC3339),
+				"Timestamp":   CborEpochTime(b.start.Unix()),
 				"SampleCount": b.count,
 				"Unit":        b.unit,
 			}
@@ -1007,13 +999,8 @@ func (s *Service) cborGetMetricStatistics(w http.ResponseWriter, params map[stri
 }
 
 func (s *Service) cborGetMetricData(w http.ResponseWriter, params map[string]interface{}) {
-	var start, end time.Time
-	if ts := mapStr(params, "StartTime"); ts != "" {
-		start, _ = time.Parse(time.RFC3339, ts)
-	}
-	if ts := mapStr(params, "EndTime"); ts != "" {
-		end, _ = time.Parse(time.RFC3339, ts)
-	}
+	start := mapTime(params, "StartTime")
+	end := mapTime(params, "EndTime")
 
 	queriesRaw, _ := params["MetricDataQueries"].([]interface{})
 
@@ -1049,7 +1036,9 @@ func (s *Service) cborGetMetricData(w http.ResponseWriter, params map[string]int
 			var ts []interface{}
 			var vals []interface{}
 			for _, b := range aggregateToBuckets(series.points, start, end, period, "") {
-				ts = append(ts, b.start.UTC().Format(time.RFC3339))
+				// Tag-1 epoch, not RFC3339 — the SDK's CBOR deserializer
+				// only accepts tagged timestamps (see CLAUDE.md).
+				ts = append(ts, CborEpochTime(b.start.Unix()))
 				vals = append(vals, b.statValue(stat))
 			}
 			if ts != nil {
