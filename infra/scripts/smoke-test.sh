@@ -983,6 +983,26 @@ if [ -n "${VPC_ID:-}" ] && [ "$VPC_ID" != "None" ]; then
     fail "default security group auto-created with VPC"
   fi
 
+  CUSTOM_SG_ID=$($CLI ec2 create-security-group \
+    --group-name "$PREFIX-sg" --description "smoke test sg" --vpc-id "$VPC_ID" \
+    --query GroupId --output text 2>/dev/null)
+  if [ -n "${CUSTOM_SG_ID:-}" ] && [ "$CUSTOM_SG_ID" != "None" ]; then
+    ok "create-security-group"
+
+    try_match "describe-security-groups finds custom sg" "$CUSTOM_SG_ID" \
+      $CLI ec2 describe-security-groups --group-ids "$CUSTOM_SG_ID" \
+        --query "SecurityGroups[0].GroupId" --output text
+
+    try "authorize-security-group-ingress (custom sg)" \
+      $CLI ec2 authorize-security-group-ingress --group-id "$CUSTOM_SG_ID" \
+        --ip-permissions "IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=10.99.0.0/16}]"
+
+    try "delete-security-group" \
+      $CLI ec2 delete-security-group --group-id "$CUSTOM_SG_ID"
+  else
+    fail "create-security-group"
+  fi
+
   try "create-tags on VPC" \
     $CLI ec2 create-tags \
       --resources "$VPC_ID" \

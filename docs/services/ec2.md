@@ -17,6 +17,7 @@ existing smoke stacks that pass hardcoded subnet IDs continue to work.
 | `CreateVpc` / `DescribeVpcs` / `DescribeVpcAttribute` / `ModifyVpcAttribute` / `DeleteVpc` | In-memory; auto-creates a default security group and main route table per VPC |
 | `CreateSubnet` / `DescribeSubnets` / `ModifySubnetAttribute` / `DeleteSubnet` | `DescribeSubnets` returns synthetic entries for unknown IDs (backwards compat) |
 | `CreateInternetGateway` / `DescribeInternetGateways` / `AttachInternetGateway` / `DetachInternetGateway` / `DeleteInternetGateway` | In-memory attachment tracking |
+| `CreateSecurityGroup` / `DeleteSecurityGroup` | Custom (non-default) security groups, alongside the default SG auto-created with each VPC |
 | `DescribeSecurityGroups` / `DescribeSecurityGroupRules` / `AuthorizeSecurityGroupIngress` / `AuthorizeSecurityGroupEgress` / `RevokeSecurityGroupIngress` / `RevokeSecurityGroupEgress` / `ModifySecurityGroupRules` | Rules stored with generated `sgr-` IDs; default SG auto-created with each VPC |
 | `CreateRouteTable` / `DescribeRouteTables` / `DeleteRouteTable` | Includes local route; supports filter by `vpc-id`, `route-table-id`, and `association.*` |
 | `CreateRoute` / `DeleteRoute` | Stored per route table; local route is never deleted |
@@ -67,13 +68,23 @@ ASSOC_ID=$(nimbuslocal ec2 associate-route-table \
   --route-table-id "$RT_ID" --subnet-id "$SUBNET_ID" \
   --query AssociationId --output text)
 
-# Security group rules
+# Security group rules (default SG)
 SG_ID=$(nimbuslocal ec2 describe-security-groups \
   --filters Name=vpc-id,Values="$VPC_ID" Name=group-name,Values=default \
   --query "SecurityGroups[0].GroupId" --output text)
 
 nimbuslocal ec2 authorize-security-group-egress --group-id "$SG_ID" \
   --ip-permissions IpProtocol=-1,FromPort=0,ToPort=0,IpRanges=[{CidrIp=0.0.0.0/0}]
+
+# Custom security group
+CUSTOM_SG_ID=$(nimbuslocal ec2 create-security-group \
+  --group-name my-app --description "my app" --vpc-id "$VPC_ID" \
+  --query GroupId --output text)
+
+nimbuslocal ec2 authorize-security-group-ingress --group-id "$CUSTOM_SG_ID" \
+  --ip-permissions IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=10.0.0.0/16}]
+
+nimbuslocal ec2 delete-security-group --group-id "$CUSTOM_SG_ID"
 
 # Tags
 nimbuslocal ec2 create-tags \
