@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func newSvc() *Service { return New("us-east-1") }
+func newSvc() *Service { return New("us-east-1", nil) }
 
 // elbReq sends a form-encoded ELBv2 request.
 func elbReq(t *testing.T, s *Service, action string, params map[string]string) *httptest.ResponseRecorder {
@@ -33,6 +33,7 @@ func createLB(t *testing.T, s *Service, name string) string {
 	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
 		"Name":             name,
 		"Subnets.member.1": "subnet-aaa",
+		"Subnets.member.2": "subnet-bbb",
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateLoadBalancer: expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -126,6 +127,7 @@ func TestCreateLoadBalancer(t *testing.T) {
 	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
 		"Name":             "my-lb",
 		"Subnets.member.1": "subnet-aaa",
+		"Subnets.member.2": "subnet-bbb",
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
@@ -136,6 +138,65 @@ func TestCreateLoadBalancer(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "cloudfront.localhost") &&
 		!strings.Contains(w.Body.String(), "localhost") {
 		t.Error("expected localhost-based DNSName")
+	}
+	// The provided subnets should be reflected in the AvailabilityZones.
+	if !strings.Contains(w.Body.String(), "subnet-aaa") ||
+		!strings.Contains(w.Body.String(), "subnet-bbb") {
+		t.Error("expected provided subnets in AvailabilityZones")
+	}
+}
+
+// TestCreateLoadBalancer_SingleSubnet: an ALB with a single subnet (one AZ) is
+// rejected, matching real AWS.
+func TestCreateLoadBalancer_SingleSubnet(t *testing.T) {
+	s := newSvc()
+	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
+		"Name":             "single-az",
+		"Subnets.member.1": "subnet-aaa",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ValidationError") {
+		t.Errorf("expected ValidationError, got:\n%s", w.Body.String())
+	}
+}
+
+// TestCreateLoadBalancer_SameAZ: two subnets that resolve to the same AZ are
+// rejected.
+func TestCreateLoadBalancer_SameAZ(t *testing.T) {
+	s := New("us-east-1", func(string) (string, bool) { return "us-east-1a", true })
+	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
+		"Name":             "same-az",
+		"Subnets.member.1": "subnet-aaa",
+		"Subnets.member.2": "subnet-bbb",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d\n%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ValidationError") {
+		t.Errorf("expected ValidationError, got:\n%s", w.Body.String())
+	}
+}
+
+// TestCreateLoadBalancer_DifferentAZ: two subnets in different AZs are accepted.
+func TestCreateLoadBalancer_DifferentAZ(t *testing.T) {
+	azByID := map[string]string{"subnet-aaa": "us-east-1a", "subnet-bbb": "us-east-1b"}
+	s := New("us-east-1", func(id string) (string, bool) {
+		az, ok := azByID[id]
+		return az, ok
+	})
+	w := elbReq(t, s, "CreateLoadBalancer", map[string]string{
+		"Name":             "multi-az",
+		"Subnets.member.1": "subnet-aaa",
+		"Subnets.member.2": "subnet-bbb",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\n%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "us-east-1a") || !strings.Contains(body, "us-east-1b") {
+		t.Errorf("expected both AZs in response, got:\n%s", body)
 	}
 }
 

@@ -698,6 +698,17 @@ if [ -n "${LB_ARN:-}" ]; then
   fi
 fi
 
+# Subnet/AZ validation: a multi-AZ ALB is accepted, a single-subnet ALB rejected.
+try "create multi-AZ load-balancer" \
+  $CLI elbv2 create-load-balancer --name "${PREFIX}-multiaz" --type application \
+    --subnets subnet-0000000000000000a subnet-0000000000000000b
+try_fail "single-subnet load-balancer rejected" \
+  $CLI elbv2 create-load-balancer --name "${PREFIX}-singleaz" --type application \
+    --subnets subnet-0000000000000000a
+$CLI elbv2 delete-load-balancer --load-balancer-arn \
+  "$($CLI elbv2 describe-load-balancers --names "${PREFIX}-multiaz" \
+    --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null)" 2>/dev/null || true
+
 try_match "/_nimbus/alb/loadbalancers inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/alb/loadbalancers"
 try_match "/_nimbus/alb/targetgroups inspection" "$PREFIX" \

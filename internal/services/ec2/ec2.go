@@ -519,6 +519,20 @@ func (s *Service) deleteSubnet(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, http.StatusOK, ec2Resp("DeleteSubnet", "<return>true</return>"))
 }
 
+// SubnetAZ returns the Availability Zone of a tracked subnet. The second
+// return value is false if the subnet is not known to the EC2 store (e.g. a
+// synthetic ID never created via CreateSubnet). It is used by other services
+// (e.g. ALB) to validate that a load balancer spans multiple AZs.
+func (s *Service) SubnetAZ(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sn, ok := s.subnets[id]
+	if !ok {
+		return "", false
+	}
+	return sn.availabilityZone, true
+}
+
 func subnetXML(sn *subnet) string {
 	return fmt.Sprintf(`
       <subnetId>%s</subnetId>
