@@ -153,7 +153,7 @@ func main() {
 	r.Register(efsSvc) // EFS (/2015-02-01/) must precede the S3 catch-all
 	s3ControlSvc := s3control.New()
 	r.Register(s3ControlSvc) // S3 Control (/v20180820/) must precede the S3 catch-all
-	r.Register(ec2Svc) // EC2 (POST / form-encoded) must precede the S3 catch-all
+	r.Register(ec2Svc)       // EC2 (POST / form-encoded) must precede the S3 catch-all
 	s3Svc := s3.New(cfg.DataDir)
 	r.Register(s3Svc) // S3 is the catch-all, register last
 
