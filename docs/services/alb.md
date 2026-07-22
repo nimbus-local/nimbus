@@ -12,7 +12,7 @@ registered target. Registered targets are immediately `healthy`.
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateLoadBalancer` | Returns `localhost`-based `DNSName`, state `active` |
+| `CreateLoadBalancer` | Returns `localhost`-based `DNSName`, state `active`. For `application` type, validates the subnets span **at least two Availability Zones** (subnet AZs are resolved via the EC2 store); otherwise rejects with `ValidationError`. The provided subnets/AZs are echoed in `AvailabilityZones` |
 | `DescribeLoadBalancers` | Filter by `LoadBalancerArns` or `Names`; returns `LoadBalancerNotFound` when ARN filter matches nothing |
 | `DeleteLoadBalancer` | Removes from in-memory store |
 | `SetSubnets` | Returns stub availability zone; required by TF provider v6 re-apply |

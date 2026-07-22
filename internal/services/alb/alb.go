@@ -36,6 +36,10 @@ type Service struct {
 	targetGroups map[string]*targetGroup // arn -> tg
 	proxies      map[string]*activeProxy // port -> proxy
 	region       string
+	// subnetAZ resolves a subnet ID to its Availability Zone (typically
+	// ec2.Service.SubnetAZ). Nil in tests; unknown subnets fall back to
+	// treating the subnet ID itself as a distinct zone.
+	subnetAZ func(string) (string, bool)
 }
 
 type lb struct {
@@ -45,6 +49,13 @@ type lb struct {
 	scheme    string
 	lbType    string
 	createdAt time.Time
+	subnets   []lbSubnet
+}
+
+// lbSubnet is a subnet attached to a load balancer, with its resolved AZ.
+type lbSubnet struct {
+	subnetID string
+	zoneName string
 }
 
 type listener struct {
@@ -95,12 +106,15 @@ type activeProxy struct {
 	srv *http.Server
 }
 
-func New(region string) *Service {
+// New creates an ALB service. subnetAZ resolves a subnet ID to its
+// Availability Zone (pass ec2.Service.SubnetAZ); it may be nil.
+func New(region string, subnetAZ func(string) (string, bool)) *Service {
 	if region == "" {
 		region = "us-east-1"
 	}
 	return &Service{
 		region:       region,
+		subnetAZ:     subnetAZ,
 		lbs:          map[string]*lb{},
 		listeners:    map[string]*listener{},
 		rules:        map[string]*rule{},
@@ -316,13 +330,29 @@ func (s *Service) createLoadBalancer(w http.ResponseWriter, r *http.Request) {
 		scheme = "internet-facing"
 	}
 
+	subnets := s.resolveSubnets(r)
+
+	// Application load balancers must span at least two subnets in two
+	// different Availability Zones — real AWS rejects otherwise.
+	if lbType == "application" {
+		azSet := map[string]bool{}
+		for _, sn := range subnets {
+			azSet[sn.zoneName] = true
+		}
+		if len(azSet) < 2 {
+			elbError(w, http.StatusBadRequest, "ValidationError",
+				"At least two subnets in two different Availability Zones must be specified")
+			return
+		}
+	}
+
 	id := shortID()
 	arn := fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%s",
 		s.region, accountID, name, id)
 	dnsName := fmt.Sprintf("%s-%s.%s.elb.localhost", name, id, s.region)
 
 	l := &lb{arn: arn, name: name, dnsName: dnsName, scheme: scheme,
-		lbType: lbType, createdAt: time.Now().UTC()}
+		lbType: lbType, createdAt: time.Now().UTC(), subnets: subnets}
 
 	s.mu.Lock()
 	s.lbs[arn] = l
@@ -330,6 +360,37 @@ func (s *Service) createLoadBalancer(w http.ResponseWriter, r *http.Request) {
 
 	elbOK(w, "CreateLoadBalancerResponse", "CreateLoadBalancerResult",
 		"<LoadBalancers>"+lbMember(l)+"</LoadBalancers>")
+}
+
+// resolveSubnets collects the subnet IDs from the request (both Subnets.member.N
+// and SubnetMappings.member.N.SubnetId) and resolves each to its Availability
+// Zone. Subnets unknown to EC2 fall back to using the subnet ID as the zone, so
+// distinct IDs still count as distinct AZs.
+func (s *Service) resolveSubnets(r *http.Request) []lbSubnet {
+	ids := formList(r, "Subnets.member.")
+	for i := 1; ; i++ {
+		id := r.FormValue(fmt.Sprintf("SubnetMappings.member.%d.SubnetId", i))
+		if id == "" {
+			break
+		}
+		ids = append(ids, id)
+	}
+	out := make([]lbSubnet, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, lbSubnet{subnetID: id, zoneName: s.lookupAZ(id)})
+	}
+	return out
+}
+
+// lookupAZ resolves a subnet ID to its AZ, falling back to the subnet ID itself
+// when the subnet is unknown (no EC2 store or synthetic ID).
+func (s *Service) lookupAZ(subnetID string) string {
+	if s.subnetAZ != nil {
+		if az, ok := s.subnetAZ(subnetID); ok {
+			return az
+		}
+	}
+	return subnetID
 }
 
 func (s *Service) describeLoadBalancers(w http.ResponseWriter, r *http.Request) {
@@ -1098,16 +1159,32 @@ func lbMember(l *lb) string {
 			`<VpcId>vpc-00000000000000001</VpcId>`+
 			`<State><Code>active</Code><Reason/></State>`+
 			`<Type>%s</Type>`+
-			`<AvailabilityZones>`+
-			`<member><ZoneName>us-east-1a</ZoneName><SubnetId>subnet-00000000000000001</SubnetId><LoadBalancerAddresses/></member>`+
-			`</AvailabilityZones>`+
+			`%s`+
 			`<SecurityGroups/>`+
 			`<IpAddressType>ipv4</IpAddressType>`+
 			`</member>`,
 		xmlEsc(l.arn), xmlEsc(l.name), xmlEsc(l.dnsName),
 		l.createdAt.Format(time.RFC3339),
-		xmlEsc(l.scheme), xmlEsc(l.lbType),
+		xmlEsc(l.scheme), xmlEsc(l.lbType), availabilityZonesXML(l.subnets),
 	)
+}
+
+// availabilityZonesXML renders the <AvailabilityZones> element for a load
+// balancer's subnets. Falls back to a single synthetic zone when no subnets
+// were recorded (backwards compat with callers that omit them).
+func availabilityZonesXML(subnets []lbSubnet) string {
+	if len(subnets) == 0 {
+		return `<AvailabilityZones><member><ZoneName>us-east-1a</ZoneName>` +
+			`<SubnetId>subnet-00000000000000001</SubnetId><LoadBalancerAddresses/></member></AvailabilityZones>`
+	}
+	var b strings.Builder
+	b.WriteString("<AvailabilityZones>")
+	for _, sn := range subnets {
+		fmt.Fprintf(&b, `<member><ZoneName>%s</ZoneName><SubnetId>%s</SubnetId><LoadBalancerAddresses/></member>`,
+			xmlEsc(sn.zoneName), xmlEsc(sn.subnetID))
+	}
+	b.WriteString("</AvailabilityZones>")
+	return b.String()
 }
 
 func listenerMember(l *listener) string {

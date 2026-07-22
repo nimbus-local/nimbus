@@ -132,7 +132,8 @@ func main() {
 	}, nimbusBaseURL)
 	schedSvc := scheduler.New(cfg.DefaultRegion, nimbusBaseURL)
 	r.Register(schedSvc)
-	albSvc := alb.New(cfg.DefaultRegion)
+	ec2Svc := ec2.New(cfg.DefaultRegion)
+	albSvc := alb.New(cfg.DefaultRegion, ec2Svc.SubnetAZ)
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
 	r.Register(rdsSvc)
@@ -152,8 +153,7 @@ func main() {
 	r.Register(efsSvc) // EFS (/2015-02-01/) must precede the S3 catch-all
 	s3ControlSvc := s3control.New()
 	r.Register(s3ControlSvc) // S3 Control (/v20180820/) must precede the S3 catch-all
-	ec2Svc := ec2.New(cfg.DefaultRegion)
-	r.Register(ec2Svc) // EC2 (POST / form-encoded) must precede the S3 catch-all
+	r.Register(ec2Svc)       // EC2 (POST / form-encoded) must precede the S3 catch-all
 	s3Svc := s3.New(cfg.DataDir)
 	r.Register(s3Svc) // S3 is the catch-all, register last
 
