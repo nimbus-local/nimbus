@@ -1,7 +1,9 @@
 // Package rds emulates the AWS RDS/Aurora control plane.
 // All state is in-memory. DB clusters resolve to a real Postgres sidecar
-// running alongside Nimbus. Subnet groups and parameter groups are accepted
-// and stored verbatim — no VPC or subnet validation is performed.
+// running alongside Nimbus. Parameter groups are accepted and stored verbatim.
+// Subnet groups record the subnets they were created with: clusters and
+// instances that name a subnet group hold a reference to it, which the EC2
+// service consults before deleting a subnet.
 package rds
 
 import (
@@ -20,6 +22,11 @@ const (
 	rdsNS     = "http://rds.amazonaws.com/doc/2014-10-31/"
 )
 
+// SubnetInfoFunc resolves an EC2 subnet ID to its VPC ID and Availability
+// Zone. ok is false when the subnet is unknown to the EC2 service — e.g. a
+// hardcoded ID that was never created through CreateSubnet.
+type SubnetInfoFunc func(subnetID string) (vpcID, az string, ok bool)
+
 // Service implements the AWS RDS/Aurora control plane.
 type Service struct {
 	mu               sync.RWMutex
@@ -32,12 +39,14 @@ type Service struct {
 	region           string
 	postgresHost     string
 	postgresPort     int
+	subnetInfo       SubnetInfoFunc
 }
 
 type dbSubnetGroup struct {
 	name        string
 	description string
 	arn         string
+	subnetIDs   []string
 }
 
 type dbParamGroup struct {
@@ -58,6 +67,7 @@ type dbCluster struct {
 	endpoint      string
 	port          int
 	status        string
+	subnetGroup   string // DBSubnetGroupName, empty when none was supplied
 	createdAt     time.Time
 
 	perfInsights          bool
@@ -79,6 +89,7 @@ type dbInstance struct {
 	endpoint      string
 	port          int
 	status        string
+	subnetGroup   string // DBSubnetGroupName, inherited from the cluster for members
 	createdAt     time.Time
 
 	perfInsights          bool
@@ -110,6 +121,11 @@ func New(region, postgresHost string, postgresPort int) *Service {
 		tags:             map[string]map[string]string{},
 	}
 }
+
+// SetSubnetInfo wires in the EC2 subnet lookup used to report the VPC and
+// Availability Zone of a DB subnet group's subnets. Call it during startup,
+// before the service begins serving requests.
+func (s *Service) SetSubnetInfo(fn SubnetInfoFunc) { s.subnetInfo = fn }
 
 func (s *Service) Name() string { return "rds" }
 
@@ -239,15 +255,38 @@ func (s *Service) createDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
 	desc := r.FormValue("DBSubnetGroupDescription")
 	arn := s.subnetGroupARN(name)
 
+	sg := &dbSubnetGroup{name: name, description: desc, arn: arn, subnetIDs: parseSubnetIDs(r)}
+
 	s.mu.Lock()
-	s.subnetGroups[name] = &dbSubnetGroup{name: name, description: desc, arn: arn}
+	s.subnetGroups[name] = sg
 	s.storeTags(r, arn)
+	body := s.subnetGroupXML(sg)
 	s.mu.Unlock()
 
 	writeXML(w, http.StatusOK, wrap("CreateDBSubnetGroup", fmt.Sprintf(`
     <CreateDBSubnetGroupResult>
       <DBSubnetGroup>%s</DBSubnetGroup>
-    </CreateDBSubnetGroupResult>`, s.subnetGroupXML(&dbSubnetGroup{name: name, description: desc, arn: arn}))))
+    </CreateDBSubnetGroupResult>`, body)))
+}
+
+// parseSubnetIDs reads the SubnetIds list from a CreateDBSubnetGroup or
+// ModifyDBSubnetGroup form. The query protocol names the list member
+// `SubnetIdentifier`; `member` is accepted too since some SDK versions emit it.
+func parseSubnetIDs(r *http.Request) []string {
+	var ids []string
+	for _, member := range []string{"SubnetIdentifier", "member"} {
+		for i := 1; ; i++ {
+			id := r.FormValue(fmt.Sprintf("SubnetIds.%s.%d", member, i))
+			if id == "" {
+				break
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) > 0 {
+			break
+		}
+	}
+	return ids
 }
 
 func (s *Service) describeDBSubnetGroups(w http.ResponseWriter, r *http.Request) {
@@ -276,16 +315,38 @@ func (s *Service) describeDBSubnetGroups(w http.ResponseWriter, r *http.Request)
 func (s *Service) deleteDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("DBSubnetGroupName")
 	s.mu.Lock()
-	delete(s.subnetGroups, name)
+	user, inUse := s.subnetGroupUser(name)
+	if !inUse {
+		delete(s.subnetGroups, name)
+	}
 	s.mu.Unlock()
+	if inUse {
+		rdsError(w, http.StatusBadRequest, "InvalidDBSubnetGroupStateFault",
+			fmt.Sprintf("The DB subnet group '%s' is still in use by %s.", name, user))
+		return
+	}
 	writeXML(w, http.StatusOK, wrap("DeleteDBSubnetGroup", ""))
 }
 
 func (s *Service) modifyDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("DBSubnetGroupName")
-	s.mu.RLock()
+	s.mu.Lock()
 	sg := s.subnetGroups[name]
-	s.mu.RUnlock()
+	if sg != nil {
+		if desc := r.FormValue("DBSubnetGroupDescription"); desc != "" {
+			sg.description = desc
+		}
+		// A subnet replace re-points the group; the new list is what later
+		// subnet deletes are checked against.
+		if ids := parseSubnetIDs(r); len(ids) > 0 {
+			sg.subnetIDs = ids
+		}
+	}
+	var body string
+	if sg != nil {
+		body = s.subnetGroupXML(sg)
+	}
+	s.mu.Unlock()
 	if sg == nil {
 		rdsError(w, http.StatusNotFound, "DBSubnetGroupNotFoundFault",
 			fmt.Sprintf("DBSubnetGroup '%s' not found.", name))
@@ -294,17 +355,72 @@ func (s *Service) modifyDBSubnetGroup(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, http.StatusOK, wrap("ModifyDBSubnetGroup", fmt.Sprintf(`
     <ModifyDBSubnetGroupResult>
       <DBSubnetGroup>%s</DBSubnetGroup>
-    </ModifyDBSubnetGroupResult>`, s.subnetGroupXML(sg))))
+    </ModifyDBSubnetGroupResult>`, body)))
 }
 
+// subnetGroupXML renders a DBSubnetGroup structure. VPC and Availability Zone
+// come from the EC2 service when the subnets were created there; subnets that
+// EC2 doesn't know about fall back to placeholders. Must be called with s.mu
+// held.
 func (s *Service) subnetGroupXML(sg *dbSubnetGroup) string {
+	vpcID := "vpc-00000000000000001"
+	var subnets strings.Builder
+	for _, id := range sg.subnetIDs {
+		az := s.region + "a"
+		if s.subnetInfo != nil {
+			if v, a, ok := s.subnetInfo(id); ok {
+				vpcID = v
+				az = a
+			}
+		}
+		fmt.Fprintf(&subnets, `
+          <Subnet>
+            <SubnetIdentifier>%s</SubnetIdentifier>
+            <SubnetAvailabilityZone><Name>%s</Name></SubnetAvailabilityZone>
+            <SubnetStatus>Active</SubnetStatus>
+          </Subnet>`, id, az)
+	}
 	return fmt.Sprintf(`
         <DBSubnetGroupArn>%s</DBSubnetGroupArn>
         <DBSubnetGroupDescription>%s</DBSubnetGroupDescription>
         <DBSubnetGroupName>%s</DBSubnetGroupName>
         <SubnetGroupStatus>Complete</SubnetGroupStatus>
-        <VpcId>vpc-00000000000000001</VpcId>
-        <Subnets/>`, sg.arn, sg.description, sg.name)
+        <VpcId>%s</VpcId>
+        <Subnets>%s</Subnets>`, sg.arn, sg.description, sg.name, vpcID, subnets.String())
+}
+
+// subnetGroupUser returns the identifier of a cluster or instance currently
+// placed in the named subnet group. Must be called with s.mu held.
+func (s *Service) subnetGroupUser(name string) (string, bool) {
+	for _, c := range s.clusters {
+		if c.subnetGroup == name {
+			return "DB cluster " + c.identifier, true
+		}
+	}
+	for _, inst := range s.instances {
+		if inst.subnetGroup == name {
+			return "DB instance " + inst.identifier, true
+		}
+	}
+	return "", false
+}
+
+// SubnetInUse reports whether a DB cluster or instance currently sits in the
+// given EC2 subnet by way of its DB subnet group, returning a description of
+// the resource holding the reference. The EC2 service calls this before
+// deleting a subnet, mirroring the DependencyViolation real AWS returns.
+func (s *Service) SubnetInUse(subnetID string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sg := range s.subnetGroups {
+		if !containsAny(sg.subnetIDs, subnetID) {
+			continue
+		}
+		if user, ok := s.subnetGroupUser(sg.name); ok {
+			return fmt.Sprintf("%s (DB subnet group %s)", user, sg.name), true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) subnetGroupARN(name string) string {
@@ -473,7 +589,14 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 	engineVersion := r.FormValue("EngineVersion")
 	dbName := r.FormValue("DatabaseName")
 	masterUser := r.FormValue("MasterUsername")
+	subnetGroup := r.FormValue("DBSubnetGroupName")
 	arn := s.clusterARN(id)
+
+	if subnetGroup != "" && !s.hasSubnetGroup(subnetGroup) {
+		rdsError(w, http.StatusNotFound, "DBSubnetGroupNotFoundFault",
+			fmt.Sprintf("DBSubnetGroup '%s' not found.", subnetGroup))
+		return
+	}
 
 	c := &dbCluster{
 		identifier:    id,
@@ -486,6 +609,7 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 		endpoint:      s.postgresHost,
 		port:          s.postgresPort,
 		status:        "available",
+		subnetGroup:   subnetGroup,
 		createdAt:     time.Now().UTC(),
 	}
 	applyPerformanceInsights(r, &c.perfInsights, &c.perfInsightsKMS, &c.perfInsightsRetention)
@@ -566,8 +690,23 @@ func (s *Service) deleteDBCluster(w http.ResponseWriter, r *http.Request) {
     </DeleteDBClusterResult>`, s.clusterXML(c))))
 }
 
+// hasSubnetGroup reports whether the named DB subnet group exists.
+func (s *Service) hasSubnetGroup(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.subnetGroups[name]
+	return ok
+}
+
 func (s *Service) clusterXML(c *dbCluster) string {
-	return fmt.Sprintf(`
+	// DBCluster carries the subnet group as a bare name, unlike DBInstance
+	// which nests the whole structure.
+	var opt string
+	if c.subnetGroup != "" {
+		opt = fmt.Sprintf(`
+        <DBSubnetGroup>%s</DBSubnetGroup>`, c.subnetGroup)
+	}
+	return opt + fmt.Sprintf(`
         <DBClusterArn>%s</DBClusterArn>
         <DBClusterIdentifier>%s</DBClusterIdentifier>
         <DbClusterResourceId>%s</DbClusterResourceId>
@@ -605,17 +744,31 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 	clusterID := r.FormValue("DBClusterIdentifier")
 	engine := r.FormValue("Engine")
 	class := r.FormValue("DBInstanceClass")
+	subnetGroup := r.FormValue("DBSubnetGroupName")
 	arn := s.instanceARN(id)
 
-	// Inherit endpoint from cluster if present
+	// Inherit endpoint and subnet group from the cluster if present. Cluster
+	// members are created without DBSubnetGroupName — they sit in whatever
+	// subnet group the cluster was placed in.
 	endpoint := s.postgresHost
 	port := s.postgresPort
 	s.mu.RLock()
-	if c, ok := s.clusters[clusterID]; ok {
+	c, isMember := s.clusters[clusterID]
+	if isMember {
 		endpoint = c.endpoint
 		port = c.port
+		if subnetGroup == "" {
+			subnetGroup = c.subnetGroup
+		}
 	}
+	_, groupExists := s.subnetGroups[subnetGroup]
 	s.mu.RUnlock()
+
+	if subnetGroup != "" && !groupExists {
+		rdsError(w, http.StatusNotFound, "DBSubnetGroupNotFoundFault",
+			fmt.Sprintf("DBSubnetGroup '%s' not found.", subnetGroup))
+		return
+	}
 
 	inst := &dbInstance{
 		identifier:    id,
@@ -631,6 +784,7 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 		endpoint:      endpoint,
 		port:          port,
 		status:        "available",
+		subnetGroup:   subnetGroup,
 		createdAt:     time.Now().UTC(),
 	}
 	applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
@@ -638,12 +792,13 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.instances[id] = inst
 	s.storeTags(r, arn)
+	body := s.instanceXML(inst)
 	s.mu.Unlock()
 
 	writeXML(w, http.StatusOK, wrap("CreateDBInstance", fmt.Sprintf(`
     <CreateDBInstanceResult>
       <DBInstance>%s</DBInstance>
-    </CreateDBInstanceResult>`, s.instanceXML(inst))))
+    </CreateDBInstanceResult>`, body)))
 }
 
 func (s *Service) describeDBInstances(w http.ResponseWriter, r *http.Request) {
@@ -681,8 +836,10 @@ func (s *Service) modifyDBInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("DBInstanceIdentifier")
 	s.mu.Lock()
 	inst, ok := s.instances[id]
+	var body string
 	if ok {
 		applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
+		body = s.instanceXML(inst)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -693,7 +850,7 @@ func (s *Service) modifyDBInstance(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, http.StatusOK, wrap("ModifyDBInstance", fmt.Sprintf(`
     <ModifyDBInstanceResult>
       <DBInstance>%s</DBInstance>
-    </ModifyDBInstanceResult>`, s.instanceXML(inst))))
+    </ModifyDBInstanceResult>`, body)))
 }
 
 func (s *Service) deleteDBInstance(w http.ResponseWriter, r *http.Request) {
@@ -701,6 +858,10 @@ func (s *Service) deleteDBInstance(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	inst := s.instances[id]
 	delete(s.instances, id)
+	var body string
+	if inst != nil {
+		body = s.instanceXML(inst)
+	}
 	s.mu.Unlock()
 	if inst == nil {
 		rdsError(w, http.StatusNotFound, "DBInstanceNotFound",
@@ -710,9 +871,11 @@ func (s *Service) deleteDBInstance(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, http.StatusOK, wrap("DeleteDBInstance", fmt.Sprintf(`
     <DeleteDBInstanceResult>
       <DBInstance>%s</DBInstance>
-    </DeleteDBInstanceResult>`, s.instanceXML(inst))))
+    </DeleteDBInstanceResult>`, body)))
 }
 
+// instanceXML renders a DBInstance structure. Must be called with s.mu held —
+// it reads the subnet group store.
 func (s *Service) instanceXML(inst *dbInstance) string {
 	// Optional elements only standalone instances carry — cluster members
 	// inherit these from the cluster and the fields stay empty.
@@ -732,6 +895,12 @@ func (s *Service) instanceXML(inst *dbInstance) string {
 	if inst.storageGB != "" {
 		fmt.Fprintf(&opt, `
         <AllocatedStorage>%s</AllocatedStorage>`, inst.storageGB)
+	}
+	// Unlike DBCluster, DBInstance nests the full subnet group structure —
+	// that's where the provider reads db_subnet_group_name from.
+	if sg := s.subnetGroups[inst.subnetGroup]; sg != nil {
+		fmt.Fprintf(&opt, `
+        <DBSubnetGroup>%s</DBSubnetGroup>`, s.subnetGroupXML(sg))
 	}
 	return fmt.Sprintf(`
         <DBInstanceArn>%s</DBInstanceArn>

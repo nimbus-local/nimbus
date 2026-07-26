@@ -1,3 +1,6 @@
+# Real subnets, not placeholder IDs: the group has to resolve them back to
+# their VPC and AZ, and the DB resources below inherit a dependency on them
+# (#105) so Terraform tears the databases down before the subnets.
 resource "aws_db_subnet_group" "nimbus_test" {
   name        = var.prefix
   description = "Nimbus test subnet group"

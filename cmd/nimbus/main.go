@@ -138,6 +138,10 @@ func main() {
 	albSvc := alb.New(cfg.DefaultRegion, ec2Svc.SubnetAZ)
 	r.Register(albSvc)
 	rdsSvc := rds.New(cfg.DefaultRegion, cfg.PostgresHost, cfg.PostgresPort)
+	// DB subnet groups resolve their subnets through EC2, and EC2 refuses to
+	// delete a subnet an RDS instance still sits in.
+	rdsSvc.SetSubnetInfo(ec2Svc.SubnetInfo)
+	ec2Svc.AddSubnetInUseCheck(rdsSvc.SubnetInUse)
 	r.Register(rdsSvc)
 	piSvc := pi.New(rdsSvc.HasResourceID)
 	r.Register(piSvc)

@@ -326,6 +326,53 @@ func TestDeleteSubnet(t *testing.T) {
 	}
 }
 
+// A subnet another service still references cannot be deleted — real AWS
+// answers DependencyViolation, and Terraform relies on that to order teardown.
+func TestDeleteSubnet_DependencyViolation(t *testing.T) {
+	svc := newSvc()
+	body := must200(t, ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-x&CidrBlock=10.0.4.0%2F24"))
+	subnetID := extractBetween(body, "<subnetId>", "</subnetId>")
+
+	svc.AddSubnetInUseCheck(func(id string) (string, bool) {
+		return "DB instance db-1", id == subnetID
+	})
+
+	w := ec2Req(t, svc, "Action=DeleteSubnet&SubnetId="+subnetID)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	mustContain(t, w.Body.String(), "<Code>DependencyViolation</Code>")
+	mustContain(t, w.Body.String(), "DB instance db-1")
+
+	svc.mu.RLock()
+	_, exists := svc.subnets[subnetID]
+	svc.mu.RUnlock()
+	if !exists {
+		t.Error("expected the subnet to survive a rejected delete")
+	}
+
+	// An unreferenced subnet in the same account still deletes.
+	other := extractBetween(
+		must200(t, ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-x&CidrBlock=10.0.5.0%2F24")),
+		"<subnetId>", "</subnetId>")
+	mustContain(t, must200(t, ec2Req(t, svc, "Action=DeleteSubnet&SubnetId="+other)), "<return>true</return>")
+}
+
+func TestSubnetInfo(t *testing.T) {
+	svc := newSvc()
+	body := must200(t, ec2Req(t,
+		svc, "Action=CreateSubnet&VpcId=vpc-x&CidrBlock=10.0.4.0%2F24&AvailabilityZone=us-east-1b"))
+	subnetID := extractBetween(body, "<subnetId>", "</subnetId>")
+
+	vpcID, az, ok := svc.SubnetInfo(subnetID)
+	if !ok || vpcID != "vpc-x" || az != "us-east-1b" {
+		t.Fatalf("SubnetInfo = %q, %q, %v; want vpc-x, us-east-1b, true", vpcID, az, ok)
+	}
+	if _, _, ok := svc.SubnetInfo("subnet-unknown"); ok {
+		t.Error("expected ok=false for an untracked subnet")
+	}
+}
+
 // ── Internet Gateways ─────────────────────────────────────────────────────────
 
 func TestCreateInternetGateway(t *testing.T) {

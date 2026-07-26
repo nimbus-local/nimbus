@@ -904,6 +904,23 @@ if [ -n "${DB_SUBNET:-}" ] && [ "$DB_SUBNET" != "None" ]; then
   try_match "subnet group status Complete" "Complete" \
     $CLI rds describe-db-subnet-groups --db-subnet-group-name "$PREFIX" \
       --query "DBSubnetGroups[0].SubnetGroupStatus" --output text
+  # The group must report the subnets it was created with (#105) — the
+  # provider reads subnet_ids back from here.
+  try_match "subnet group reports its subnets" "^2$" \
+    $CLI rds describe-db-subnet-groups --db-subnet-group-name "$PREFIX" \
+      --query "length(DBSubnetGroups[0].Subnets)" --output text
+  try_match "subnet group resolves its VPC" "vpc-" \
+    $CLI rds describe-db-subnet-groups --db-subnet-group-name "$PREFIX" \
+      --query "DBSubnetGroups[0].VpcId" --output text
+  try_match "cluster reports its subnet group" "$PREFIX" \
+    $CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
+      --query "DBClusters[0].DBSubnetGroup" --output text
+  try_match "standalone instance reports its subnet group" "$PREFIX" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-standalone" \
+      --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text
+  try_match "cluster member inherits the cluster's subnet group" "$PREFIX" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-instance-1" \
+      --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text
 else
   fail "describe-db-subnet-groups (subnet group not found — run 'make apply' first)"
 fi
@@ -943,6 +960,52 @@ try_match "db-cluster-id filter finds cluster member" "${PREFIX}-instance-1" \
 
 try_match "/_nimbus/rds/clusters inspection" "$PREFIX" \
   curl -sf "$NIMBUS/_nimbus/rds/clusters"
+
+# A subnet an RDS instance sits in cannot be deleted (#105). Built from
+# scratch so the Terraform-managed resources above stay untouched.
+DEP_VPC=$($CLI ec2 create-vpc --cidr-block 10.90.0.0/16 \
+  --query "Vpc.VpcId" --output text 2>/dev/null)
+DEP_SUBNET=$($CLI ec2 create-subnet --vpc-id "$DEP_VPC" --cidr-block 10.90.1.0/24 \
+  --availability-zone "${REGION}a" --query "Subnet.SubnetId" --output text 2>/dev/null)
+if [ -n "${DEP_SUBNET:-}" ] && [ "$DEP_SUBNET" != "None" ]; then
+  try "create-db-subnet-group over a live subnet" \
+    $CLI rds create-db-subnet-group --db-subnet-group-name "${PREFIX}-dep" \
+      --db-subnet-group-description "subnet dependency probe" \
+      --subnet-ids "$DEP_SUBNET"
+  # A subnet group with no DB in it pins nothing.
+  FREE_SUBNET=$($CLI ec2 create-subnet --vpc-id "$DEP_VPC" --cidr-block 10.90.2.0/24 \
+    --availability-zone "${REGION}a" --query "Subnet.SubnetId" --output text 2>/dev/null)
+  $CLI rds create-db-subnet-group --db-subnet-group-name "${PREFIX}-dep-free" \
+    --db-subnet-group-description "unused group" --subnet-ids "$FREE_SUBNET" >/dev/null 2>&1
+  try "delete-subnet allowed when no DB uses the group" \
+    $CLI ec2 delete-subnet --subnet-id "$FREE_SUBNET"
+  $CLI rds delete-db-subnet-group --db-subnet-group-name "${PREFIX}-dep-free" >/dev/null 2>&1
+
+  try "create-db-instance in the subnet group" \
+    $CLI rds create-db-instance --db-instance-identifier "${PREFIX}-dep" \
+      --engine postgres --db-instance-class db.t3.micro --allocated-storage 20 \
+      --db-subnet-group-name "${PREFIX}-dep"
+  try_match "instance reflects the subnet group" "${PREFIX}-dep" \
+    $CLI rds describe-db-instances --db-instance-identifier "${PREFIX}-dep" \
+      --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text
+  try_fail "delete-subnet rejected while the instance uses it" \
+    $CLI ec2 delete-subnet --subnet-id "$DEP_SUBNET"
+  try_fail "delete-db-subnet-group rejected while the instance uses it" \
+    $CLI rds delete-db-subnet-group --db-subnet-group-name "${PREFIX}-dep"
+  try_fail "create-db-instance rejects an unknown subnet group" \
+    $CLI rds create-db-instance --db-instance-identifier "${PREFIX}-dep-2" \
+      --engine postgres --db-instance-class db.t3.micro --allocated-storage 20 \
+      --db-subnet-group-name "${PREFIX}-no-such-group"
+  $CLI rds delete-db-instance --db-instance-identifier "${PREFIX}-dep" \
+    --skip-final-snapshot >/dev/null 2>&1
+  try "delete-db-subnet-group succeeds once the instance is gone" \
+    $CLI rds delete-db-subnet-group --db-subnet-group-name "${PREFIX}-dep"
+  try "delete-subnet succeeds once the instance is gone" \
+    $CLI ec2 delete-subnet --subnet-id "$DEP_SUBNET"
+  $CLI ec2 delete-vpc --vpc-id "$DEP_VPC" >/dev/null 2>&1
+else
+  fail "ec2 create-subnet (subnet dependency probe could not be set up)"
+fi
 
 # ── Performance Insights ─────────────────────────────────────────────────────
 

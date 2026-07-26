@@ -201,6 +201,191 @@ func TestDescribeDBClusters_Filters(t *testing.T) {
 	}
 }
 
+// createSubnetGroup creates a subnet group holding two subnets.
+func createSubnetGroup(t *testing.T, s *Service, name string, subnetIDs ...string) string {
+	t.Helper()
+	form := url.Values{
+		"Action":                   {"CreateDBSubnetGroup"},
+		"DBSubnetGroupName":        {name},
+		"DBSubnetGroupDescription": {"test"},
+	}
+	for i, id := range subnetIDs {
+		form.Set(fmt.Sprintf("SubnetIds.SubnetIdentifier.%d", i+1), id)
+	}
+	return post(t, s, form)
+}
+
+func TestDBSubnetGroup_SubnetsRoundTrip(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+	s.SetSubnetInfo(func(id string) (string, string, bool) {
+		if id == "subnet-a" {
+			return "vpc-real", "us-east-1c", true
+		}
+		return "", "", false
+	})
+
+	body := createSubnetGroup(t, s, "group-1", "subnet-a", "subnet-b")
+	for _, want := range []string{
+		"<SubnetIdentifier>subnet-a</SubnetIdentifier>",
+		"<SubnetIdentifier>subnet-b</SubnetIdentifier>",
+		"<Name>us-east-1c</Name>", // resolved through the EC2 lookup
+		"<VpcId>vpc-real</VpcId>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("create subnet group response missing %s:\n%s", want, body)
+		}
+	}
+
+	// Describe must report the same subnet list — the provider reads
+	// subnet_ids back from here.
+	body = post(t, s, url.Values{
+		"Action":            {"DescribeDBSubnetGroups"},
+		"DBSubnetGroupName": {"group-1"},
+	})
+	if !strings.Contains(body, "<SubnetIdentifier>subnet-b</SubnetIdentifier>") {
+		t.Fatalf("describe subnet group dropped the subnet list:\n%s", body)
+	}
+
+	// A subnet replace re-points the group.
+	post(t, s, url.Values{
+		"Action":                       {"ModifyDBSubnetGroup"},
+		"DBSubnetGroupName":            {"group-1"},
+		"SubnetIds.SubnetIdentifier.1": {"subnet-c"},
+		"SubnetIds.SubnetIdentifier.2": {"subnet-d"},
+	})
+	body = post(t, s, url.Values{
+		"Action":            {"DescribeDBSubnetGroups"},
+		"DBSubnetGroupName": {"group-1"},
+	})
+	if strings.Contains(body, "subnet-a") || !strings.Contains(body, "subnet-c") {
+		t.Fatalf("modify did not replace the subnet list:\n%s", body)
+	}
+}
+
+func TestCreateDB_SubnetGroupAssociation(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+	createSubnetGroup(t, s, "group-1", "subnet-a", "subnet-b")
+
+	// Cluster reports the subnet group as a bare name.
+	body := post(t, s, url.Values{
+		"Action":              {"CreateDBCluster"},
+		"DBClusterIdentifier": {"cluster-1"},
+		"Engine":              {"aurora-postgresql"},
+		"DBSubnetGroupName":   {"group-1"},
+	})
+	if !strings.Contains(body, "<DBSubnetGroup>group-1</DBSubnetGroup>") {
+		t.Fatalf("cluster create dropped DBSubnetGroupName:\n%s", body)
+	}
+	body = post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"cluster-1"},
+	})
+	if !strings.Contains(body, "<DBSubnetGroup>group-1</DBSubnetGroup>") {
+		t.Fatalf("describe cluster dropped DBSubnetGroupName:\n%s", body)
+	}
+
+	// Standalone instance reports the nested structure.
+	post(t, s, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"DBInstanceIdentifier": {"standalone"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"DBSubnetGroupName":    {"group-1"},
+	})
+	body = post(t, s, url.Values{
+		"Action":               {"DescribeDBInstances"},
+		"DBInstanceIdentifier": {"standalone"},
+	})
+	if !strings.Contains(body, "<DBSubnetGroupName>group-1</DBSubnetGroupName>") {
+		t.Fatalf("describe instance dropped the subnet group:\n%s", body)
+	}
+
+	// A cluster member inherits the cluster's subnet group without passing
+	// DBSubnetGroupName itself.
+	post(t, s, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"DBInstanceIdentifier": {"member-1"},
+		"DBClusterIdentifier":  {"cluster-1"},
+		"Engine":               {"aurora-postgresql"},
+		"DBInstanceClass":      {"db.serverless"},
+	})
+	body = post(t, s, url.Values{
+		"Action":               {"DescribeDBInstances"},
+		"DBInstanceIdentifier": {"member-1"},
+	})
+	if !strings.Contains(body, "<DBSubnetGroupName>group-1</DBSubnetGroupName>") {
+		t.Fatalf("cluster member did not inherit the subnet group:\n%s", body)
+	}
+}
+
+func TestCreateDB_UnknownSubnetGroupRejected(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+	for _, action := range []string{"CreateDBCluster", "CreateDBInstance"} {
+		body := post(t, s, url.Values{
+			"Action":               {action},
+			"DBClusterIdentifier":  {"c"},
+			"DBInstanceIdentifier": {"i"},
+			"Engine":               {"postgres"},
+			"DBInstanceClass":      {"db.t3.micro"},
+			"DBSubnetGroupName":    {"missing"},
+		})
+		if !strings.Contains(body, "<Code>DBSubnetGroupNotFoundFault</Code>") {
+			t.Fatalf("%s accepted an unknown subnet group:\n%s", action, body)
+		}
+	}
+}
+
+func TestSubnetInUse(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+	createSubnetGroup(t, s, "group-1", "subnet-a", "subnet-b")
+	createSubnetGroup(t, s, "unused-group", "subnet-z")
+
+	if _, inUse := s.SubnetInUse("subnet-a"); inUse {
+		t.Fatal("an empty subnet group must not hold subnets hostage")
+	}
+
+	post(t, s, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"DBInstanceIdentifier": {"standalone"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"DBSubnetGroupName":    {"group-1"},
+	})
+
+	user, inUse := s.SubnetInUse("subnet-a")
+	if !inUse || !strings.Contains(user, "standalone") {
+		t.Fatalf("SubnetInUse(subnet-a) = %q, %v; want the instance identifier, true", user, inUse)
+	}
+	if _, inUse := s.SubnetInUse("subnet-z"); inUse {
+		t.Error("subnet-z belongs to a group nothing uses")
+	}
+
+	// The subnet group cannot be dropped while the instance sits in it.
+	body := post(t, s, url.Values{
+		"Action":            {"DeleteDBSubnetGroup"},
+		"DBSubnetGroupName": {"group-1"},
+	})
+	if !strings.Contains(body, "<Code>InvalidDBSubnetGroupStateFault</Code>") {
+		t.Fatalf("delete of an in-use subnet group must be rejected:\n%s", body)
+	}
+
+	// Deleting the instance releases both.
+	post(t, s, url.Values{
+		"Action":               {"DeleteDBInstance"},
+		"DBInstanceIdentifier": {"standalone"},
+	})
+	if _, inUse := s.SubnetInUse("subnet-a"); inUse {
+		t.Error("subnet must be released once the instance is deleted")
+	}
+	body = post(t, s, url.Values{
+		"Action":            {"DeleteDBSubnetGroup"},
+		"DBSubnetGroupName": {"group-1"},
+	})
+	if strings.Contains(body, "<Code>") {
+		t.Fatalf("delete of a released subnet group must succeed:\n%s", body)
+	}
+}
+
 func TestCreateDBInstance_StandaloneFields(t *testing.T) {
 	s := New("us-east-1", "localhost", 5432)
 	body := post(t, s, url.Values{
