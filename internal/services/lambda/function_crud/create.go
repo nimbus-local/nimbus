@@ -53,15 +53,17 @@ func (r *CreateFunctionRequest) Validate() error {
 	if r.Role == "" {
 		return errors.New("Role is required")
 	}
-	if r.PackageType != "Image" {
+	if r.PackageType != PackageTypeImage {
 		if r.Handler == "" {
 			return errors.New("Handler is required for Zip package type")
 		}
 		if r.Runtime == "" {
 			return errors.New("Runtime is required for Zip package type")
 		}
+	} else if r.Code.ImageUri == "" {
+		return errors.New("Code.ImageUri is required for Image package type")
 	}
-	if r.PackageType != "" && r.PackageType != "Zip" && r.PackageType != "Image" {
+	if r.PackageType != "" && r.PackageType != PackageTypeZip && r.PackageType != PackageTypeImage {
 		return errors.New("PackageType must be Zip or Image")
 	}
 	for _, arch := range r.Architectures {
@@ -105,7 +107,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 
 func (req *CreateFunctionRequest) applyDefaults() {
 	if req.PackageType == "" {
-		req.PackageType = "Zip"
+		req.PackageType = PackageTypeZip
 	}
 	if len(req.Architectures) == 0 {
 		req.Architectures = []string{"x86_64"}
@@ -122,7 +124,7 @@ func (req *CreateFunctionRequest) applyDefaults() {
 }
 
 func newFunctionConfig(req CreateFunctionRequest, arn string) *FunctionConfig {
-	return &FunctionConfig{
+	fn := &FunctionConfig{
 		Architectures:     req.Architectures,
 		CodeSha256:        "",
 		CodeSize:          int64(len(req.Code.ZipFile)),
@@ -152,4 +154,17 @@ func newFunctionConfig(req CreateFunctionRequest, arn string) *FunctionConfig {
 		VpcConfig:         req.VpcConfig,
 		Tags:              req.Tags,
 	}
+
+	// Container-image functions carry their artifact reference instead of an
+	// uploaded archive: there is no zip to size or hash, so CodeSha256 stands in
+	// for the image digest.
+	if req.PackageType == PackageTypeImage {
+		fn.ImageUri = req.Code.ImageUri
+		fn.CodeSha256 = imageDigest(req.Code.ImageUri)
+		if req.ImageConfig != nil {
+			fn.ImageConfigResponse = &ImageConfigResponse{ImageConfig: req.ImageConfig}
+		}
+	}
+
+	return fn
 }

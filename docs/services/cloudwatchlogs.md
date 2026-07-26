@@ -8,17 +8,19 @@ In-memory CloudWatch Logs emulator. Log groups, streams, and events are stored l
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateLogGroup` | Creates a log group; returns `ResourceAlreadyExistsException` on duplicate |
+| `CreateLogGroup` | Creates a log group; accepts `kmsKeyId`; returns `ResourceAlreadyExistsException` on duplicate |
 | `DeleteLogGroup` | Removes group and all its streams |
-| `DescribeLogGroups` | Lists groups; supports `logGroupNamePrefix` filter |
+| `DescribeLogGroups` | Lists groups; supports `logGroupNamePrefix` filter; reports `retentionInDays` and `kmsKeyId` when set |
 | `CreateLogStream` | Creates a stream inside a group |
 | `DeleteLogStream` | Removes stream and all its events from the group |
 | `DescribeLogStreams` | Lists streams; supports `logStreamNamePrefix` filter |
 | `PutLogEvents` | Accepts log events from containers (`awslogs` driver) or any SDK caller; capped at 10,000 events per stream |
 | `GetLogEvents` | Retrieves events from a stream; supports `startTime`, `endTime`, `limit` |
 | `FilterLogEvents` | Substring pattern filter across one or more streams |
-| `PutRetentionPolicy` | Accepted; no-op stub |
-| `DeleteRetentionPolicy` | Accepted; no-op stub |
+| `PutRetentionPolicy` | Stores the retention period; read back via `DescribeLogGroups`. Events are never expired |
+| `DeleteRetentionPolicy` | Clears the stored retention period |
+| `AssociateKmsKey` | Records the CMK for a group; read back via `DescribeLogGroups`. Stored logs are never encrypted |
+| `DisassociateKmsKey` | Clears the recorded CMK |
 | `ListTagsForResource` / `ListTagsLogGroup` | Returns empty tag map |
 
 ## Inspection endpoint

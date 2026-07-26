@@ -20,6 +20,33 @@ Detection: `/2015-03-31/` path prefix.
 | GET | `/2015-03-31/functions/{name}/versions` | ListVersionsByFunction |
 | POST | `/2015-03-31/functions/{name}/versions` | PublishVersion |
 
+#### Package types
+
+Both `Zip` and `Image` are accepted. `Zip` is the default when `PackageType` is omitted, and requires `Handler` and `Runtime`; `Image` requires `Code.ImageUri` instead and rejects the request without it.
+
+Container-image functions are **metadata only** — Nimbus stores the image reference and any `ImageConfig` overrides, but never pulls or runs the image. Invocation still returns the configured mock response or proxies to a registered endpoint (see below).
+
+The image reference is reported the way AWS reports it, in the `Code` block of `GetFunction` rather than in `FunctionConfiguration`:
+
+```json
+{
+  "Configuration": {
+    "PackageType": "Image",
+    "CodeSha256": "9f2c…",
+    "ImageConfigResponse": { "ImageConfig": { "Command": ["app.handler"] } }
+  },
+  "Code": {
+    "RepositoryType": "ECR",
+    "ImageUri": "localhost:4566/my-image:dev",
+    "ResolvedImageUri": "localhost:4566/my-image@sha256:9f2c…"
+  }
+}
+```
+
+`ResolvedImageUri` and `CodeSha256` are derived deterministically from the reference — no image is inspected, so the digest is stable and unique per reference but synthetic. A reference that is already digest-pinned is reported unchanged, and a registry port (`localhost:4566/repo`) is never mistaken for a tag.
+
+`UpdateFunctionCode` with an `ImageUri` repoints the function and re-derives the digest.
+
 ### Invocations
 
 | Method | Path | Operation |

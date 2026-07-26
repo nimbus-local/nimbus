@@ -158,6 +158,29 @@ try_match "/_nimbus/ses/messages captured" "smoke test" \
 section "Lambda"
 try_match "get-function config" '"python3.12"' \
   $CLI lambda get-function --function-name "$PREFIX" --query 'Configuration.Runtime'
+try_match "zip function reports an S3 repository" '"S3"' \
+  $CLI lambda get-function --function-name "$PREFIX" --query 'Code.RepositoryType'
+
+# Container-image function. The image reference lives in the Code block, not in
+# FunctionConfiguration — an empty ImageUri here is what makes the provider plan
+# a change on every run.
+try_match "image function reports an ECR repository" '"ECR"' \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.RepositoryType'
+try_match "image function round-trips image_uri" "$PREFIX:latest" \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.ImageUri'
+try_match "image function resolves a digest" "@sha256:" \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.ResolvedImageUri'
+try_match "image function round-trips image_config" "app.handler" \
+  $CLI lambda get-function --function-name "$PREFIX-image" \
+  --query 'Configuration.ImageConfigResponse.ImageConfig.Command'
+try_match "image function keeps ephemeral storage" "1024" \
+  $CLI lambda get-function --function-name "$PREFIX-image" \
+  --query 'Configuration.EphemeralStorage.Size'
+# Creating an Image function without a reference is rejected rather than stored
+# as a function that could never run.
+try_fail "create-function Image without image-uri is rejected" \
+  $CLI lambda create-function --function-name "$PREFIX-no-image" \
+  --package-type Image --role arn:aws:iam::000000000000:role/lambda-exec
 
 # ── API Gateway ───────────────────────────────────────────────────────────────
 
@@ -545,6 +568,16 @@ try_match "describe-log-groups finds group" "/nimbus/$PREFIX/app" \
   $CLI logs describe-log-groups \
     --log-group-name-prefix "/nimbus/$PREFIX" \
     --query "logGroups[].logGroupName" --output text
+# Retention and the CMK are set at or after creation and must read back, or the
+# provider sees them as unset on refresh.
+try_match "describe-log-groups reports retention" "14" \
+  $CLI logs describe-log-groups \
+    --log-group-name-prefix "/nimbus/$PREFIX/app" \
+    --query "logGroups[].retentionInDays" --output text
+try_match "describe-log-groups reports kms key" "arn:aws:kms:" \
+  $CLI logs describe-log-groups \
+    --log-group-name-prefix "/nimbus/$PREFIX/app" \
+    --query "logGroups[].kmsKeyId" --output text
 try_match "describe-log-streams finds stream" "container" \
   $CLI logs describe-log-streams \
     --log-group-name "/nimbus/$PREFIX/app" \

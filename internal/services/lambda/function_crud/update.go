@@ -61,7 +61,15 @@ func (s *Service) UpdateCode(w http.ResponseWriter, r *http.Request, name string
 	if len(req.Architectures) > 0 {
 		fn.Architectures = req.Architectures
 	}
-	fn.CodeSize = int64(len(req.ZipFile))
+	if req.ImageUri != "" {
+		// Repointing a function at a new image also re-derives its digest, so a
+		// subsequent read reports the new reference rather than the old one.
+		fn.ImageUri = req.ImageUri
+		fn.PackageType = PackageTypeImage
+		fn.CodeSha256 = imageDigest(req.ImageUri)
+	} else {
+		fn.CodeSize = int64(len(req.ZipFile))
+	}
 	fn.LastModified = time.Now().UTC().Format(time.RFC3339Nano)
 	fn.RevisionId = newRevisionID()
 
@@ -151,6 +159,9 @@ func (s *Service) UpdateConfiguration(w http.ResponseWriter, r *http.Request, na
 	}
 	if req.EphemeralStorage != nil {
 		fn.EphemeralStorage = req.EphemeralStorage
+	}
+	if req.ImageConfig != nil {
+		fn.ImageConfigResponse = &ImageConfigResponse{ImageConfig: req.ImageConfig}
 	}
 	if req.FileSystemConfigs != nil {
 		fn.FileSystemConfigs = req.FileSystemConfigs
