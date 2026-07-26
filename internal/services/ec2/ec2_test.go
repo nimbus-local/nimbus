@@ -198,6 +198,58 @@ func TestCreateSubnet(t *testing.T) {
 	mustContain(t, body, "us-east-1a")
 }
 
+// TestSubnetAZ covers the lookup the ALB service uses to validate that an
+// application load balancer spans two Availability Zones (see alb.New).
+func TestSubnetAZ(t *testing.T) {
+	svc := newSvc()
+
+	w := ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-test&CidrBlock=10.0.1.0%2F24&AvailabilityZone=us-east-1b")
+	subnetID := extractBetween(must200(t, w), "<subnetId>", "</subnetId>")
+
+	az, ok := svc.SubnetAZ(subnetID)
+	if !ok {
+		t.Fatalf("SubnetAZ(%q) reported the subnet as unknown", subnetID)
+	}
+	if az != "us-east-1b" {
+		t.Errorf("SubnetAZ(%q) = %q, want us-east-1b", subnetID, az)
+	}
+}
+
+// TestSubnetAZUnknown: an untracked subnet ID must report not-found rather than
+// a zero-value AZ, so the ALB service can fall back instead of counting "" as a
+// distinct zone.
+func TestSubnetAZUnknown(t *testing.T) {
+	svc := newSvc()
+	az, ok := svc.SubnetAZ("subnet-00000000000000001")
+	if ok {
+		t.Errorf("SubnetAZ reported an untracked subnet as known (az=%q)", az)
+	}
+	if az != "" {
+		t.Errorf("SubnetAZ returned az=%q for an untracked subnet, want empty", az)
+	}
+}
+
+// TestSubnetAZDefaultsToZoneA: CreateSubnet without an explicit AvailabilityZone
+// falls back to <region>a. Two such subnets therefore share a zone, which is why
+// the Terraform fixture pins its subnets to distinct AZs explicitly.
+func TestSubnetAZDefaultsToZoneA(t *testing.T) {
+	svc := newSvc()
+
+	first := ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-test&CidrBlock=10.0.1.0%2F24")
+	second := ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-test&CidrBlock=10.0.2.0%2F24")
+	firstID := extractBetween(must200(t, first), "<subnetId>", "</subnetId>")
+	secondID := extractBetween(must200(t, second), "<subnetId>", "</subnetId>")
+
+	firstAZ, ok1 := svc.SubnetAZ(firstID)
+	secondAZ, ok2 := svc.SubnetAZ(secondID)
+	if !ok1 || !ok2 {
+		t.Fatalf("both subnets should be tracked, got ok=%v,%v", ok1, ok2)
+	}
+	if firstAZ != "us-east-1a" || secondAZ != "us-east-1a" {
+		t.Errorf("expected both to default to us-east-1a, got %q and %q", firstAZ, secondAZ)
+	}
+}
+
 func TestDescribeSubnetsStoredSubnet(t *testing.T) {
 	svc := newSvc()
 	w := ec2Req(t, svc, "Action=CreateSubnet&VpcId=vpc-test&CidrBlock=10.0.2.0%2F24&AvailabilityZone=us-east-1b")

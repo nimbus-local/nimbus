@@ -58,6 +58,20 @@ try_fail() {
   fi
 }
 
+# try_fail_match passes when the command exits non-zero *and* its output matches
+# the pattern — use it where a bare try_fail could pass on an unrelated error.
+try_fail_match() {
+  local label="$1" pattern="$2"; shift 2
+  local out
+  if out=$("$@" 2>&1); then
+    fail "$label" "command unexpectedly succeeded"
+  elif echo "$out" | grep -q "$pattern"; then
+    ok "$label"
+  else
+    fail "$label" "expected '$pattern', got: $(echo "$out" | head -1)"
+  fi
+}
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 echo "=== Nimbus smoke test  $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
@@ -777,6 +791,16 @@ if [ -n "${LB_ARN:-}" ] && [ "$LB_ARN" != "None" ]; then
   try_match "describe-load-balancer-attributes" "deletion_protection.enabled" \
     $CLI elbv2 describe-load-balancer-attributes --load-balancer-arn "$LB_ARN" \
       --query "Attributes[].Key" --output text
+  # The TF fixture wires the LB to real subnets in two AZs; assert the resolved
+  # zones came back rather than relying on `terraform apply` not having failed.
+  LB_AZ_COUNT=$($CLI elbv2 describe-load-balancers --load-balancer-arns "$LB_ARN" \
+    --query "LoadBalancers[0].AvailabilityZones[].ZoneName" --output text 2>/dev/null \
+    | tr '\t' '\n' | sort -u | grep -c .)
+  if [ "${LB_AZ_COUNT:-0}" -ge 2 ]; then
+    ok "TF-provisioned LB spans $LB_AZ_COUNT Availability Zones"
+  else
+    fail "TF-provisioned LB spans >=2 AZs" "found ${LB_AZ_COUNT:-0} distinct zone(s)"
+  fi
 else
   fail "describe-load-balancers (LB not found — run 'make apply' first)"
   LB_ARN=""
@@ -833,6 +857,18 @@ try "create multi-AZ load-balancer" \
 try_fail "single-subnet load-balancer rejected" \
   $CLI elbv2 create-load-balancer --name "${PREFIX}-singleaz" --type application \
     --subnets subnet-0000000000000000a
+# The two checks above use synthetic IDs, which exercise the fallback path where
+# an unknown subnet is treated as its own zone. This one uses a real subnet from
+# the EC2 store twice, so rejection has to come from the SubnetAZ lookup.
+REAL_SUBNET=$($CLI ec2 describe-subnets --query "Subnets[0].SubnetId" --output text 2>/dev/null)
+if [ -n "${REAL_SUBNET:-}" ] && [ "$REAL_SUBNET" != "None" ]; then
+  try_fail_match "same store-backed subnet twice rejected" \
+    "two different Availability Zones" \
+    $CLI elbv2 create-load-balancer --name "${PREFIX}-dupsubnet" --type application \
+      --subnets "$REAL_SUBNET" "$REAL_SUBNET"
+else
+  fail "same store-backed subnet twice rejected" "no subnet found in the EC2 store"
+fi
 $CLI elbv2 delete-load-balancer --load-balancer-arn \
   "$($CLI elbv2 describe-load-balancers --names "${PREFIX}-multiaz" \
     --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null)" 2>/dev/null || true
