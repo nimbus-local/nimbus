@@ -38,11 +38,29 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s |
-| UpdateService | Updates `desiredCount` and/or `taskDefinition` |
+| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s; `loadBalancers` are validated (see below) and stored |
+| UpdateService | Updates `desiredCount`, `taskDefinition` and/or `loadBalancers`; load balancers are validated against the task definition set by the same call |
 | DeleteService | Removes service; `desiredCount` and `runningCount` set to 0 |
-| DescribeServices | Filterable by cluster; accepts name or ARN |
+| DescribeServices | Filterable by cluster; accepts name or ARN; reports `loadBalancers` (empty list when none) |
 | ListServices | Returns all service ARNs for the given cluster |
+
+## Load balancer validation
+
+Each `loadBalancers` entry passed to `CreateService`/`UpdateService` must line up with
+the task definition, exactly as real ECS requires:
+
+| Condition | Response |
+|-----------|----------|
+| `containerName` is not a container in the task definition | 400 `InvalidParameterException: The container {name} does not exist in the task definition.` |
+| The container declares no `portMappings` entry with that `containerPort` | 400 `InvalidParameterException: The container {name} did not have a container port {port} defined.` |
+
+Without this check a Terraform config that attaches a target group to a container with
+no matching `portMappings` applies cleanly against Nimbus and then fails on the first
+real AWS deploy.
+
+Nimbus does **not** verify that the `targetGroupArn` exists, and does not register task
+IPs as ALB targets — the load balancer set is stored verbatim and echoed back by
+`DescribeServices` so the Terraform provider sees no drift.
 
 ### Tags
 
@@ -104,6 +122,16 @@ nimbuslocal ecs create-service \
   --task-definition my-app \
   --desired-count 3 \
   --launch-type FARGATE
+
+# Create a service behind a target group — containerName/containerPort must match
+# a portMappings entry in the task definition, or the call is rejected
+nimbuslocal ecs create-service \
+  --cluster staging \
+  --service-name my-lb-service \
+  --task-definition my-app \
+  --desired-count 2 \
+  --launch-type FARGATE \
+  --load-balancers "targetGroupArn=$TG_ARN,containerName=app,containerPort=80"
 
 # List services
 nimbuslocal ecs list-services --cluster staging

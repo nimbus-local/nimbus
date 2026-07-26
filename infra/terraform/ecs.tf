@@ -32,4 +32,14 @@ resource "aws_ecs_service" "nimbus_test" {
   network_configuration {
     subnets = ["subnet-00000000000000001"]
   }
+
+  # container_name/container_port must match a portMappings entry on the "app"
+  # container above — Nimbus rejects CreateService otherwise, as real ECS does.
+  load_balancer {
+    target_group_arn = aws_lb_target_group.nimbus_test.arn
+    container_name   = "app"
+    container_port   = 80
+  }
+
+  depends_on = [aws_lb_listener.nimbus_test]
 }

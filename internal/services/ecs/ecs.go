@@ -78,16 +78,27 @@ type ecsTask struct {
 }
 
 type ecsService struct {
-	name         string
-	arn          string
-	clusterArn   string
-	taskDefArn   string
-	desiredCount int
-	runningCount int
-	pendingCount int
-	launchType   string
-	status       string
-	createdAt    time.Time
+	name          string
+	arn           string
+	clusterArn    string
+	taskDefArn    string
+	desiredCount  int
+	runningCount  int
+	pendingCount  int
+	launchType    string
+	status        string
+	loadBalancers []loadBalancer
+	createdAt     time.Time
+}
+
+// loadBalancer is one entry of a service's loadBalancers block. Nimbus does not
+// verify that the target group or load balancer exists, but it does validate
+// containerName/containerPort against the task definition the way real ECS does.
+type loadBalancer struct {
+	TargetGroupArn   string `json:"targetGroupArn,omitempty"`
+	LoadBalancerName string `json:"loadBalancerName,omitempty"`
+	ContainerName    string `json:"containerName"`
+	ContainerPort    int    `json:"containerPort"`
 }
 
 func New(region string) *Service {
@@ -622,11 +633,12 @@ func (s *Service) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Cluster        string `json:"cluster"`
-		ServiceName    string `json:"serviceName"`
-		TaskDefinition string `json:"taskDefinition"`
-		DesiredCount   int    `json:"desiredCount"`
-		LaunchType     string `json:"launchType"`
+		Cluster        string         `json:"cluster"`
+		ServiceName    string         `json:"serviceName"`
+		TaskDefinition string         `json:"taskDefinition"`
+		DesiredCount   int            `json:"desiredCount"`
+		LaunchType     string         `json:"launchType"`
+		LoadBalancers  []loadBalancer `json:"loadBalancers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ServiceName == "" {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "serviceName is required")
@@ -652,18 +664,24 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task definition not found")
 		return
 	}
+	if err := validateLoadBalancers(req.LoadBalancers, td); err != nil {
+		s.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
 
 	svc := &ecsService{
-		name:         req.ServiceName,
-		arn:          s.serviceARN(c.name, req.ServiceName),
-		clusterArn:   c.arn,
-		taskDefArn:   td.arn,
-		desiredCount: req.DesiredCount,
-		runningCount: 0, // updated by reconciler (Docker) or createTaskRecord (simulation)
-		pendingCount: 0,
-		launchType:   req.LaunchType,
-		status:       "ACTIVE",
-		createdAt:    time.Now().UTC(),
+		name:          req.ServiceName,
+		arn:           s.serviceARN(c.name, req.ServiceName),
+		clusterArn:    c.arn,
+		taskDefArn:    td.arn,
+		desiredCount:  req.DesiredCount,
+		runningCount:  0, // updated by reconciler (Docker) or createTaskRecord (simulation)
+		pendingCount:  0,
+		launchType:    req.LaunchType,
+		status:        "ACTIVE",
+		loadBalancers: req.LoadBalancers,
+		createdAt:     time.Now().UTC(),
 	}
 	s.services[svc.arn] = svc
 	c.activeServicesCount++
@@ -693,12 +711,53 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": meta})
 }
 
+// validateLoadBalancers mirrors the check real ECS performs on the
+// loadBalancers block of CreateService/UpdateService: every entry must name a
+// container that exists in the task definition, and that container must declare
+// the requested port in its portMappings. Rejecting here surfaces the mismatch
+// locally instead of on the first deploy to real AWS.
+func validateLoadBalancers(lbs []loadBalancer, td *taskDef) error {
+	if len(lbs) == 0 {
+		return nil
+	}
+
+	// container name → set of ports declared in its portMappings
+	declared := make(map[string]map[int]bool, len(td.containerDefinitions))
+	for _, raw := range td.containerDefinitions {
+		var def struct {
+			Name         string        `json:"name"`
+			PortMappings []portMapping `json:"portMappings"`
+		}
+		if err := json.Unmarshal(raw, &def); err != nil || def.Name == "" {
+			continue
+		}
+		ports := make(map[int]bool, len(def.PortMappings))
+		for _, pm := range def.PortMappings {
+			ports[pm.ContainerPort] = true
+		}
+		declared[def.Name] = ports
+	}
+
+	for _, lb := range lbs {
+		ports, ok := declared[lb.ContainerName]
+		if !ok {
+			return fmt.Errorf("The container %s does not exist in the task definition.", lb.ContainerName)
+		}
+		if !ports[lb.ContainerPort] {
+			return fmt.Errorf("The container %s did not have a container port %d defined.",
+				lb.ContainerName, lb.ContainerPort)
+		}
+	}
+	return nil
+}
+
 func (s *Service) updateService(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Cluster        string `json:"cluster"`
-		Service        string `json:"service"`
-		TaskDefinition string `json:"taskDefinition"`
-		DesiredCount   *int   `json:"desiredCount"`
+		Cluster        string          `json:"cluster"`
+		Service        string          `json:"service"`
+		TaskDefinition string          `json:"taskDefinition"`
+		DesiredCount   *int            `json:"desiredCount"`
+		LoadBalancers  *[]loadBalancer `json:"loadBalancers"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -715,15 +774,32 @@ func (s *Service) updateService(w http.ResponseWriter, r *http.Request) {
 			svc.taskDefArn = td.arn
 		}
 	}
+	// Validate against the effective task definition — the one just set, if the
+	// same call changed it.
+	if req.LoadBalancers != nil {
+		td, ok := s.resolveTaskDef(svc.taskDefArn)
+		if !ok {
+			s.mu.Unlock()
+			jsonError(w, http.StatusBadRequest, "InvalidParameterException", "task definition not found")
+			return
+		}
+		if err := validateLoadBalancers(*req.LoadBalancers, td); err != nil {
+			s.mu.Unlock()
+			jsonError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+			return
+		}
+		svc.loadBalancers = *req.LoadBalancers
+	}
 	if req.DesiredCount != nil {
 		svc.desiredCount = *req.DesiredCount
 		if !s.dockerAvail {
 			svc.runningCount = *req.DesiredCount // simulation only
 		}
 	}
+	meta := serviceMeta(svc)
 	s.mu.Unlock()
 
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": meta})
 }
 
 func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -734,6 +810,7 @@ func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.Lock()
+	var meta map[string]interface{}
 	svc, ok := s.resolveService(req.Cluster, req.Service)
 	if ok {
 		svc.status = "INACTIVE"
@@ -744,6 +821,7 @@ func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
 		if c, cok := s.resolveCluster(req.Cluster); cok {
 			c.activeServicesCount--
 		}
+		meta = serviceMeta(svc)
 	}
 	s.mu.Unlock()
 
@@ -751,7 +829,7 @@ func (s *Service) deleteService(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "ServiceNotFoundException", "service not found")
 		return
 	}
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": serviceMeta(svc)})
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"service": meta})
 }
 
 func (s *Service) describeServices(w http.ResponseWriter, r *http.Request) {
@@ -1024,6 +1102,10 @@ func taskMeta(t *ecsTask) map[string]interface{} {
 }
 
 func serviceMeta(svc *ecsService) map[string]interface{} {
+	lbs := svc.loadBalancers
+	if lbs == nil {
+		lbs = []loadBalancer{}
+	}
 	return map[string]interface{}{
 		"serviceArn":     svc.arn,
 		"serviceName":    svc.name,
@@ -1034,6 +1116,7 @@ func serviceMeta(svc *ecsService) map[string]interface{} {
 		"pendingCount":   svc.pendingCount,
 		"launchType":     svc.launchType,
 		"status":         svc.status,
+		"loadBalancers":  lbs,
 		"createdAt":      float64(svc.createdAt.Unix()),
 		"deployments":    []interface{}{},
 		"events":         []interface{}{},

@@ -560,6 +560,31 @@ else
   fail "run-task"
 fi
 
+# Service load balancers — the Terraform service attaches the target group to the
+# "app" container on port 80, which matches the task definition's portMappings.
+try_match "describe-services reports load balancer" "targetgroup/$PREFIX" \
+  $CLI ecs describe-services --cluster "$PREFIX" --services "$PREFIX" \
+    --query 'services[0].loadBalancers[0].targetGroupArn' --output text
+
+ECS_TG_ARN=$($CLI elbv2 describe-target-groups --names "$PREFIX" \
+  --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
+if [ -n "${ECS_TG_ARN:-}" ] && [ "$ECS_TG_ARN" != "None" ]; then
+  # containerPort must be declared in the container's portMappings...
+  try_fail_match "create-service rejects undefined container port" \
+    "did not have a container port 8080 defined" \
+    $CLI ecs create-service --cluster "$PREFIX" --service-name "${PREFIX}-badport" \
+      --task-definition "$PREFIX" --desired-count 1 --launch-type FARGATE \
+      --load-balancers "targetGroupArn=$ECS_TG_ARN,containerName=app,containerPort=8080"
+  # ...and containerName must exist in the task definition
+  try_fail_match "create-service rejects unknown container name" \
+    "does not exist in the task definition" \
+    $CLI ecs create-service --cluster "$PREFIX" --service-name "${PREFIX}-badname" \
+      --task-definition "$PREFIX" --desired-count 1 --launch-type FARGATE \
+      --load-balancers "targetGroupArn=$ECS_TG_ARN,containerName=nope,containerPort=80"
+else
+  fail "describe-target-groups for ECS load balancer checks (run 'make apply' first)"
+fi
+
 # ── KMS ───────────────────────────────────────────────────────────────────────
 
 section "KMS"
