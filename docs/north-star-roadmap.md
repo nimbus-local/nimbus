@@ -129,7 +129,7 @@ ship output to Nimbus instead of real CloudWatch.
 
 | Work item | Status |
 |-----------|--------|
-| `GetLogEvents` / `FilterLogEvents` — basic pattern filter | ✅ |
+| `GetLogEvents` / `FilterLogEvents` — JSON, space-delimited, and term filter patterns | ✅ |
 | `/_nimbus/logs/{group}/{stream}` inspection endpoint | ✅ |
 
 ---

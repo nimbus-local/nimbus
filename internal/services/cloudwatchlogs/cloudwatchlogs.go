@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -490,7 +491,7 @@ func (s *Service) getLogEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events := filterEvents(st.events, req.StartTime, req.EndTime, "", req.Limit)
+	events := filterEvents(st.events, req.StartTime, req.EndTime, nil, req.Limit)
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"events":            toOutputEvents(events),
 		"nextForwardToken":  "f/0",
@@ -508,6 +509,13 @@ func (s *Service) filterLogEvents(w http.ResponseWriter, r *http.Request) {
 		Limit          int      `json:"limit"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
+
+	match, err := compileFilterPattern(req.FilterPattern)
+	if err != nil {
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
+			fmt.Sprintf("Invalid filter pattern %q: %v", req.FilterPattern, err))
+		return
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -537,9 +545,9 @@ func (s *Service) filterLogEvents(w http.ResponseWriter, r *http.Request) {
 		IngestionTime int64  `json:"ingestionTime"`
 		EventId       string `json:"eventId"`
 	}
-	var results []filteredEvent
+	results := []filteredEvent{} // an empty match is "events": [], never null
 	for streamName, st := range streams {
-		for _, e := range filterEvents(st.events, req.StartTime, req.EndTime, req.FilterPattern, 0) {
+		for _, e := range filterEvents(st.events, req.StartTime, req.EndTime, match, 0) {
 			results = append(results, filteredEvent{
 				LogStreamName: streamName,
 				Timestamp:     e.timestamp,
@@ -549,6 +557,10 @@ func (s *Service) filterLogEvents(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// AWS interleaves the streams by time. Sorting also makes `limit` cut the
+	// oldest slice of the matches rather than an arbitrary one — streams are
+	// walked in map order.
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Timestamp < results[j].Timestamp })
 	if req.Limit > 0 && len(results) > req.Limit {
 		results = results[:req.Limit]
 	}
@@ -559,7 +571,8 @@ func (s *Service) filterLogEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // filterEvents applies time-range and pattern filters to a slice of events.
-func filterEvents(events []logEvent, start, end int64, pattern string, limit int) []logEvent {
+// A nil match keeps every event in range.
+func filterEvents(events []logEvent, start, end int64, match matcher, limit int) []logEvent {
 	var out []logEvent
 	for _, e := range events {
 		if start > 0 && e.timestamp < start {
@@ -568,7 +581,7 @@ func filterEvents(events []logEvent, start, end int64, pattern string, limit int
 		if end > 0 && e.timestamp > end {
 			continue
 		}
-		if pattern != "" && !strings.Contains(e.message, pattern) {
+		if match != nil && !match(e.message) {
 			continue
 		}
 		out = append(out, e)
