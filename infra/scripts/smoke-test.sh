@@ -552,9 +552,15 @@ TASK_ARN=$($CLI ecs run-task \
   --cluster "$PREFIX" --task-definition "$PREFIX" --count 1 \
   --query 'tasks[0].taskArn' --output text 2>/dev/null)
 if [ -n "${TASK_ARN:-}" ] && [ "$TASK_ARN" != "None" ]; then
-  try "run-task RUNNING" \
-    $CLI ecs describe-tasks --cluster "$PREFIX" --tasks "$TASK_ARN" \
-      --query 'tasks[0].lastStatus' --output text | grep -q RUNNING
+  # With Docker reachable a task starts PENDING and flips to RUNNING once its
+  # container is up; the lifecycle poller runs every 5 s (wait max ~30 s).
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    TASK_STATUS=$($CLI ecs describe-tasks --cluster "$PREFIX" --tasks "$TASK_ARN" \
+      --query 'tasks[0].lastStatus' --output text 2>/dev/null)
+    [ "$TASK_STATUS" != "PENDING" ] && break
+    sleep 2
+  done
+  try_match "run-task RUNNING" "RUNNING" echo "$TASK_STATUS"
   try "stop-task" $CLI ecs stop-task --cluster "$PREFIX" --task "$TASK_ARN"
 else
   fail "run-task"
