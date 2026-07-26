@@ -10,10 +10,11 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateCluster | Creates cluster; returns existing cluster silently if name already exists |
+| CreateCluster | Creates cluster; returns existing cluster silently if name already exists; `settings` are stored (see [Container Insights](#container-insights)) |
 | DeleteCluster | Removes cluster by name or ARN |
-| DescribeClusters | Optionally filtered by name/ARN list; returns `[]` for unknowns |
+| DescribeClusters | Optionally filtered by name/ARN list; returns `[]` for unknowns; echoes `settings` |
 | ListClusters | Returns all cluster ARNs |
+| UpdateClusterSettings | Merges the `settings` block into the cluster; `UpdateCluster` is accepted as an alias |
 
 ### Task Definitions
 
@@ -70,6 +71,67 @@ IPs as ALB targets — the load balancer set is stored verbatim and echoed back 
 | UntagResource | Removes tags by key |
 | ListTagsForResource | Returns all tags for the given ARN |
 
+## Container Insights
+
+A cluster created with `containerInsights` set to `enabled` (or `enhanced`) publishes
+performance events to CloudWatch Logs, the same way real ECS does:
+
+```
+/aws/ecs/containerinsights/{cluster}/performance
+```
+
+The group is created with the cluster's first task — an enabled cluster sitting idle
+produces no group, and tasks that have STOPPED are not reported on. One event is
+published per entity per interval, into these streams:
+
+| Stream | Event `Type` | Per |
+|--------|--------------|-----|
+| `ClusterTelemetry-{cluster}` | `Cluster` | cluster — `TaskCount`, `ServiceCount`, `ContainerInstanceCount` |
+| `ServiceTelemetry-{service}` | `Service` | ACTIVE service — `DesiredTaskCount`, `RunningTaskCount`, `PendingTaskCount` |
+| `FargateTelemetry-{n}` | `Task` and `Container` | task — `n` is derived from the task ARN, so it is stable for the task's life |
+
+`Task` events carry `TaskId` (32-hex, not the dashed ARN UUID), `ClusterName`,
+`ServiceName` (omitted for a standalone `RunTask` task, as in real ECS), `KnownStatus`,
+`CpuUtilized`/`CpuReserved` (CPU units), `MemoryUtilized`/`MemoryReserved` (MB), network
+and storage counters, ephemeral storage, and a minute-aligned epoch-ms `Timestamp`.
+Each event also carries the `CloudWatchMetrics` embedded-metric-format block real ECS
+attaches — except `Container` events, which have none.
+
+### Cadence and delay
+
+Real events describe a minute that has already passed and land about 80 s later.
+Nimbus reproduces that: an event stamped `12:02:00` is published at `12:03:20`, so a
+reader tailing the group sees the same lag it would in AWS rather than instant data.
+Intervals missed while the process was blocked are skipped, not backfilled.
+
+After a restart or `/_nimbus/reset` the first round is published on the emitter's next
+tick rather than a full interval later, so local work is not held up waiting for the
+group to appear. Every event still carries the backdated timestamp described above.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `NIMBUS_ECS_INSIGHTS_INTERVAL` | `1m` | Publishing cadence; event timestamps are aligned to it |
+| `NIMBUS_ECS_INSIGHTS_DELAY` | `80s` | How far behind wall clock the published interval sits |
+
+Shorten both to exercise a reader without waiting on real-world timing.
+
+### Synthetic values
+
+Nimbus does no cgroup accounting, so utilisation is synthesized: a bounded random walk
+per container, kept inside what the task definition reserves, summed into the task's
+figure. Matching the real events, `NetworkRxPackets`/`NetworkTxPackets` are cumulative
+counters that only grow, while the `*Bytes` fields are per-second rates that rise and
+fall. Reservations are real — they come from the task definition's `cpu`/`memory`, or a
+container definition's own values when it sets them.
+
+Events are ordinary log events, so the usual API reads them:
+
+```bash
+nimbuslocal logs filter-log-events \
+  --log-group-name /aws/ecs/containerinsights/staging/performance \
+  --filter-pattern '{ $.Type = "Task" && $.CpuUtilized > 0 }'
+```
+
 ## Inspection endpoints
 
 | Endpoint | Description |
@@ -101,6 +163,14 @@ nimbuslocal ecs list-task-definitions
 
 # Create a cluster
 nimbuslocal ecs create-cluster --cluster-name staging
+
+# Create a cluster that publishes Container Insights performance events
+nimbuslocal ecs create-cluster --cluster-name staging \
+  --settings name=containerInsights,value=enabled
+
+# Turn Container Insights on for a cluster that already exists
+nimbuslocal ecs update-cluster-settings --cluster staging \
+  --settings name=containerInsights,value=enabled
 
 # Run a task
 nimbuslocal ecs run-task \

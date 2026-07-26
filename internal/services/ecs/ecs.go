@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,13 @@ type Service struct {
 	region      string
 	dockerAvail bool   // true → shell out to docker CLI; false → simulate
 	networkName string // Docker network to attach containers to
+
+	// Container Insights performance events — see insights.go.
+	insights         InsightsSink
+	insightsInterval time.Duration
+	insightsDelay    time.Duration
+	lastInsightsSlot time.Time
+	insightsCounters map[string]*containerCounters // "taskArn/container" -> synthetic state
 }
 
 type cluster struct {
@@ -43,7 +51,16 @@ type cluster struct {
 	runningTasksCount   int
 	pendingTasksCount   int
 	activeServicesCount int
+	settings            map[string]string // setting name -> value; see clusterSetting
 	createdAt           time.Time
+}
+
+// clusterSetting is one entry of a cluster's settings block. Nimbus stores every
+// setting so it reads back on DescribeClusters, but only containerInsights
+// changes behaviour: see insights.go.
+type clusterSetting struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type taskDef struct {
@@ -110,14 +127,17 @@ func New(region string) *Service {
 		network = "nimbus-net"
 	}
 	s := &Service{
-		region:      region,
-		networkName: network,
-		clusters:    map[string]*cluster{},
-		taskDefs:    map[string]*taskDef{},
-		taskFams:    map[string]int{},
-		tasks:       map[string]*ecsTask{},
-		services:    map[string]*ecsService{},
-		tags:        map[string]map[string]string{},
+		region:           region,
+		networkName:      network,
+		clusters:         map[string]*cluster{},
+		taskDefs:         map[string]*taskDef{},
+		taskFams:         map[string]int{},
+		tasks:            map[string]*ecsTask{},
+		services:         map[string]*ecsService{},
+		tags:             map[string]map[string]string{},
+		insightsInterval: durationFromEnv("NIMBUS_ECS_INSIGHTS_INTERVAL", defaultInsightsInterval),
+		insightsDelay:    durationFromEnv("NIMBUS_ECS_INSIGHTS_DELAY", defaultInsightsDelay),
+		insightsCounters: map[string]*containerCounters{},
 	}
 	s.makeCluster("default")
 	s.dockerAvail = initDocker()
@@ -140,6 +160,8 @@ func (s *Service) Reset() {
 	s.tasks = map[string]*ecsTask{}
 	s.services = map[string]*ecsService{}
 	s.tags = map[string]map[string]string{}
+	s.insightsCounters = map[string]*containerCounters{}
+	s.lastInsightsSlot = time.Time{}
 	s.makeCluster("default")
 }
 
@@ -159,6 +181,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.describeClusters(w, r)
 	case "ListClusters":
 		s.listClusters(w, r)
+	case "UpdateClusterSettings", "UpdateCluster":
+		s.updateClusterSettings(w, r)
 	// Task definitions
 	case "RegisterTaskDefinition":
 		s.registerTaskDefinition(w, r)
@@ -210,6 +234,7 @@ func (s *Service) makeCluster(name string) *cluster {
 		name:      name,
 		arn:       s.clusterARN(name),
 		status:    "ACTIVE",
+		settings:  map[string]string{},
 		createdAt: time.Now().UTC(),
 	}
 	s.clusters[name] = c
@@ -220,6 +245,7 @@ func (s *Service) createCluster(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClusterName string              `json:"clusterName"`
 		Tags        []map[string]string `json:"tags"`
+		Settings    []clusterSetting    `json:"settings"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.ClusterName == "" {
@@ -233,10 +259,42 @@ func (s *Service) createCluster(w http.ResponseWriter, r *http.Request) {
 		for _, t := range req.Tags {
 			s.setTag(c.arn, t["key"], t["value"])
 		}
+		for _, st := range req.Settings {
+			c.settings[st.Name] = st.Value
+		}
+	}
+	meta := clusterMeta(c)
+	s.mu.Unlock()
+
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": meta})
+}
+
+// updateClusterSettings serves both UpdateClusterSettings and UpdateCluster.
+// Terraform reaches for one or the other depending on which attribute of
+// aws_ecs_cluster changed, and both carry the same settings block.
+func (s *Service) updateClusterSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cluster  string           `json:"cluster"`
+		Settings []clusterSetting `json:"settings"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	c, ok := s.resolveCluster(req.Cluster)
+	var meta map[string]interface{}
+	if ok {
+		for _, st := range req.Settings {
+			c.settings[st.Name] = st.Value
+		}
+		meta = clusterMeta(c)
 	}
 	s.mu.Unlock()
 
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": clusterMeta(c)})
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "ClusterNotFoundException", "cluster not found")
+		return
+	}
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": meta})
 }
 
 func (s *Service) deleteCluster(w http.ResponseWriter, r *http.Request) {
@@ -247,8 +305,10 @@ func (s *Service) deleteCluster(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	c, ok := s.resolveCluster(req.Cluster)
+	var meta map[string]interface{}
 	if ok {
 		delete(s.clusters, c.name)
+		meta = clusterMeta(c)
 	}
 	s.mu.Unlock()
 
@@ -256,7 +316,7 @@ func (s *Service) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "ClusterNotFoundException", "Cluster not found")
 		return
 	}
-	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": clusterMeta(c)})
+	jsonWrite(w, http.StatusOK, map[string]interface{}{"cluster": meta})
 }
 
 func (s *Service) describeClusters(w http.ResponseWriter, r *http.Request) {
@@ -1045,7 +1105,15 @@ func (s *Service) setTag(arn, key, value string) {
 
 // --- Metadata serialisers ---
 
+// clusterMeta serialises a cluster. Caller must hold s.mu — the settings map is
+// shared with the cluster record.
 func clusterMeta(c *cluster) map[string]interface{} {
+	settings := make([]clusterSetting, 0, len(c.settings))
+	for name, value := range c.settings {
+		settings = append(settings, clusterSetting{Name: name, Value: value})
+	}
+	sort.Slice(settings, func(i, j int) bool { return settings[i].Name < settings[j].Name })
+
 	return map[string]interface{}{
 		"clusterArn":                     c.arn,
 		"clusterName":                    c.name,
@@ -1054,6 +1122,7 @@ func clusterMeta(c *cluster) map[string]interface{} {
 		"pendingTasksCount":              c.pendingTasksCount,
 		"activeServicesCount":            c.activeServicesCount,
 		"registeredTaskDefinitionsCount": 0,
+		"settings":                       settings,
 	}
 }
 

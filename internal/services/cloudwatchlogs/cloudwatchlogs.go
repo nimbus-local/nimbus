@@ -79,6 +79,38 @@ func (s *Service) Ingest(group, stream string, messages []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	st := s.ensureStream(group, stream)
+	now := nowMS()
+	for _, msg := range messages {
+		st.events = append(st.events, logEvent{timestamp: now, message: msg})
+	}
+	st.recordIngestion(now, now)
+}
+
+// IngestAt appends a single event that carries its own event time, creating the
+// group and stream if they do not exist.
+//
+// Ingest stamps messages with the current time because a process writing to
+// stdout reports none. A caller synthesizing an event for a past interval —
+// ECS Container Insights publishes each minute's performance sample over a
+// minute later — does know the event time, and collapsing it onto the ingestion
+// time would hide the delay that readers of the real service see.
+func (s *Service) IngestAt(group, stream string, timestampMS int64, message string) {
+	if group == "" || stream == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := s.ensureStream(group, stream)
+	st.events = append(st.events, logEvent{timestamp: timestampMS, message: message})
+	st.recordIngestion(timestampMS, nowMS())
+}
+
+// ensureStream returns the named stream, creating the group and/or the stream
+// if either is absent. Caller must hold s.mu for writing.
+func (s *Service) ensureStream(group, stream string) *logStream {
 	g, ok := s.groups[group]
 	if !ok {
 		g = &logGroup{
@@ -100,18 +132,21 @@ func (s *Service) Ingest(group, stream string, messages []string) {
 		}
 		g.streams[stream] = st
 	}
+	return st
+}
 
-	now := nowMS()
-	for _, msg := range messages {
-		st.events = append(st.events, logEvent{timestamp: now, message: msg})
-	}
-	if st.firstEventTimestamp == nil {
-		first := now
+// recordIngestion advances the stream's event-time bounds and ingestion marker,
+// then trims the stream to maxEvents. Caller must hold s.mu for writing.
+func (st *logStream) recordIngestion(eventTS, ingestionTS int64) {
+	if st.firstEventTimestamp == nil || eventTS < *st.firstEventTimestamp {
+		first := eventTS
 		st.firstEventTimestamp = &first
 	}
-	last := now
-	st.lastEventTimestamp = &last
-	st.lastIngestionTime = &last
+	if st.lastEventTimestamp == nil || eventTS > *st.lastEventTimestamp {
+		last := eventTS
+		st.lastEventTimestamp = &last
+	}
+	st.lastIngestionTime = &ingestionTS
 
 	if len(st.events) > maxEvents {
 		st.events = st.events[len(st.events)-maxEvents:]

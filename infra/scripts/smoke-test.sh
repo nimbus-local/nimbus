@@ -48,6 +48,20 @@ try_match() {
   fi
 }
 
+# try_no_match passes when the command succeeds and its output does *not* match —
+# for asserting that a filter left something out.
+try_no_match() {
+  local label="$1" pattern="$2"; shift 2
+  local out
+  if ! out=$("$@" 2>&1); then
+    fail "$label" "command failed: $(echo "$out" | head -1)"
+  elif echo "$out" | grep -q "$pattern"; then
+    fail "$label" "pattern '$pattern' should not be present"
+  else
+    ok "$label"
+  fi
+}
+
 # try_fail passes when the command exits non-zero (expected-error assertions).
 try_fail() {
   local label="$1"; shift
@@ -589,6 +603,62 @@ if [ -n "${ECS_TG_ARN:-}" ] && [ "$ECS_TG_ARN" != "None" ]; then
       --load-balancers "targetGroupArn=$ECS_TG_ARN,containerName=nope,containerPort=80"
 else
   fail "describe-target-groups for ECS load balancer checks (run 'make apply' first)"
+fi
+
+# ── ECS Container Insights ────────────────────────────────────────────────────
+
+# The Terraform cluster sets containerInsights = enabled, so Nimbus publishes
+# performance events to /aws/ecs/containerinsights/<cluster>/performance.
+section "ECS Container Insights"
+try_match "describe-clusters reports containerInsights" "enabled" \
+  $CLI ecs describe-clusters --clusters "$PREFIX" --include SETTINGS \
+    --query "clusters[0].settings[?name=='containerInsights'].value" --output text
+
+CI_GROUP="/aws/ecs/containerinsights/$PREFIX/performance"
+
+# Events describe an interval that has already passed and are published one
+# ingestion delay later (80 s by default), so the first round can be up to
+# ~2.5 min behind a fresh `make nuke`. Normally they are already there.
+CI_EVENTS=""
+for _i in $(seq 1 30); do
+  CI_EVENTS=$($CLI logs filter-log-events --log-group-name "$CI_GROUP" \
+    --query 'events[].message' --output text 2>/dev/null)
+  [ -n "${CI_EVENTS:-}" ] && [ "$CI_EVENTS" != "None" ] && break
+  sleep 5
+done
+
+if [ -n "${CI_EVENTS:-}" ] && [ "$CI_EVENTS" != "None" ]; then
+  ok "performance log group has events"
+  for TYPE in Cluster Service Task Container; do
+    try_match "publishes $TYPE events" "\"Type\":\"$TYPE\"" echo "$CI_EVENTS"
+  done
+  # Utilisation is synthetic but must be reported against what the task
+  # definition reserves — 256 CPU units / 512 MB in the fixture.
+  try_match "Task events report reservations from the task definition" '"CpuReserved":256' \
+    echo "$CI_EVENTS"
+  try_match "Task events carry a 32-hex TaskId" '"TaskId":"[0-9a-f]\{32\}"' echo "$CI_EVENTS"
+
+  # Cluster and per-task telemetry land in separate streams, as in real ECS.
+  try_match "cluster telemetry stream exists" "ClusterTelemetry-$PREFIX" \
+    $CLI logs describe-log-streams --log-group-name "$CI_GROUP" \
+      --query 'logStreams[].logStreamName' --output text
+  try_match "task telemetry stream exists" "FargateTelemetry-" \
+    $CLI logs describe-log-streams --log-group-name "$CI_GROUP" \
+      --query 'logStreams[].logStreamName' --output text
+
+  # The natural server-side filter for this group: a JSON pattern on $.Type.
+  TASK_ONLY=$($CLI logs filter-log-events --log-group-name "$CI_GROUP" \
+    --filter-pattern '{ $.Type = "Task" }' --query 'events[].message' --output text 2>/dev/null)
+  if [ -n "${TASK_ONLY:-}" ] && [ "$TASK_ONLY" != "None" ]; then
+    try_match "JSON filter pattern selects Task events" '"Type":"Task"' echo "$TASK_ONLY"
+    try_no_match "JSON filter pattern excludes other types" '"Type":"Container"' \
+      echo "$TASK_ONLY"
+  else
+    fail "filter-log-events with a JSON pattern on \$.Type"
+  fi
+else
+  fail "performance log group $CI_GROUP has no events" \
+    "waited 150 s; check the ECS emitter and NIMBUS_ECS_INSIGHTS_* settings"
 fi
 
 # ── KMS ───────────────────────────────────────────────────────────────────────

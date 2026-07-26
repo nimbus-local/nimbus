@@ -14,6 +14,11 @@ services:
       NIMBUS_POSTGRES_PORT: "5432"
       NIMBUS_VALKEY_HOST: valkey
       NIMBUS_VALKEY_PORT: "6379"
+      # ECS Container Insights cadence. The defaults mirror real ECS (one round
+      # per minute, published ~80 s later); shorten both to exercise a reader
+      # without waiting on real-world timing.
+      NIMBUS_ECS_INSIGHTS_INTERVAL: ${NIMBUS_ECS_INSIGHTS_INTERVAL:-1m}
+      NIMBUS_ECS_INSIGHTS_DELAY: ${NIMBUS_ECS_INSIGHTS_DELAY:-80s}
     volumes:
       - nimbus_data:/var/lib/nimbus
       - /var/run/docker.sock:/var/run/docker.sock
