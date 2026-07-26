@@ -3,10 +3,11 @@ resource "aws_lb" "nimbus_test" {
   internal           = false
   load_balancer_type = "application"
 
-  # Nimbus does not validate subnet or security-group IDs
+  # Real subnet IDs, spanning two AZs — Nimbus validates that an application
+  # load balancer covers at least two Availability Zones, as real AWS does.
   subnets = [
-    "subnet-00000000000000001",
-    "subnet-00000000000000002",
+    aws_subnet.nimbus_test_public.id,
+    aws_subnet.nimbus_test_private.id,
   ]
 }
 
