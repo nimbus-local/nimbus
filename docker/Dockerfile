@@ -15,8 +15,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o nimbuslocal ./cmd/nimb
 # ---- Final image ----
 FROM alpine:3.19
 
-# Install aws CLI for use with nimbuslocal, and curl for healthcheck
-RUN apk add --no-cache python3 py3-pip curl && \
+# aws CLI for nimbuslocal, curl for the healthcheck, and the docker CLI so the
+# services that run real containers — ECS tasks and container-image Lambda
+# functions — can drive the host daemon through the mounted socket. Without it
+# they silently fall back to simulating.
+RUN apk add --no-cache python3 py3-pip curl docker-cli && \
   pip install awscli --break-system-packages && \
   rm -rf /root/.cache
 

@@ -58,6 +58,18 @@ func (s *Service) FunctionExists(name string) bool {
 	return ok
 }
 
+// Function returns a snapshot of a $LATEST function's configuration. Callers
+// get a copy so they can read it without holding the service lock.
+func (s *Service) Function(name string) (FunctionConfig, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	fn, ok := s.functions[name]
+	if !ok {
+		return FunctionConfig{}, false
+	}
+	return *fn, true
+}
+
 func (s *Service) arn(name string) string {
 	return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.region, s.account, name)
 }

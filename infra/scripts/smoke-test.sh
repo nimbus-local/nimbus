@@ -182,6 +182,75 @@ try_fail "create-function Image without image-uri is rejected" \
   $CLI lambda create-function --function-name "$PREFIX-no-image" \
   --package-type Image --role arn:aws:iam::000000000000:role/lambda-exec
 
+# ── Lambda container execution ────────────────────────────────────────────────
+
+section "Lambda container execution"
+
+if docker info >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    arm64 | aarch64) LAMBDA_ARCH="arm64" ;;
+    *) LAMBDA_ARCH="x86_64" ;;
+  esac
+  FIXTURE_DIR="$(dirname "$0")/fixtures/lambda-image"
+  CONTAINER_FN="$PREFIX-container"
+
+  if docker build -q -t nimbus-smoke-lambda:dev "$FIXTURE_DIR" >/dev/null 2>&1; then
+    ok "build container image fixture"
+
+    $CLI lambda delete-function --function-name "$CONTAINER_FN" >/dev/null 2>&1 || true
+    if $CLI lambda create-function --function-name "$CONTAINER_FN" \
+      --package-type Image \
+      --code ImageUri=nimbus-smoke-lambda:dev \
+      --role arn:aws:iam::000000000000:role/lambda-exec \
+      --architectures "$LAMBDA_ARCH" \
+      --timeout 60 --memory-size 512 \
+      --environment "Variables={NIMBUS_SMOKE_MARKER=container-ok}" >/dev/null 2>&1; then
+      ok "create-function (container image)"
+
+      # First invoke pays the container start; the image ships no runtime
+      # emulator, so this only works if Nimbus injected one.
+      INVOKE_OUT=$(mktemp)
+      if $CLI lambda invoke --function-name "$CONTAINER_FN" \
+        --cli-binary-format raw-in-base64-out \
+        --payload '{"ping":"pong"}' "$INVOKE_OUT" >/dev/null 2>&1; then
+        ok "invoke runs the real container"
+        try_match "handler received the payload" "pong" cat "$INVOKE_OUT"
+        try_match "handler was pointed back at Nimbus" "4566" cat "$INVOKE_OUT"
+        try_match "handler saw its configured environment" "container-ok" cat "$INVOKE_OUT"
+      else
+        fail "invoke runs the real container"
+      fi
+      rm -f "$INVOKE_OUT"
+
+      try_match "/_nimbus/lambda/containers lists the warm container" "$CONTAINER_FN" \
+        curl -sf "$NIMBUS/_nimbus/lambda/containers"
+
+      # Second invoke reuses the warm container rather than starting another.
+      REUSE_OUT=$(mktemp)
+      try "second invoke reuses the warm container" \
+        $CLI lambda invoke --function-name "$CONTAINER_FN" \
+        --cli-binary-format raw-in-base64-out \
+        --payload '{"ping":"again"}' "$REUSE_OUT"
+      rm -f "$REUSE_OUT"
+
+      try "delete-function tears the container down" \
+        $CLI lambda delete-function --function-name "$CONTAINER_FN"
+
+      if curl -sf "$NIMBUS/_nimbus/lambda/containers" | grep -q "$CONTAINER_FN"; then
+        fail "container released on delete-function"
+      else
+        ok "container released on delete-function"
+      fi
+    else
+      fail "create-function (container image)"
+    fi
+  else
+    fail "build container image fixture"
+  fi
+else
+  echo "  – Docker unavailable, skipping container execution checks"
+fi
+
 # ── API Gateway ───────────────────────────────────────────────────────────────
 
 section "API Gateway"

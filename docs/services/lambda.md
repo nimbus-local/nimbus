@@ -1,6 +1,6 @@
 # Lambda
 
-In-memory Lambda emulator. Functions are stored and invoked locally — no Docker-per-function, no execution sandbox. Invocations record the payload and return a configurable mock response.
+In-memory Lambda emulator. Zip functions are stored but never executed: invocations record the payload and return a configurable mock response, or proxy to an endpoint you register. **Container-image functions run for real** — Nimbus starts the image as a Docker container and invokes the handler inside it (see [Container image execution](#container-image-execution)).
 
 Detection: `/2015-03-31/` path prefix.
 
@@ -24,7 +24,7 @@ Detection: `/2015-03-31/` path prefix.
 
 Both `Zip` and `Image` are accepted. `Zip` is the default when `PackageType` is omitted, and requires `Handler` and `Runtime`; `Image` requires `Code.ImageUri` instead and rejects the request without it.
 
-Container-image functions are **metadata only** — Nimbus stores the image reference and any `ImageConfig` overrides, but never pulls or runs the image. Invocation still returns the configured mock response or proxies to a registered endpoint (see below).
+Nimbus stores the image reference and any `ImageConfig` overrides, and runs the image on invoke — see [Container image execution](#container-image-execution).
 
 The image reference is reported the way AWS reports it, in the `Code` block of `GetFunction` rather than in `FunctionConfiguration`:
 
@@ -46,6 +46,66 @@ The image reference is reported the way AWS reports it, in the `Code` block of `
 `ResolvedImageUri` and `CodeSha256` are derived deterministically from the reference — no image is inspected, so the digest is stable and unique per reference but synthetic. A reference that is already digest-pinned is reported unchanged, and a registry port (`localhost:4566/repo`) is never mistaken for a tag.
 
 `UpdateFunctionCode` with an `ImageUri` repoints the function and re-derives the digest.
+
+## Container image execution
+
+Invoking a container-image function starts its image as a real container and runs the handler inside it. It requires a reachable Docker daemon; without one, image functions fall back to the mock response path and a warning is logged at startup.
+
+### Why the runtime emulator is injected
+
+A Lambda container image is **not an HTTP server**. The process inside is a *client* of the Lambda Runtime API: it long-polls `GET $AWS_LAMBDA_RUNTIME_API/2018-06-01/runtime/invocation/next`, runs the handler, and posts the result back. In production AWS supplies the server half. Locally nothing does, so `docker run` on the image alone gives you nothing to call.
+
+Nimbus supplies that half with the AWS Runtime Interface Emulator. It is **not** required in your image — AWS recommends against shipping it in a production image, and Nimbus injects its own copy:
+
+1. `docker create` with `--entrypoint` set to the emulator
+2. `docker cp` the emulator binary into the container
+3. `docker start`
+
+`docker cp` rather than a bind mount is deliberate: Nimbus talks to the *host* daemon, so a `-v` source path resolves against the host filesystem, not Nimbus's own. When Nimbus itself runs in a container, a bind mount silently produces an empty directory.
+
+Because overriding `--entrypoint` discards the image's own, Nimbus recovers it with `docker inspect` and hands it to the emulator as the program to run. `ImageConfig.EntryPoint`/`Command` override that when set, as they do in Lambda.
+
+The emulator binary is downloaded once per architecture and cached under the data directory. Set `NIMBUS_LAMBDA_RIE_PATH` to a local copy for offline environments.
+
+### Configuration mapping
+
+| Function setting | Container behaviour |
+|---|---|
+| `MemorySize` | `--memory` |
+| `EphemeralStorage.Size` | fresh volume mounted at `/tmp` per cold start — disk-backed, so it is not charged against the memory limit the way a tmpfs would be |
+| `Architectures` | `--platform`, and selects the matching emulator build |
+| `Timeout` | bounds the invocation; on expiry the response carries `X-Amz-Function-Error: Unhandled` and a `Function.Timeout` body |
+| `Environment.Variables` | passed with `-e` |
+| `ImageConfig` | entrypoint, command, and working directory overrides |
+
+Containers are reused between invocations, matching how Lambda reuses execution environments, and are torn down on `DeleteFunction`, `/_nimbus/reset`, and shutdown.
+
+### Reaching Nimbus from the handler
+
+Containers join the Docker network in `NIMBUS_DOCKER_NETWORK` (default `nimbus-net`) and receive `AWS_ENDPOINT_URL` pointing back at Nimbus, plus placeholder credentials and a region. An SDK client built with no explicit endpoint therefore talks to Nimbus with no code change. Override the URL with `NIMBUS_LAMBDA_AWS_ENDPOINT`.
+
+Running Nimbus in Docker Compose requires the daemon socket:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+networks:
+  - nimbus-net
+```
+
+### Not emulated
+
+IAM is not enforced and `VpcConfig`, security groups, and subnets are inert. A function's execution role and network restrictions round-trip through the API but place no limits on what the container can reach — a handler runs with whatever access the daemon gives it.
+
+### Inspecting
+
+```bash
+# Container ID backing each warm function
+curl http://localhost:4566/_nimbus/lambda/containers
+
+# Tear every running function container down
+curl -X DELETE http://localhost:4566/_nimbus/lambda/containers
+```
 
 ### Invocations
 

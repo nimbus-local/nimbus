@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/nimbus-local/nimbus/internal/jsonhttp"
@@ -42,9 +43,21 @@ func (s *Service) Invoke(w http.ResponseWriter, r *http.Request, name string) {
 	endpoint := s.liveEndpoints[name]
 	s.mu.Unlock()
 
-	// If a live endpoint is registered, proxy the invocation to it.
+	// If a live endpoint is registered, proxy the invocation to it. An explicit
+	// registration wins over a container: a developer pointing the function at
+	// their own process is being deliberate.
+	var timeout time.Duration
+	if endpoint == "" {
+		target, t, err := s.containerTarget(name)
+		if err != nil {
+			jsonhttp.Error(w, http.StatusBadGateway, "ServiceException", err.Error())
+			return
+		}
+		endpoint, timeout = target, t
+	}
+
 	if endpoint != "" {
-		s.proxyInvoke(w, r, endpoint, invocationType, payload)
+		s.proxyInvoke(w, endpoint, invocationType, payload, timeout)
 		return
 	}
 
@@ -66,14 +79,19 @@ func (s *Service) Invoke(w http.ResponseWriter, r *http.Request, name string) {
 	}
 }
 
-// proxyInvoke forwards an invocation to a live registered endpoint.
+// proxyInvoke forwards an invocation to a live endpoint — either one registered
+// for local development or the runtime emulator inside a function's container.
 // The endpoint receives the raw payload as the POST body and its response is
 // forwarded back verbatim, preserving X-Amz-Function-Error if set.
-func (s *Service) proxyInvoke(w http.ResponseWriter, _ *http.Request, endpoint, invocationType string, payload json.RawMessage) {
+//
+// A non-zero timeout bounds the call the way Lambda's function timeout does.
+func (s *Service) proxyInvoke(w http.ResponseWriter, endpoint, invocationType string, payload json.RawMessage, timeout time.Duration) {
 	if invocationType == "DryRun" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	client := &http.Client{Timeout: timeout}
+
 	if invocationType == "Event" {
 		go func() {
 			req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
@@ -81,7 +99,7 @@ func (s *Service) proxyInvoke(w http.ResponseWriter, _ *http.Request, endpoint, 
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
-			http.DefaultClient.Do(req) //nolint:errcheck
+			client.Do(req) //nolint:errcheck
 		}()
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -96,8 +114,18 @@ func (s *Service) proxyInvoke(w http.ResponseWriter, _ *http.Request, endpoint, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
+		// A timeout is a function failure, not a transport failure — report it
+		// the way Lambda reports one so callers can tell the two apart.
+		if os.IsTimeout(err) {
+			w.Header().Set("X-Amz-Function-Error", "Unhandled")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"errorType":"Function.Timeout","errorMessage":%q}`,
+				fmt.Sprintf("Task timed out after %.2f seconds", timeout.Seconds()))
+			return
+		}
 		jsonhttp.Error(w, http.StatusBadGateway, "ServiceException",
 			fmt.Sprintf("live endpoint unreachable: %v", err))
 		return
