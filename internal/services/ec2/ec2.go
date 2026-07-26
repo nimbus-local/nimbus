@@ -244,7 +244,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.associateRouteTable(w, r)
 	case "DisassociateRouteTable":
 		s.disassociateRouteTable(w, r)
-	// Network interfaces
+	// VPC endpoints
 	case "CreateVpcEndpoint":
 		s.createVpcEndpoint(w, r)
 	case "DescribeVpcEndpoints":
@@ -253,14 +253,14 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.modifyVpcEndpoint(w, r)
 	case "DeleteVpcEndpoints":
 		s.deleteVpcEndpoints(w, r)
-
+	// Prefix lists
 	case "DescribePrefixLists":
 		s.describePrefixLists(w, r)
 	case "DescribeManagedPrefixLists":
 		s.describeManagedPrefixLists(w, r)
 	case "GetManagedPrefixListEntries":
 		s.getManagedPrefixListEntries(w, r)
-
+	// Network interfaces
 	case "DescribeNetworkInterfaces":
 		s.describeNetworkInterfaces(w, r)
 	// Tags
@@ -326,7 +326,7 @@ func (s *Service) createVpc(w http.ResponseWriter, r *http.Request) {
 		state:        "available",
 		dnsSupport:   true,
 		dnsHostnames: false,
-		tags:         parseTags(r),
+		tags:         parseTagSpecTags(r),
 	}
 
 	// Auto-create default security group and main route table for the VPC.
@@ -475,7 +475,7 @@ func (s *Service) createSubnet(w http.ResponseWriter, r *http.Request) {
 		availabilityZoneID:  regionAbbrev(s.region) + "-az1",
 		state:               "available",
 		mapPublicIpOnLaunch: false,
-		tags:                parseTags(r),
+		tags:                parseTagSpecTags(r),
 	}
 
 	s.mu.Lock()
@@ -605,7 +605,7 @@ func (s *Service) createInternetGateway(w http.ResponseWriter, r *http.Request) 
 	id := "igw-" + shortID()
 	igw := &internetGateway{
 		id:   id,
-		tags: parseTags(r),
+		tags: parseTagSpecTags(r),
 	}
 
 	s.mu.Lock()
@@ -776,7 +776,7 @@ func (s *Service) createSecurityGroup(w http.ResponseWriter, r *http.Request) {
 		vpcID:       r.FormValue("VpcId"),
 		name:        r.FormValue("GroupName"),
 		description: r.FormValue("GroupDescription"),
-		tags:        parseTags(r),
+		tags:        parseTagSpecTags(r),
 	}
 
 	s.mu.Lock()
@@ -977,7 +977,7 @@ func (s *Service) createRouteTable(w http.ResponseWriter, r *http.Request) {
 		routes: []rtRoute{
 			{cidrBlock: localCIDR, gatewayID: "local", local: true},
 		},
-		tags: parseTags(r),
+		tags: parseTagSpecTags(r),
 	}
 
 	s.mu.Lock()
