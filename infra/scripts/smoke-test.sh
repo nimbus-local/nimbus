@@ -1056,6 +1056,72 @@ if [ -n "${VPC_ID:-}" ] && [ "$VPC_ID" != "None" ]; then
     $CLI ec2 describe-vpcs --vpc-ids "$VPC_ID" \
       --query "Vpcs[0].Tags[?Key=='env'].Value" --output text
 
+  # VPC endpoints and prefix lists. The service prefix lists exist without
+  # anyone creating them, the way AWS-managed lists do.
+  S3_PL_ID=$($CLI ec2 describe-prefix-lists \
+    --filters "Name=prefix-list-name,Values=com.amazonaws.us-east-1.s3" \
+    --query "PrefixLists[0].PrefixListId" --output text 2>/dev/null)
+  if [ -n "${S3_PL_ID:-}" ] && [ "$S3_PL_ID" != "None" ]; then
+    ok "describe-prefix-lists resolves the S3 service list"
+
+    try_match "get-managed-prefix-list-entries returns CIDRs" "/" \
+      $CLI ec2 get-managed-prefix-list-entries --prefix-list-id "$S3_PL_ID" \
+        --query "Entries[0].Cidr" --output text
+    try_match "describe-managed-prefix-lists reports AWS as owner" "AWS" \
+      $CLI ec2 describe-managed-prefix-lists --prefix-list-ids "$S3_PL_ID" \
+        --query "PrefixLists[0].OwnerId" --output text
+  else
+    fail "describe-prefix-lists resolves the S3 service list"
+  fi
+
+  VPCE_ID=$($CLI ec2 create-vpc-endpoint --vpc-id "$VPC_ID" \
+    --service-name "com.amazonaws.us-east-1.s3" \
+    --query VpcEndpoint.VpcEndpointId --output text 2>/dev/null)
+  if [ -n "${VPCE_ID:-}" ] && [ "$VPCE_ID" != "None" ]; then
+    ok "create-vpc-endpoint"
+
+    # Looking an endpoint up by vpc-id + service-name is how a module finds one
+    # it does not manage.
+    try_match "describe-vpc-endpoints filters by vpc and service" "$VPCE_ID" \
+      $CLI ec2 describe-vpc-endpoints \
+        --filters "Name=vpc-id,Values=$VPC_ID" \
+          "Name=service-name,Values=com.amazonaws.us-east-1.s3" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text
+    try_match "vpc endpoint defaults to Gateway type" "Gateway" \
+      $CLI ec2 describe-vpc-endpoints --vpc-endpoint-ids "$VPCE_ID" \
+        --query "VpcEndpoints[0].VpcEndpointType" --output text
+
+    try "delete-vpc-endpoints" \
+      $CLI ec2 delete-vpc-endpoints --vpc-endpoint-ids "$VPCE_ID"
+  else
+    fail "create-vpc-endpoint"
+  fi
+
+  # A rule targeting a prefix list instead of a CIDR must read back, or the
+  # configured egress restriction looks unset.
+  PL_SG_ID=$($CLI ec2 create-security-group \
+    --group-name "$PREFIX-plsg" --description "prefix list egress" --vpc-id "$VPC_ID" \
+    --query GroupId --output text 2>/dev/null)
+  if [ -n "${PL_SG_ID:-}" ] && [ "$PL_SG_ID" != "None" ] && [ -n "${S3_PL_ID:-}" ]; then
+    try "authorize-security-group-egress (prefix list target)" \
+      $CLI ec2 authorize-security-group-egress --group-id "$PL_SG_ID" \
+        --ip-permissions "IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=$S3_PL_ID}]"
+
+    try_match "describe-security-groups reports the prefix list target" "$S3_PL_ID" \
+      $CLI ec2 describe-security-groups --group-ids "$PL_SG_ID" \
+        --query "SecurityGroups[0].IpPermissionsEgress[0].PrefixListIds[0].PrefixListId" \
+        --output text
+    try_match "describe-security-group-rules reports the prefix list target" "$S3_PL_ID" \
+      $CLI ec2 describe-security-group-rules \
+        --filters "Name=group-id,Values=$PL_SG_ID" \
+        --query "SecurityGroupRules[0].PrefixListId" --output text
+
+    try "delete-security-group (prefix list sg)" \
+      $CLI ec2 delete-security-group --group-id "$PL_SG_ID"
+  else
+    fail "create-security-group (prefix list egress)"
+  fi
+
   # Cleanup
   if [ -n "${IGW_ID:-}" ] && [ "$IGW_ID" != "None" ]; then
     try "detach-internet-gateway" \

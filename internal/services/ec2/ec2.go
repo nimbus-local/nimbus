@@ -59,11 +59,35 @@ type securityGroup struct {
 }
 
 type sgRule struct {
-	id       string // sgr-xxx
-	protocol string
-	fromPort int
-	toPort   int
-	cidrIPs  []string
+	id            string // sgr-xxx
+	protocol      string
+	fromPort      int
+	toPort        int
+	cidrIPs       []string
+	prefixListIDs []string // pl-xxx — gateway endpoint service lists
+	groupIDs      []string // sg-xxx — referenced security groups
+}
+
+// sameTarget reports whether two rules point at the same destination. Ports and
+// protocol alone are not enough to identify a rule: a group may allow 443 to a
+// prefix list and 443 to a peer group at once, and revoking one must not drop
+// the other.
+func (r sgRule) sameTarget(other sgRule) bool {
+	return equalStrings(r.cidrIPs, other.cidrIPs) &&
+		equalStrings(r.prefixListIDs, other.prefixListIDs) &&
+		equalStrings(r.groupIDs, other.groupIDs)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type routeTable struct {
@@ -97,6 +121,8 @@ type Service struct {
 	secGroups    map[string]*securityGroup
 	routeTables  map[string]*routeTable
 	associations map[string]*rtAssociation
+	vpcEndpoints map[string]*vpcEndpoint
+	prefixLists  map[string]*managedPrefixList
 	region       string
 }
 
@@ -113,6 +139,10 @@ func New(region string) *Service {
 		secGroups:    map[string]*securityGroup{},
 		routeTables:  map[string]*routeTable{},
 		associations: map[string]*rtAssociation{},
+		vpcEndpoints: map[string]*vpcEndpoint{},
+		// AWS-managed service prefix lists exist independently of any account's
+		// resources, so they are present from the start and survive a reset.
+		prefixLists: seedPrefixLists(region),
 	}
 }
 
@@ -128,6 +158,8 @@ func (s *Service) Reset() {
 	s.secGroups = map[string]*securityGroup{}
 	s.routeTables = map[string]*routeTable{}
 	s.associations = map[string]*rtAssociation{}
+	s.vpcEndpoints = map[string]*vpcEndpoint{}
+	s.prefixLists = seedPrefixLists(s.region)
 }
 
 // Detect identifies EC2 query-protocol requests:
@@ -213,6 +245,22 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "DisassociateRouteTable":
 		s.disassociateRouteTable(w, r)
 	// Network interfaces
+	case "CreateVpcEndpoint":
+		s.createVpcEndpoint(w, r)
+	case "DescribeVpcEndpoints":
+		s.describeVpcEndpoints(w, r)
+	case "ModifyVpcEndpoint":
+		s.modifyVpcEndpoint(w, r)
+	case "DeleteVpcEndpoints":
+		s.deleteVpcEndpoints(w, r)
+
+	case "DescribePrefixLists":
+		s.describePrefixLists(w, r)
+	case "DescribeManagedPrefixLists":
+		s.describeManagedPrefixLists(w, r)
+	case "GetManagedPrefixListEntries":
+		s.getManagedPrefixListEntries(w, r)
+
 	case "DescribeNetworkInterfaces":
 		s.describeNetworkInterfaces(w, r)
 	// Tags
@@ -688,10 +736,20 @@ func (s *Service) describeSecurityGroupRules(w http.ResponseWriter, r *http.Requ
 		"<securityGroupRuleSet>"+items.String()+"\n  </securityGroupRuleSet>"))
 }
 
+// sgRuleItemXML renders one flattened rule. A rule carries exactly one target
+// kind, so at most one of the CIDR, prefix list, or referenced group elements
+// is present.
 func sgRuleItemXML(rule sgRule, sgID string, isEgress bool) string {
-	cidrXML := ""
-	if len(rule.cidrIPs) > 0 {
-		cidrXML = fmt.Sprintf("<cidrIpv4>%s</cidrIpv4>", rule.cidrIPs[0])
+	target := ""
+	switch {
+	case len(rule.cidrIPs) > 0:
+		target = fmt.Sprintf("<cidrIpv4>%s</cidrIpv4>", rule.cidrIPs[0])
+	case len(rule.prefixListIDs) > 0:
+		target = fmt.Sprintf("<prefixListId>%s</prefixListId>", rule.prefixListIDs[0])
+	case len(rule.groupIDs) > 0:
+		target = fmt.Sprintf(
+			"<referencedGroupInfo><groupId>%s</groupId><userId>%s</userId></referencedGroupInfo>",
+			rule.groupIDs[0], accountID)
 	}
 	return fmt.Sprintf(`
       <securityGroupRuleId>%s</securityGroupRuleId>
@@ -701,7 +759,7 @@ func sgRuleItemXML(rule sgRule, sgID string, isEgress bool) string {
       <fromPort>%d</fromPort>
       <toPort>%d</toPort>
       %s`,
-		rule.id, sgID, isEgress, rule.protocol, rule.fromPort, rule.toPort, cidrXML)
+		rule.id, sgID, isEgress, rule.protocol, rule.fromPort, rule.toPort, target)
 }
 
 func (s *Service) modifySecurityGroupRules(w http.ResponseWriter, r *http.Request) {
@@ -828,7 +886,8 @@ func removeRules(existing, toRemove []sgRule) []sgRule {
 outer:
 	for _, e := range existing {
 		for _, r := range toRemove {
-			if e.protocol == r.protocol && e.fromPort == r.fromPort && e.toPort == r.toPort {
+			if e.protocol == r.protocol && e.fromPort == r.fromPort &&
+				e.toPort == r.toPort && e.sameTarget(r) {
 				continue outer
 			}
 		}
@@ -862,9 +921,28 @@ func rulesXML(rules []sgRule) string {
           <ipProtocol>%s</ipProtocol>
           <fromPort>%d</fromPort>
           <toPort>%d</toPort>
-          <groups/>
+          <groups>%s</groups>
           <ipRanges>%s</ipRanges>
-        </item>`, rule.protocol, rule.fromPort, rule.toPort, cidrIPsXML(rule.cidrIPs))
+          <prefixListIds>%s</prefixListIds>
+        </item>`, rule.protocol, rule.fromPort, rule.toPort,
+			ruleGroupsXML(rule.groupIDs), cidrIPsXML(rule.cidrIPs),
+			prefixListIDsXML(rule.prefixListIDs))
+	}
+	return b.String()
+}
+
+func ruleGroupsXML(groupIDs []string) string {
+	var b strings.Builder
+	for _, id := range groupIDs {
+		fmt.Fprintf(&b, "<item><userId>%s</userId><groupId>%s</groupId></item>", accountID, id)
+	}
+	return b.String()
+}
+
+func prefixListIDsXML(ids []string) string {
+	var b strings.Builder
+	for _, id := range ids {
+		fmt.Fprintf(&b, "<item><prefixListId>%s</prefixListId></item>", id)
 	}
 	return b.String()
 }
@@ -1281,6 +1359,30 @@ func collectSubnetIDs(r *http.Request) []string {
 	return ids
 }
 
+// parseTagSpecTags reads tags from TagSpecification.N.Tag.M.Key/Value, the form
+// SDK clients use to tag a resource as part of its create call. Falls back to
+// the flat Tag.N form for callers that tag separately.
+func parseTagSpecTags(r *http.Request) map[string]string {
+	tags := map[string]string{}
+	for i := 1; ; i++ {
+		prefix := fmt.Sprintf("TagSpecification.%d.Tag.", i)
+		if r.FormValue(prefix+"1.Key") == "" {
+			break
+		}
+		for j := 1; ; j++ {
+			key := r.FormValue(fmt.Sprintf("%s%d.Key", prefix, j))
+			if key == "" {
+				break
+			}
+			tags[key] = r.FormValue(fmt.Sprintf("%s%d.Value", prefix, j))
+		}
+	}
+	if len(tags) == 0 {
+		return parseTags(r)
+	}
+	return tags
+}
+
 // parseTags reads Tag.N.Key/Value params from the form.
 func parseTags(r *http.Request) map[string]string {
 	tags := map[string]string{}
@@ -1314,12 +1416,36 @@ func parseIPPermissions(r *http.Request, prefix string) []sgRule {
 			}
 			cidrs = append(cidrs, cidr)
 		}
+
+		// A rule may target a prefix list or a peer security group instead of a
+		// CIDR. Dropping these leaves an empty rule that never matches what the
+		// caller configured.
+		var prefixLists []string
+		for j := 1; ; j++ {
+			pl := r.FormValue(fmt.Sprintf("%s.%d.PrefixListIds.%d.PrefixListId", prefix, i, j))
+			if pl == "" {
+				break
+			}
+			prefixLists = append(prefixLists, pl)
+		}
+
+		var groups []string
+		for j := 1; ; j++ {
+			gid := r.FormValue(fmt.Sprintf("%s.%d.Groups.%d.GroupId", prefix, i, j))
+			if gid == "" {
+				break
+			}
+			groups = append(groups, gid)
+		}
+
 		rules = append(rules, sgRule{
-			id:       "sgr-" + shortID(),
-			protocol: proto,
-			fromPort: fromPort,
-			toPort:   toPort,
-			cidrIPs:  cidrs,
+			id:            "sgr-" + shortID(),
+			protocol:      proto,
+			fromPort:      fromPort,
+			toPort:        toPort,
+			cidrIPs:       cidrs,
+			prefixListIDs: prefixLists,
+			groupIDs:      groups,
 		})
 	}
 	return rules
