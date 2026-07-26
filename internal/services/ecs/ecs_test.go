@@ -10,7 +10,7 @@ import (
 
 func newSvc() *Service { return New("us-east-1") }
 
-func do(t *testing.T, svc *Service, action string, body interface{}) map[string]interface{} {
+func call(t *testing.T, svc *Service, action string, body interface{}) (int, map[string]interface{}) {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(b))
@@ -19,17 +19,19 @@ func do(t *testing.T, svc *Service, action string, body interface{}) map[string]
 	svc.ServeHTTP(w, req)
 	var m map[string]interface{}
 	json.NewDecoder(w.Body).Decode(&m)
+	return w.Code, m
+}
+
+func do(t *testing.T, svc *Service, action string, body interface{}) map[string]interface{} {
+	t.Helper()
+	_, m := call(t, svc, action, body)
 	return m
 }
 
 func status(t *testing.T, svc *Service, action string, body interface{}) int {
 	t.Helper()
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(b))
-	req.Header.Set("X-Amz-Target", ecsTarget+action)
-	w := httptest.NewRecorder()
-	svc.ServeHTTP(w, req)
-	return w.Code
+	code, _ := call(t, svc, action, body)
+	return code
 }
 
 // --- Cluster tests ---
@@ -459,6 +461,246 @@ func TestCreateServiceMissingName(t *testing.T) {
 	code := status(t, svc, "CreateService", map[string]interface{}{})
 	if code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", code)
+	}
+}
+
+// --- Service load balancer tests ---
+
+// registerWebTaskDef registers a task definition whose "app" container publishes
+// the given ports, plus a "sidecar" container with no port mappings at all.
+func registerWebTaskDef(t *testing.T, svc *Service, family string, ports ...int) {
+	t.Helper()
+	mappings := []map[string]interface{}{}
+	for _, p := range ports {
+		mappings = append(mappings, map[string]interface{}{"containerPort": p, "protocol": "tcp"})
+	}
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{
+		"family": family,
+		"containerDefinitions": []map[string]interface{}{
+			{"name": "app", "image": "nginx:latest", "essential": true, "portMappings": mappings},
+			{"name": "sidecar", "image": "busybox:latest"},
+		},
+	})
+}
+
+const tgArn = "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/web/abc123"
+
+func TestCreateServiceWithLoadBalancer(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)
+	code, res := call(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 80},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %v", code, res)
+	}
+	lbs := res["service"].(map[string]interface{})["loadBalancers"].([]interface{})
+	if len(lbs) != 1 {
+		t.Fatalf("expected 1 load balancer in response, got %d", len(lbs))
+	}
+	lb := lbs[0].(map[string]interface{})
+	if lb["targetGroupArn"] != tgArn {
+		t.Errorf("expected targetGroupArn %s, got %v", tgArn, lb["targetGroupArn"])
+	}
+	if lb["containerName"] != "app" {
+		t.Errorf("expected containerName app, got %v", lb["containerName"])
+	}
+	if lb["containerPort"].(float64) != 80 {
+		t.Errorf("expected containerPort 80, got %v", lb["containerPort"])
+	}
+}
+
+func TestCreateServiceLoadBalancerPortNotDefined(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 8080)
+	code, res := call(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 80},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", code)
+	}
+	if res["__type"] != "InvalidParameterException" {
+		t.Errorf("expected InvalidParameterException, got %v", res["__type"])
+	}
+	if msg := res["message"].(string); msg != "The container app did not have a container port 80 defined." {
+		t.Errorf("unexpected message: %q", msg)
+	}
+	// The service must not have been created.
+	list := do(t, svc, "ListServices", map[string]interface{}{"cluster": "default"})
+	if arns := list["serviceArns"].([]interface{}); len(arns) != 0 {
+		t.Errorf("expected no services after rejected create, got %d", len(arns))
+	}
+}
+
+func TestCreateServiceLoadBalancerNoPortMappings(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)
+	code, res := call(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "sidecar", "containerPort": 80},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", code)
+	}
+	if msg := res["message"].(string); msg != "The container sidecar did not have a container port 80 defined." {
+		t.Errorf("unexpected message: %q", msg)
+	}
+}
+
+func TestCreateServiceLoadBalancerUnknownContainer(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)
+	code, res := call(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "nope", "containerPort": 80},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", code)
+	}
+	if msg := res["message"].(string); msg != "The container nope does not exist in the task definition." {
+		t.Errorf("unexpected message: %q", msg)
+	}
+}
+
+func TestDescribeServicesReportsLoadBalancers(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80, 8443)
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 8443},
+		},
+	})
+	res := do(t, svc, "DescribeServices", map[string]interface{}{
+		"cluster":  "default",
+		"services": []string{"web-service"},
+	})
+	services := res["services"].([]interface{})
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	lbs := services[0].(map[string]interface{})["loadBalancers"].([]interface{})
+	if len(lbs) != 1 {
+		t.Fatalf("expected 1 load balancer, got %d", len(lbs))
+	}
+	if lbs[0].(map[string]interface{})["containerPort"].(float64) != 8443 {
+		t.Errorf("expected containerPort 8443, got %v", lbs[0])
+	}
+}
+
+// A service without load balancers must still report an empty list, not null —
+// the TF provider reads the field on every refresh.
+func TestDescribeServicesEmptyLoadBalancers(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)
+	res := do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+	})
+	lbs, ok := res["service"].(map[string]interface{})["loadBalancers"].([]interface{})
+	if !ok {
+		t.Fatalf("expected loadBalancers to be a list, got %#v",
+			res["service"].(map[string]interface{})["loadBalancers"])
+	}
+	if len(lbs) != 0 {
+		t.Errorf("expected 0 load balancers, got %d", len(lbs))
+	}
+}
+
+func TestUpdateServiceLoadBalancers(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80, 8443)
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 80},
+		},
+	})
+	code, res := call(t, svc, "UpdateService", map[string]interface{}{
+		"cluster": "default",
+		"service": "web-service",
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 8443},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %v", code, res)
+	}
+	lbs := res["service"].(map[string]interface{})["loadBalancers"].([]interface{})
+	if len(lbs) != 1 || lbs[0].(map[string]interface{})["containerPort"].(float64) != 8443 {
+		t.Errorf("expected containerPort updated to 8443, got %v", lbs)
+	}
+}
+
+func TestUpdateServiceLoadBalancerPortNotDefined(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+	})
+	code, res := call(t, svc, "UpdateService", map[string]interface{}{
+		"cluster": "default",
+		"service": "web-service",
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 9999},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", code)
+	}
+	if msg := res["message"].(string); msg != "The container app did not have a container port 9999 defined." {
+		t.Errorf("unexpected message: %q", msg)
+	}
+}
+
+// UpdateService validates against the task definition set in the same call.
+func TestUpdateServiceLoadBalancersAgainstNewTaskDef(t *testing.T) {
+	svc := newSvc()
+	registerWebTaskDef(t, svc, "web", 80)   // web:1 — port 80 only
+	registerWebTaskDef(t, svc, "web", 8443) // web:2 — port 8443 only
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web:1",
+		"desiredCount":   1,
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 80},
+		},
+	})
+	code, _ := call(t, svc, "UpdateService", map[string]interface{}{
+		"cluster":        "default",
+		"service":        "web-service",
+		"taskDefinition": "web:2",
+		"loadBalancers": []map[string]interface{}{
+			{"targetGroupArn": tgArn, "containerName": "app", "containerPort": 8443},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 for port defined in the new task def, got %d", code)
 	}
 }
 
