@@ -20,9 +20,12 @@ resource "aws_subnet" "nimbus_test_public" {
 }
 
 resource "aws_subnet" "nimbus_test_private" {
-  vpc_id            = aws_vpc.nimbus_test.id
-  cidr_block        = "10.0.4.0/24"
-  availability_zone = "${var.region}a"
+  vpc_id     = aws_vpc.nimbus_test.id
+  cidr_block = "10.0.4.0/24"
+
+  # Deliberately a different AZ from the public subnet: ALBs and DB subnet
+  # groups must span at least two Availability Zones on real AWS.
+  availability_zone = "${var.region}b"
 
   tags = {
     Name = "${var.prefix}-private"

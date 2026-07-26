@@ -1,9 +1,11 @@
 resource "aws_db_subnet_group" "nimbus_test" {
   name        = var.prefix
   description = "Nimbus test subnet group"
+  # Real subnet IDs, spanning two AZs — real AWS requires a DB subnet group to
+  # cover at least two Availability Zones.
   subnet_ids = [
-    "subnet-00000000000000001",
-    "subnet-00000000000000002",
+    aws_subnet.nimbus_test_public.id,
+    aws_subnet.nimbus_test_private.id,
   ]
 }
 
