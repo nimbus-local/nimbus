@@ -2,6 +2,7 @@ package cloudwatchlogs
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +108,76 @@ func TestAssociateKmsKey_GroupNotFound(t *testing.T) {
 	}
 	if got := decode(t, w)["__type"]; got != "ResourceNotFoundException" {
 		t.Errorf("__type: expected ResourceNotFoundException, got %v", got)
+	}
+}
+
+// ── Ingest (used by services forwarding container output) ─────────────────────
+
+// AWS delivers a workload's output without anyone calling CreateLogGroup, so
+// the forwarding path must create the group and stream on demand.
+func TestIngest_CreatesGroupAndStreamOnDemand(t *testing.T) {
+	svc := newSvc()
+	svc.Ingest("/aws/lambda/fn", "2024/01/01/[$LATEST]abc", []string{"first", "second"})
+
+	entry := describeGroup(t, svc, "/aws/lambda/fn")
+	if entry["logGroupName"] != "/aws/lambda/fn" {
+		t.Fatalf("expected the group to be created, got %v", entry)
+	}
+
+	w := cwlReq(t, svc, "GetLogEvents", map[string]interface{}{
+		"logGroupName":  "/aws/lambda/fn",
+		"logStreamName": "2024/01/01/[$LATEST]abc",
+	})
+	body := w.Body.String()
+	for _, want := range []string{"first", "second"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected the stream to hold %q, got %s", want, body)
+		}
+	}
+}
+
+func TestIngest_AppendsToAnExistingStream(t *testing.T) {
+	svc := newSvc()
+	svc.Ingest("/aws/lambda/fn", "s", []string{"one"})
+	svc.Ingest("/aws/lambda/fn", "s", []string{"two"})
+
+	w := cwlReq(t, svc, "GetLogEvents", map[string]interface{}{
+		"logGroupName":  "/aws/lambda/fn",
+		"logStreamName": "s",
+	})
+	body := w.Body.String()
+	if !strings.Contains(body, "one") || !strings.Contains(body, "two") {
+		t.Errorf("expected both batches in the stream, got %s", body)
+	}
+}
+
+// Ingest is called from a log pump that may flush an empty batch.
+func TestIngest_IgnoresEmptyInput(t *testing.T) {
+	svc := newSvc()
+	svc.Ingest("/aws/lambda/fn", "s", nil)
+	svc.Ingest("", "s", []string{"x"})
+	svc.Ingest("/aws/lambda/fn", "", []string{"x"})
+
+	w := cwlReq(t, svc, "DescribeLogGroups", map[string]interface{}{})
+	if strings.Contains(w.Body.String(), "/aws/lambda/fn") {
+		t.Errorf("expected no group to be created for empty input, got %s", w.Body.String())
+	}
+}
+
+// A container that logs forever must not grow the stream without bound.
+func TestIngest_CapsStreamLength(t *testing.T) {
+	svc := newSvc()
+	batch := make([]string, maxEvents+50)
+	for i := range batch {
+		batch[i] = "line"
+	}
+	svc.Ingest("/aws/lambda/fn", "s", batch)
+
+	svc.mu.RLock()
+	got := len(svc.groups["/aws/lambda/fn"].streams["s"].events)
+	svc.mu.RUnlock()
+
+	if got != maxEvents {
+		t.Errorf("expected the stream capped at %d events, got %d", maxEvents, got)
 	}
 }

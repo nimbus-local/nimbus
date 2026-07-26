@@ -1,6 +1,8 @@
 package invocation
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nimbus-local/nimbus/internal/uid"
 )
 
 // ImageSpec is everything needed to start a container-image function.
@@ -46,9 +50,22 @@ const riePath = "/aws-lambda-rie"
 const rieReleaseURL = "https://github.com/aws/aws-lambda-runtime-interface-emulator/" +
 	"releases/latest/download/aws-lambda-rie-%s"
 
+// LogSink receives a function container's output. CloudWatch Logs implements
+// it; when absent, container output is simply not forwarded.
+type LogSink interface {
+	Ingest(group, stream string, messages []string)
+}
+
+// defaultIdleTimeout is how long a container may sit unused before it is
+// reaped. Lambda keeps an execution environment warm for a similar span.
+const defaultIdleTimeout = 10 * time.Minute
+
 type runningContainer struct {
 	id       string
 	endpoint string
+	lastUsed time.Time
+	inflight int
+	stopLogs context.CancelFunc
 }
 
 // containerRunner starts and reuses one container per container-image function.
@@ -65,26 +82,88 @@ type containerRunner struct {
 	dataDir     string
 	awsEndpoint string
 	inDocker    bool
+	logs        LogSink
+	idleTimeout time.Duration
 	containers  map[string]*runningContainer
+	done        chan struct{}
+	stopOnce    sync.Once
 }
 
-func newContainerRunner(dataDir string) *containerRunner {
+func newContainerRunner(dataDir string, logs LogSink) *containerRunner {
 	network := os.Getenv("NIMBUS_DOCKER_NETWORK")
 	if network == "" {
 		network = "nimbus-net"
 	}
 	r := &containerRunner{
-		network:    network,
-		dataDir:    dataDir,
-		inDocker:   inDocker(),
-		containers: map[string]*runningContainer{},
-		available:  exec.Command("docker", "info").Run() == nil,
+		network:     network,
+		dataDir:     dataDir,
+		inDocker:    inDocker(),
+		logs:        logs,
+		idleTimeout: idleTimeoutFromEnv(),
+		containers:  map[string]*runningContainer{},
+		done:        make(chan struct{}),
+		available:   exec.Command("docker", "info").Run() == nil,
 	}
 	r.awsEndpoint = defaultAWSEndpoint(r.inDocker)
 	if !r.available {
 		slog.Warn("Lambda: Docker not available — image functions fall back to mock responses")
+		return r
+	}
+	if r.idleTimeout > 0 {
+		go r.reapLoop()
 	}
 	return r
+}
+
+// idleTimeoutFromEnv reads NIMBUS_LAMBDA_CONTAINER_IDLE. Zero disables reaping,
+// which is useful when attaching a debugger to a warm container.
+func idleTimeoutFromEnv() time.Duration {
+	raw := os.Getenv("NIMBUS_LAMBDA_CONTAINER_IDLE")
+	if raw == "" {
+		return defaultIdleTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		slog.Warn("Lambda: invalid NIMBUS_LAMBDA_CONTAINER_IDLE, using default",
+			"value", raw, "default", defaultIdleTimeout)
+		return defaultIdleTimeout
+	}
+	return d
+}
+
+// reapLoop removes containers that have gone unused, so a long dev session does
+// not accumulate one idle container per function it happened to invoke.
+func (r *containerRunner) reapLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			r.reapIdle()
+		}
+	}
+}
+
+func (r *containerRunner) reapIdle() {
+	r.mu.Lock()
+	var reaped []*runningContainer
+	for name, c := range r.containers {
+		// An invocation in flight holds the container open however long it runs;
+		// a function may legitimately take longer than the idle window.
+		if c.inflight == 0 && time.Since(c.lastUsed) > r.idleTimeout {
+			reaped = append(reaped, c)
+			delete(r.containers, name)
+			slog.Info("Lambda: reaping idle container",
+				"function", name, "id", shortDockerID(c.id), "idle", time.Since(c.lastUsed))
+		}
+	}
+	r.mu.Unlock()
+
+	for _, c := range reaped {
+		r.teardown(c)
+	}
 }
 
 func inDocker() bool {
@@ -113,29 +192,50 @@ func defaultAWSEndpoint(inDocker bool) string {
 // ensure returns the invoke endpoint for a function's container, starting one
 // if it is not already warm. Containers are reused between invocations, which
 // is both faster and closer to how Lambda reuses execution environments.
-func (r *containerRunner) ensure(name string, spec ImageSpec) (string, error) {
+//
+// The returned release function must be called when the invocation finishes:
+// until it is, the idle reaper leaves the container alone.
+func (r *containerRunner) ensure(name string, spec ImageSpec) (string, func(), error) {
 	if !r.available {
-		return "", fmt.Errorf("Docker is not available")
+		return "", nil, fmt.Errorf("Docker is not available")
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if c, ok := r.containers[name]; ok {
-		if r.isRunning(c.id) {
-			return c.endpoint, nil
-		}
+	c, ok := r.containers[name]
+	if ok && !r.isRunning(c.id) {
 		// Exited between invocations — clear it out and start fresh.
-		r.remove(c.id)
+		r.teardown(c)
 		delete(r.containers, name)
+		ok = false
 	}
 
-	c, err := r.start(name, spec)
-	if err != nil {
-		return "", err
+	if !ok {
+		started, err := r.start(name, spec)
+		if err != nil {
+			return "", nil, err
+		}
+		r.containers[name] = started
+		c = started
 	}
-	r.containers[name] = c
-	return c.endpoint, nil
+
+	c.lastUsed = time.Now()
+	c.inflight++
+	return c.endpoint, func() { r.release(name) }, nil
+}
+
+// release marks an invocation finished, making the container eligible for
+// reaping once it has been idle long enough.
+func (r *containerRunner) release(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.containers[name]; ok {
+		if c.inflight > 0 {
+			c.inflight--
+		}
+		c.lastUsed = time.Now()
+	}
 }
 
 func (r *containerRunner) start(name string, spec ImageSpec) (*runningContainer, error) {
@@ -225,9 +325,100 @@ func (r *containerRunner) start(name string, spec ImageSpec) (*runningContainer,
 		return nil, fmt.Errorf("%w\ncontainer output:\n%s", err, logs)
 	}
 
+	c := &runningContainer{id: id, endpoint: endpoint, lastUsed: time.Now()}
+
+	// One log stream per container, the way Lambda opens one per execution
+	// environment rather than per invocation.
+	if r.logs != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		c.stopLogs = cancel
+		go r.streamLogs(ctx, name, id, logStreamName())
+	}
+
 	slog.Info("Lambda: container started",
 		"function", name, "image", spec.ImageURI, "id", shortDockerID(id))
-	return &runningContainer{id: id, endpoint: endpoint}, nil
+	return c, nil
+}
+
+// streamLogs forwards a container's output into CloudWatch Logs under the log
+// group Lambda would use. It exits when the context is cancelled or the
+// container goes away, which ends `docker logs -f`.
+func (r *containerRunner) streamLogs(ctx context.Context, function, id, stream string) {
+	group := "/aws/lambda/" + function
+
+	cmd := exec.CommandContext(ctx, "docker", "logs", "-f", "--tail", "0", id)
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		slog.Debug("Lambda: log stream unavailable", "function", function, "err", err)
+		return
+	}
+	// A handler's diagnostics go to stderr; Lambda records both in one stream.
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		slog.Debug("Lambda: log stream failed to start", "function", function, "err", err)
+		return
+	}
+	defer cmd.Wait() //nolint:errcheck — a cancelled stream always reports an error
+
+	lines := make(chan string, 256)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(pipe)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Batch before ingesting: a chatty handler would otherwise take the log
+	// store's lock once per line.
+	flush := time.NewTicker(250 * time.Millisecond)
+	defer flush.Stop()
+	var batch []string
+
+	send := func() {
+		if len(batch) > 0 {
+			r.logs.Ingest(group, stream, batch)
+			batch = nil
+		}
+	}
+
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				send()
+				return
+			}
+			batch = append(batch, line)
+			if len(batch) >= 128 {
+				send()
+			}
+		case <-flush.C:
+			send()
+		case <-ctx.Done():
+			send()
+			return
+		}
+	}
+}
+
+// logStreamName matches the shape Lambda uses for an execution environment.
+func logStreamName() string {
+	suffix := strings.ReplaceAll(uid.New(), "-", "")
+	return time.Now().UTC().Format("2006/01/02") + "/[$LATEST]" + suffix
+}
+
+// teardown stops a container's log stream and removes it.
+func (r *containerRunner) teardown(c *runningContainer) {
+	if c.stopLogs != nil {
+		c.stopLogs()
+	}
+	r.remove(c.id)
 }
 
 // resolveEndpoint returns the base URL Nimbus uses to reach the container:
@@ -421,22 +612,31 @@ func (r *containerRunner) stop(name string) {
 	r.mu.Unlock()
 
 	if ok {
-		r.remove(c.id)
+		r.teardown(c)
 	}
 }
 
-// stopAll tears down every container this runner started.
+// stopAll tears down every container this runner started. The reaper keeps
+// running: a reset clears state but the service stays up.
 func (r *containerRunner) stopAll() {
 	r.mu.Lock()
-	ids := make([]string, 0, len(r.containers))
+	running := make([]*runningContainer, 0, len(r.containers))
 	for _, c := range r.containers {
-		ids = append(ids, c.id)
+		running = append(running, c)
 	}
 	r.containers = map[string]*runningContainer{}
 	r.mu.Unlock()
 
-	for _, id := range ids {
-		r.remove(id)
+	for _, c := range running {
+		r.teardown(c)
+	}
+}
+
+// shutdown tears everything down and ends the reaper. For process exit only.
+func (r *containerRunner) shutdown() {
+	r.stopAll()
+	if r.done != nil {
+		r.stopOnce.Do(func() { close(r.done) })
 	}
 }
 

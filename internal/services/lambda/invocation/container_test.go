@@ -180,7 +180,7 @@ func (s stubImages) ImageSpec(name string) (ImageSpec, bool) {
 func TestContainerTarget_InactiveWhenNotEnabled(t *testing.T) {
 	svc := New(stubChecker{names: map[string]bool{"fn": true}})
 
-	endpoint, timeout, err := svc.containerTarget("fn")
+	endpoint, timeout, _, err := svc.containerTarget("fn")
 	if err != nil || endpoint != "" || timeout != 0 {
 		t.Errorf("expected no container target, got %q/%v/%v", endpoint, timeout, err)
 	}
@@ -193,7 +193,7 @@ func TestContainerTarget_InactiveForNonImageFunction(t *testing.T) {
 	svc.images = stubImages{specs: map[string]ImageSpec{}}
 	svc.runner = &containerRunner{available: true, containers: map[string]*runningContainer{}}
 
-	endpoint, _, err := svc.containerTarget("zip")
+	endpoint, _, _, err := svc.containerTarget("zip")
 	if err != nil || endpoint != "" {
 		t.Errorf("expected no container target for a zip function, got %q/%v", endpoint, err)
 	}
@@ -205,7 +205,7 @@ func TestContainerTarget_InactiveWhenDockerUnavailable(t *testing.T) {
 	svc.images = stubImages{specs: map[string]ImageSpec{"img": {ImageURI: "x:1"}}}
 	svc.runner = &containerRunner{available: false, containers: map[string]*runningContainer{}}
 
-	endpoint, _, err := svc.containerTarget("img")
+	endpoint, _, _, err := svc.containerTarget("img")
 	if err != nil {
 		t.Errorf("expected no error when Docker is unavailable, got %v", err)
 	}
@@ -223,4 +223,111 @@ func TestContainers_EmptyWhenDisabled(t *testing.T) {
 
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// ── Idle reaping ──────────────────────────────────────────────────────────────
+
+func TestIdleTimeoutFromEnv(t *testing.T) {
+	tests := map[string]time.Duration{
+		"":         defaultIdleTimeout,
+		"5m":       5 * time.Minute,
+		"0s":       0, // disables reaping
+		"nonsense": defaultIdleTimeout,
+	}
+	for raw, want := range tests {
+		t.Run("value="+raw, func(t *testing.T) {
+			t.Setenv("NIMBUS_LAMBDA_CONTAINER_IDLE", raw)
+			if got := idleTimeoutFromEnv(); got != want {
+				t.Errorf("expected %v, got %v", want, got)
+			}
+		})
+	}
+}
+
+func newTestRunner(idle time.Duration) *containerRunner {
+	return &containerRunner{
+		idleTimeout: idle,
+		containers:  map[string]*runningContainer{},
+		done:        make(chan struct{}),
+	}
+}
+
+func TestReapIdle_RemovesUnusedContainer(t *testing.T) {
+	r := newTestRunner(time.Minute)
+	r.containers["stale"] = &runningContainer{
+		id:       "container-stale",
+		lastUsed: time.Now().Add(-2 * time.Minute),
+	}
+
+	r.reapIdle()
+
+	if _, still := r.containers["stale"]; still {
+		t.Error("expected an idle container to be reaped")
+	}
+}
+
+// An invocation may legitimately run longer than the idle window; reaping it
+// mid-flight would kill the call.
+func TestReapIdle_KeepsContainerWithInvocationInFlight(t *testing.T) {
+	r := newTestRunner(time.Minute)
+	r.containers["busy"] = &runningContainer{
+		id:       "container-busy",
+		lastUsed: time.Now().Add(-2 * time.Minute),
+		inflight: 1,
+	}
+
+	r.reapIdle()
+
+	if _, still := r.containers["busy"]; !still {
+		t.Error("expected a container with an invocation in flight to survive reaping")
+	}
+}
+
+func TestReapIdle_KeepsRecentlyUsedContainer(t *testing.T) {
+	r := newTestRunner(time.Minute)
+	r.containers["fresh"] = &runningContainer{id: "container-fresh", lastUsed: time.Now()}
+
+	r.reapIdle()
+
+	if _, still := r.containers["fresh"]; !still {
+		t.Error("expected a recently used container to survive reaping")
+	}
+}
+
+func TestRelease_DecrementsInflightAndRefreshesLastUsed(t *testing.T) {
+	r := newTestRunner(time.Minute)
+	old := time.Now().Add(-2 * time.Minute)
+	r.containers["fn"] = &runningContainer{id: "c", lastUsed: old, inflight: 2}
+
+	r.release("fn")
+
+	c := r.containers["fn"]
+	if c.inflight != 1 {
+		t.Errorf("inflight: expected 1, got %d", c.inflight)
+	}
+	if !c.lastUsed.After(old) {
+		t.Error("expected release to refresh lastUsed")
+	}
+
+	// Releasing more times than acquired must not go negative.
+	r.release("fn")
+	r.release("fn")
+	if got := r.containers["fn"].inflight; got != 0 {
+		t.Errorf("inflight: expected 0, got %d", got)
+	}
+}
+
+// Lambda names a stream per execution environment, dated and tagged with the
+// function version.
+func TestLogStreamName_MatchesLambdaShape(t *testing.T) {
+	name := logStreamName()
+	if !strings.Contains(name, "/[$LATEST]") {
+		t.Errorf("expected a $LATEST marker, got %q", name)
+	}
+	if !strings.HasPrefix(name, time.Now().UTC().Format("2006/01/02")) {
+		t.Errorf("expected a dated prefix, got %q", name)
+	}
+	if name == logStreamName() {
+		t.Error("expected a distinct stream name per execution environment")
+	}
 }

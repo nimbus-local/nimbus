@@ -12,6 +12,7 @@ the test can confirm Nimbus injected the container's environment.
 
 import json
 import os
+import sys
 import urllib.request
 
 API = os.environ["AWS_LAMBDA_RUNTIME_API"]
@@ -36,6 +37,12 @@ def main():
             event = json.loads(raw) if raw else None
         except ValueError:
             event = None
+
+        # Written to stdout so the test can assert Nimbus forwarded container
+        # output into CloudWatch Logs. Unbuffered, or nothing is flushed until
+        # the process exits.
+        print("HANDLER-LOG-LINE request_id={}".format(request_id), flush=True)
+        print("HANDLER-STDERR-LINE", file=sys.stderr, flush=True)
 
         body = json.dumps(handle(event)).encode()
         req = urllib.request.Request(

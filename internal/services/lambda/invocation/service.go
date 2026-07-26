@@ -49,11 +49,11 @@ func New(checker FunctionChecker) *Service {
 // EnableContainers turns on real execution for container-image functions.
 // Without it — or without a reachable Docker daemon — image functions keep
 // using the mock/proxy path.
-func (s *Service) EnableContainers(images ImageFunctionSource, dataDir string) {
+func (s *Service) EnableContainers(images ImageFunctionSource, dataDir string, logs LogSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.images = images
-	s.runner = newContainerRunner(dataDir)
+	s.runner = newContainerRunner(dataDir, logs)
 }
 
 // Reset clears all mock responses, recorded invocations, and live endpoints,
@@ -71,14 +71,25 @@ func (s *Service) Reset() {
 	}
 }
 
-// StopContainers tears down every running function container. Called on
-// shutdown so containers do not outlive the process that started them.
+// StopContainers tears down every running function container, leaving the
+// service able to start more.
 func (s *Service) StopContainers() {
 	s.mu.RLock()
 	runner := s.runner
 	s.mu.RUnlock()
 	if runner != nil {
 		runner.stopAll()
+	}
+}
+
+// Shutdown tears down every container and stops the idle reaper. Called on
+// process exit so containers do not outlive the process that started them.
+func (s *Service) Shutdown() {
+	s.mu.RLock()
+	runner := s.runner
+	s.mu.RUnlock()
+	if runner != nil {
+		runner.shutdown()
 	}
 }
 
@@ -96,24 +107,24 @@ func (s *Service) ReleaseFunction(name string) {
 // containerTarget resolves the invoke URL for a container-image function,
 // starting its container if it is not already warm. An empty endpoint with no
 // error means the function is not backed by a container.
-func (s *Service) containerTarget(name string) (string, time.Duration, error) {
+func (s *Service) containerTarget(name string) (string, time.Duration, func(), error) {
 	s.mu.RLock()
 	images, runner := s.images, s.runner
 	s.mu.RUnlock()
 
 	if images == nil || runner == nil || !runner.available {
-		return "", 0, nil
+		return "", 0, nil, nil
 	}
 	spec, ok := images.ImageSpec(name)
 	if !ok {
-		return "", 0, nil
+		return "", 0, nil, nil
 	}
 
-	endpoint, err := runner.ensure(name, spec)
+	endpoint, release, err := runner.ensure(name, spec)
 	if err != nil {
-		return "", 0, fmt.Errorf("start container for %s: %w", name, err)
+		return "", 0, nil, fmt.Errorf("start container for %s: %w", name, err)
 	}
-	return invokeURL(endpoint), time.Duration(spec.TimeoutSec) * time.Second, nil
+	return invokeURL(endpoint), time.Duration(spec.TimeoutSec) * time.Second, release, nil
 }
 
 // Containers reports the container ID backing each running image function.
@@ -265,9 +276,12 @@ func (s *Service) DirectInvoke(functionName string, payload []byte) ([]byte, err
 	s.mu.Unlock()
 
 	if endpoint == "" {
-		target, _, err := s.containerTarget(functionName)
+		target, _, release, err := s.containerTarget(functionName)
 		if err != nil {
 			return nil, err
+		}
+		if release != nil {
+			defer release()
 		}
 		endpoint = target
 	}

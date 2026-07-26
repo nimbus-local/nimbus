@@ -96,9 +96,10 @@ func (s imageSource) ImageSpec(name string) (invocation.ImageSpec, bool) {
 }
 
 // EnableContainers turns on real execution for container-image functions,
-// caching the runtime emulator under dataDir.
-func (s *Service) EnableContainers(dataDir string) {
-	s.Invocation.EnableContainers(imageSource{crud: s.CRUD}, dataDir)
+// caching the runtime emulator under dataDir and forwarding container output
+// to logs.
+func (s *Service) EnableContainers(dataDir string, logs invocation.LogSink) {
+	s.Invocation.EnableContainers(imageSource{crud: s.CRUD}, dataDir, logs)
 }
 
 func (s *Service) Name() string { return "lambda" }

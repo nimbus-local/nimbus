@@ -63,6 +63,60 @@ func New(region string) *Service {
 
 func (s *Service) Name() string { return "cloudwatchlogs" }
 
+// Ingest appends messages to a stream on behalf of another Nimbus service,
+// creating the group and stream if they do not exist. AWS delivers a workload's
+// output to CloudWatch without anyone calling CreateLogGroup first, so callers
+// forwarding container output should not have to either.
+//
+// Messages are stamped with the current time: the emitting process reports no
+// timestamp of its own on stdout.
+func (s *Service) Ingest(group, stream string, messages []string) {
+	if group == "" || stream == "" || len(messages) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, ok := s.groups[group]
+	if !ok {
+		g = &logGroup{
+			name:      group,
+			arn:       s.groupARN(group),
+			createdAt: nowMS(),
+			tags:      map[string]string{},
+			streams:   map[string]*logStream{},
+		}
+		s.groups[group] = g
+	}
+
+	st, ok := g.streams[stream]
+	if !ok {
+		st = &logStream{
+			name:      stream,
+			arn:       s.streamARN(group, stream),
+			createdAt: nowMS(),
+		}
+		g.streams[stream] = st
+	}
+
+	now := nowMS()
+	for _, msg := range messages {
+		st.events = append(st.events, logEvent{timestamp: now, message: msg})
+	}
+	if st.firstEventTimestamp == nil {
+		first := now
+		st.firstEventTimestamp = &first
+	}
+	last := now
+	st.lastEventTimestamp = &last
+	st.lastIngestionTime = &last
+
+	if len(st.events) > maxEvents {
+		st.events = st.events[len(st.events)-maxEvents:]
+	}
+}
+
 // Reset clears all in-memory state.
 func (s *Service) Reset() {
 	s.mu.Lock()

@@ -78,7 +78,22 @@ The emulator binary is downloaded once per architecture and cached under the dat
 | `Environment.Variables` | passed with `-e` |
 | `ImageConfig` | entrypoint, command, and working directory overrides |
 
-Containers are reused between invocations, matching how Lambda reuses execution environments, and are torn down on `DeleteFunction`, `/_nimbus/reset`, and shutdown.
+### Lifecycle
+
+Containers are reused between invocations, matching how Lambda reuses execution environments. A container is torn down when the function is deleted, on `/_nimbus/reset`, on shutdown, and once it has sat unused for `NIMBUS_LAMBDA_CONTAINER_IDLE` (default `10m`; set `0s` to disable, which is useful when attaching a debugger to a warm container).
+
+An invocation in flight holds its container open regardless of the idle window — a function may legitimately run longer than it.
+
+### Logs
+
+Container output is forwarded to CloudWatch Logs under `/aws/lambda/{function-name}`, with one stream per container in Lambda's own format (`YYYY/MM/DD/[$LATEST]{id}`). Both stdout and stderr land in that stream, interleaved with the runtime emulator's `INIT REPORT`, `START`, `END`, and `REPORT RequestId` lines:
+
+```bash
+nimbuslocal logs filter-log-events --log-group-name /aws/lambda/my-function \
+  --query 'events[].message' --output text
+```
+
+The group and stream are created on first output — nothing has to declare them up front.
 
 ### Reaching Nimbus from the handler
 

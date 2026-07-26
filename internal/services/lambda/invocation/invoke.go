@@ -47,17 +47,18 @@ func (s *Service) Invoke(w http.ResponseWriter, r *http.Request, name string) {
 	// registration wins over a container: a developer pointing the function at
 	// their own process is being deliberate.
 	var timeout time.Duration
+	var release func()
 	if endpoint == "" {
-		target, t, err := s.containerTarget(name)
+		target, t, rel, err := s.containerTarget(name)
 		if err != nil {
 			jsonhttp.Error(w, http.StatusBadGateway, "ServiceException", err.Error())
 			return
 		}
-		endpoint, timeout = target, t
+		endpoint, timeout, release = target, t, rel
 	}
 
 	if endpoint != "" {
-		s.proxyInvoke(w, endpoint, invocationType, payload, timeout)
+		s.proxyInvoke(w, endpoint, invocationType, payload, timeout, release)
 		return
 	}
 
@@ -85,8 +86,16 @@ func (s *Service) Invoke(w http.ResponseWriter, r *http.Request, name string) {
 // forwarded back verbatim, preserving X-Amz-Function-Error if set.
 //
 // A non-zero timeout bounds the call the way Lambda's function timeout does.
-func (s *Service) proxyInvoke(w http.ResponseWriter, endpoint, invocationType string, payload json.RawMessage, timeout time.Duration) {
+//
+// release, when non-nil, marks the backing container free. An async invocation
+// holds it until its goroutine finishes, not until this function returns, so a
+// long background call is not reaped out from under itself.
+func (s *Service) proxyInvoke(w http.ResponseWriter, endpoint, invocationType string, payload json.RawMessage, timeout time.Duration, release func()) {
+	if release == nil {
+		release = func() {}
+	}
 	if invocationType == "DryRun" {
+		release()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -94,6 +103,7 @@ func (s *Service) proxyInvoke(w http.ResponseWriter, endpoint, invocationType st
 
 	if invocationType == "Event" {
 		go func() {
+			defer release()
 			req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 			if err != nil {
 				return
@@ -104,6 +114,7 @@ func (s *Service) proxyInvoke(w http.ResponseWriter, endpoint, invocationType st
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	defer release()
 
 	// RequestResponse — synchronous proxy
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))

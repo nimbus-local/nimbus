@@ -89,7 +89,7 @@ func main() {
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
 	// Container-image functions run as real containers when Docker is reachable.
-	lambdaSvc.EnableContainers(cfg.DataDir)
+	lambdaSvc.EnableContainers(cfg.DataDir, cwlSvc)
 	r.Register(lambdaSvc)
 	appSyncSvc := appsync.New(cfg.DefaultRegion, lambdaSvc.Invocation)
 	r.Register(appSyncSvc)
@@ -328,5 +328,5 @@ func main() {
 	logger.Info("shutting down")
 	// Function containers are children of this process in spirit, not in the
 	// process tree — nothing else will reap them.
-	lambdaSvc.Invocation.StopContainers()
+	lambdaSvc.Invocation.Shutdown()
 }

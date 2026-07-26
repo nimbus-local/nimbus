@@ -225,6 +225,32 @@ if docker info >/dev/null 2>&1; then
       try_match "/_nimbus/lambda/containers lists the warm container" "$CONTAINER_FN" \
         curl -sf "$NIMBUS/_nimbus/lambda/containers"
 
+      # Container output lands in the log group Lambda would use. Forwarding is
+      # batched, so give the pump a moment to flush.
+      LOG_GROUP="/aws/lambda/$CONTAINER_FN"
+      LOGS_FOUND=""
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if $CLI logs filter-log-events --log-group-name "$LOG_GROUP" \
+          --query "events[].message" --output text 2>/dev/null |
+          grep -q "HANDLER-LOG-LINE"; then
+          LOGS_FOUND=yes
+          break
+        fi
+        sleep 0.5
+      done
+      if [ -n "$LOGS_FOUND" ]; then
+        ok "container stdout forwarded to CloudWatch Logs"
+      else
+        fail "container stdout forwarded to CloudWatch Logs"
+      fi
+
+      try_match "container stderr forwarded to the same stream" "HANDLER-STDERR-LINE" \
+        $CLI logs filter-log-events --log-group-name "$LOG_GROUP" \
+        --query "events[].message" --output text
+      try_match "log stream named per execution environment" '\[\$LATEST\]' \
+        $CLI logs describe-log-streams --log-group-name "$LOG_GROUP" \
+        --query "logStreams[].logStreamName" --output text
+
       # Second invoke reuses the warm container rather than starting another.
       REUSE_OUT=$(mktemp)
       try "second invoke reuses the warm container" \

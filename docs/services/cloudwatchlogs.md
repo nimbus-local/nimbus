@@ -1,6 +1,8 @@
 # CloudWatch Logs
 
-In-memory CloudWatch Logs emulator. Log groups, streams, and events are stored locally — nothing is sent to AWS. Once containers run with the `awslogs` log driver pointed at Nimbus, their output lands here and can be retrieved via the standard API or the `/_nimbus/logs/` inspection endpoint.
+In-memory CloudWatch Logs emulator. Log groups, streams, and events are stored locally — nothing is sent to AWS. Retrieve them through the standard API or the `/_nimbus/logs/` inspection endpoint.
+
+Container-image Lambda functions forward their output here automatically, under `/aws/lambda/{function-name}` — see [lambda.md](lambda.md#logs). Containers run with the `awslogs` driver pointed at Nimbus also land here.
 
 **Detection:** `X-Amz-Target: Logs_20140328.*`
 
