@@ -112,6 +112,11 @@ type rtAssociation struct {
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
+// SubnetInUseFunc reports whether another service still references a subnet,
+// returning a description of the resource holding the reference for the error
+// message.
+type SubnetInUseFunc func(subnetID string) (string, bool)
+
 // Service implements the AWS EC2 emulator for VPC-related resources.
 type Service struct {
 	mu           sync.RWMutex
@@ -124,6 +129,7 @@ type Service struct {
 	vpcEndpoints map[string]*vpcEndpoint
 	prefixLists  map[string]*managedPrefixList
 	region       string
+	subnetInUse  []SubnetInUseFunc
 }
 
 // New creates a new EC2 service.
@@ -144,6 +150,13 @@ func New(region string) *Service {
 		// resources, so they are present from the start and survive a reset.
 		prefixLists: seedPrefixLists(region),
 	}
+}
+
+// AddSubnetInUseCheck registers a cross-service dependency check consulted by
+// DeleteSubnet. Call it during startup, before the service begins serving
+// requests.
+func (s *Service) AddSubnetInUseCheck(fn SubnetInUseFunc) {
+	s.subnetInUse = append(s.subnetInUse, fn)
 }
 
 func (s *Service) Name() string { return "ec2" }
@@ -560,11 +573,34 @@ func (s *Service) modifySubnetAttribute(w http.ResponseWriter, r *http.Request) 
 func (s *Service) deleteSubnet(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("SubnetId")
 
+	// Real AWS refuses to delete a subnet another resource still sits in —
+	// e.g. an RDS instance placed there through its DB subnet group.
+	for _, inUse := range s.subnetInUse {
+		if user, blocked := inUse(id); blocked {
+			ec2Error(w, "DependencyViolation", fmt.Sprintf(
+				"The subnet '%s' has dependencies and cannot be deleted: %s", id, user))
+			return
+		}
+	}
+
 	s.mu.Lock()
 	delete(s.subnets, id)
 	s.mu.Unlock()
 
 	writeXML(w, http.StatusOK, ec2Resp("DeleteSubnet", "<return>true</return>"))
+}
+
+// SubnetInfo returns the VPC ID and Availability Zone of a tracked subnet.
+// ok is false if the subnet was never created via CreateSubnet. Used by other
+// services (e.g. RDS subnet groups) to resolve where a subnet lives.
+func (s *Service) SubnetInfo(id string) (vpcID, az string, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sn, found := s.subnets[id]
+	if !found {
+		return "", "", false
+	}
+	return sn.vpcID, sn.availabilityZone, true
 }
 
 // SubnetAZ returns the Availability Zone of a tracked subnet. The second

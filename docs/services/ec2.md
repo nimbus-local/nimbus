@@ -15,7 +15,7 @@ existing smoke stacks that pass hardcoded subnet IDs continue to work.
 |-----------|-------|
 | `DescribeAvailabilityZones` | Returns 3 AZs for the configured region (a, b, c) |
 | `CreateVpc` / `DescribeVpcs` / `DescribeVpcAttribute` / `ModifyVpcAttribute` / `DeleteVpc` | In-memory; auto-creates a default security group and main route table per VPC |
-| `CreateSubnet` / `DescribeSubnets` / `ModifySubnetAttribute` / `DeleteSubnet` | `DescribeSubnets` returns synthetic entries for unknown IDs (backwards compat) |
+| `CreateSubnet` / `DescribeSubnets` / `ModifySubnetAttribute` / `DeleteSubnet` | `DescribeSubnets` returns synthetic entries for unknown IDs (backwards compat); `DeleteSubnet` returns `DependencyViolation` when another service still uses the subnet — see [subnet dependencies](rds.md#subnet-groups-and-subnet-dependencies) |
 | `CreateInternetGateway` / `DescribeInternetGateways` / `AttachInternetGateway` / `DetachInternetGateway` / `DeleteInternetGateway` | In-memory attachment tracking |
 | `CreateSecurityGroup` / `DeleteSecurityGroup` | Custom (non-default) security groups, alongside the default SG auto-created with each VPC |
 | `DescribeSecurityGroups` / `DescribeSecurityGroupRules` / `AuthorizeSecurityGroupIngress` / `AuthorizeSecurityGroupEgress` / `RevokeSecurityGroupIngress` / `RevokeSecurityGroupEgress` / `ModifySecurityGroupRules` | Rules stored with generated `sgr-` IDs; targets may be a CIDR, a prefix list, or a referenced security group; default SG auto-created with each VPC |
