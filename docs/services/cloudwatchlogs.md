@@ -4,6 +4,8 @@ In-memory CloudWatch Logs emulator. Log groups, streams, and events are stored l
 
 Container-image Lambda functions forward their output here automatically, under `/aws/lambda/{function-name}` — see [lambda.md](lambda.md#logs). Containers run with the `awslogs` driver pointed at Nimbus also land here.
 
+An ECS cluster with `containerInsights` enabled publishes performance events to `/aws/ecs/containerinsights/{cluster}/performance`, one per entity per minute, delayed the way real ECS delays them — see [ecs.md](ecs.md#container-insights).
+
 **Detection:** `X-Amz-Target: Logs_20140328.*`
 
 ## Supported operations

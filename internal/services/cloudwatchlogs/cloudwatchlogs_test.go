@@ -490,3 +490,83 @@ func TestLogsHandler(t *testing.T) {
 		t.Errorf("expected log message in output, got: %s", w.Body.String())
 	}
 }
+
+// --- Ingest / IngestAt ---
+
+func TestIngestCreatesGroupAndStream(t *testing.T) {
+	svc := newSvc()
+	// Nothing was created up front: a workload's output reaches CloudWatch
+	// without anyone calling CreateLogGroup first.
+	svc.Ingest("/aws/lambda/fn", "2026/07/26/[$LATEST]abc", []string{"line one", "line two"})
+
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	g, ok := svc.groups["/aws/lambda/fn"]
+	if !ok {
+		t.Fatal("Ingest did not create the log group")
+	}
+	st, ok := g.streams["2026/07/26/[$LATEST]abc"]
+	if !ok {
+		t.Fatal("Ingest did not create the log stream")
+	}
+	if len(st.events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(st.events))
+	}
+}
+
+func TestIngestAtKeepsEventTimeApartFromIngestionTime(t *testing.T) {
+	svc := newSvc()
+	// A Container Insights sample is stamped with the minute it describes and
+	// published over a minute later.
+	eventTS := nowMS() - 80_000
+	svc.IngestAt("/aws/ecs/containerinsights/prod/performance", "ClusterTelemetry-prod",
+		eventTS, `{"Type":"Cluster"}`)
+
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	g, ok := svc.groups["/aws/ecs/containerinsights/prod/performance"]
+	if !ok {
+		t.Fatal("IngestAt did not create the log group")
+	}
+	st, ok := g.streams["ClusterTelemetry-prod"]
+	if !ok {
+		t.Fatal("IngestAt did not create the log stream")
+	}
+	if len(st.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(st.events))
+	}
+	if st.events[0].timestamp != eventTS {
+		t.Errorf("event timestamp = %d, want the supplied %d", st.events[0].timestamp, eventTS)
+	}
+	if st.lastEventTimestamp == nil || *st.lastEventTimestamp != eventTS {
+		t.Errorf("lastEventTimestamp = %v, want %d", st.lastEventTimestamp, eventTS)
+	}
+	if st.lastIngestionTime == nil || *st.lastIngestionTime < eventTS {
+		t.Errorf("lastIngestionTime %v should sit after the event time %d",
+			st.lastIngestionTime, eventTS)
+	}
+}
+
+// The events IngestAt writes must be readable through the ordinary API — that is
+// the whole point of publishing them.
+func TestIngestAtEventsAreFilterable(t *testing.T) {
+	svc := newSvc()
+	group := "/aws/ecs/containerinsights/prod/performance"
+	svc.IngestAt(group, "FargateTelemetry-42", nowMS(), `{"Type":"Task","CpuUtilized":12.5}`)
+	svc.IngestAt(group, "FargateTelemetry-42", nowMS(), `{"Type":"Container","CpuUtilized":12.5}`)
+
+	w := cwlReq(t, svc, "FilterLogEvents", map[string]interface{}{
+		"logGroupName":  group,
+		"filterPattern": `{ $.Type = "Task" }`,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	events := decode(t, w)["events"].([]interface{})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Task event to match the JSON pattern, got %d", len(events))
+	}
+	if !strings.Contains(events[0].(map[string]interface{})["message"].(string), `"Type":"Task"`) {
+		t.Errorf("unexpected match: %v", events[0])
+	}
+}

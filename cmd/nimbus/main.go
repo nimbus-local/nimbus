@@ -100,6 +100,9 @@ func main() {
 	ecrSvc := ecr.New(cfg.DefaultRegion)
 	r.Register(ecrSvc)
 	ecsSvc := ecs.New(cfg.DefaultRegion)
+	// A cluster with containerInsights enabled publishes performance events to
+	// /aws/ecs/containerinsights/{cluster}/performance in CloudWatch Logs.
+	ecsSvc.EnableContainerInsights(cwlSvc)
 	r.Register(ecsSvc)
 	smSvc := secretsmanager.New(cfg.DefaultRegion)
 	r.Register(smSvc)

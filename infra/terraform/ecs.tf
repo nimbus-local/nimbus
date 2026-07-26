@@ -1,5 +1,12 @@
 resource "aws_ecs_cluster" "nimbus_test" {
   name = var.prefix
+
+  # Makes Nimbus publish performance events to
+  # /aws/ecs/containerinsights/<cluster>/performance, as real ECS does.
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
 }
 
 resource "aws_ecs_task_definition" "nimbus_test" {
