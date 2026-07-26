@@ -737,6 +737,41 @@ try_match "filter-log-events pattern match" "nimbus-cwl-probe" \
     --log-group-name "/nimbus/$PREFIX/app" \
     --filter-pattern "nimbus-cwl-probe" \
     --query "events[].message" --output text
+# JSON metric-filter patterns select on the event body, the way Container
+# Insights consumers query the performance log group.
+CWL_EVENTS=$(mktemp)
+printf '[{"timestamp":%s,"message":"{\\"Type\\":\\"Task\\",\\"TaskId\\":\\"nimbus-cwl-json-probe\\",\\"CpuUtilized\\":64.5}"}]' \
+  "$(( $(date +%s) * 1000 ))" >"$CWL_EVENTS"
+try "put-log-events (json message)" \
+  $CLI logs put-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --log-stream-name "container" \
+    --log-events "file://$CWL_EVENTS"
+rm -f "$CWL_EVENTS"
+try_match "filter-log-events json pattern" "nimbus-cwl-json-probe" \
+  $CLI logs filter-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --filter-pattern '{ $.Type = "Task" }' \
+    --query "events[].message" --output text
+try_match "filter-log-events json numeric comparison" "nimbus-cwl-json-probe" \
+  $CLI logs filter-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --filter-pattern '{ $.CpuUtilized > 10 && $.TaskId = "nimbus-cwl-*" }' \
+    --query "events[].message" --output text
+# A pattern that selects nothing must come back empty, not with everything.
+CWL_MISSES=$($CLI logs filter-log-events \
+  --log-group-name "/nimbus/$PREFIX/app" \
+  --filter-pattern '{ $.Type = "Service" }' \
+  --query "length(events)" --output text 2>&1)
+if [ "$CWL_MISSES" = "0" ]; then
+  ok "filter-log-events json pattern excludes non-matches"
+else
+  fail "filter-log-events json pattern excludes non-matches" "got: '$CWL_MISSES'"
+fi
+try_fail_match "filter-log-events rejects a malformed pattern" "InvalidParameterException" \
+  $CLI logs filter-log-events \
+    --log-group-name "/nimbus/$PREFIX/app" \
+    --filter-pattern '{ $.Type = }'
 try_match "/_nimbus/logs inspection endpoint" "nimbus-cwl-probe" \
   curl -sf "$NIMBUS/_nimbus/logs/nimbus/$PREFIX/app/container"
 

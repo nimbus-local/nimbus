@@ -321,6 +321,99 @@ func TestFilterLogEvents(t *testing.T) {
 	}
 }
 
+// TestFilterLogEvents_JSONPattern covers the Container Insights case from
+// issue #109: a JSON metric-filter pattern used to match nothing.
+func TestFilterLogEvents_JSONPattern(t *testing.T) {
+	const group = "/aws/ecs/containerinsights/demo-cluster/performance"
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": group})
+	cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": group, "logStreamName": "test-stream"})
+	cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+		"logGroupName":  group,
+		"logStreamName": "test-stream",
+		"logEvents": []map[string]interface{}{
+			{"timestamp": 1000, "message": `{"Type":"Task","TaskId":"abc123","CpuUtilized":64.5}`},
+			{"timestamp": 2000, "message": `{"Type":"Container","TaskId":"abc123","CpuUtilized":2.0}`},
+			{"timestamp": 3000, "message": "not json at all"},
+		},
+	})
+
+	for _, tc := range []struct {
+		pattern string
+		want    int
+	}{
+		{`{ $.Type = "Task" }`, 1},
+		{`{ $.Type = "Container" }`, 1},
+		{`{ $.TaskId = "abc*" }`, 2},
+		{`{ $.CpuUtilized > 10 }`, 1},
+		{`{ $.Type = "Service" }`, 0},
+		{"", 3},
+	} {
+		w := cwlReq(t, svc, "FilterLogEvents", map[string]interface{}{
+			"logGroupName":  group,
+			"filterPattern": tc.pattern,
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("pattern %s: expected 200, got %d: %s", tc.pattern, w.Code, w.Body.String())
+		}
+		events := decode(t, w)["events"].([]interface{})
+		if len(events) != tc.want {
+			t.Errorf("pattern %s: got %d events, want %d", tc.pattern, len(events), tc.want)
+		}
+	}
+}
+
+// An unparseable pattern is an error, not an empty result set — silently
+// returning nothing is how a pattern gap goes unnoticed (issue #109).
+func TestFilterLogEvents_InvalidPattern(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+
+	w := cwlReq(t, svc, "FilterLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"filterPattern": `{ $.Type = }`,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if body := decode(t, w); body["__type"] != "InvalidParameterException" {
+		t.Errorf("expected InvalidParameterException, got %v", body["__type"])
+	}
+}
+
+// FilterLogEvents interleaves streams by timestamp, so `limit` returns the
+// oldest matches rather than whichever stream the map happened to yield first.
+func TestFilterLogEvents_SortedAcrossStreams(t *testing.T) {
+	svc := newSvc()
+	cwlReq(t, svc, "CreateLogGroup", map[string]string{"logGroupName": "/app"})
+	for _, s := range []struct {
+		stream string
+		ts     int
+	}{{"a", 3000}, {"b", 1000}, {"c", 2000}} {
+		cwlReq(t, svc, "CreateLogStream", map[string]string{"logGroupName": "/app", "logStreamName": s.stream})
+		cwlReq(t, svc, "PutLogEvents", map[string]interface{}{
+			"logGroupName":  "/app",
+			"logStreamName": s.stream,
+			"logEvents":     []map[string]interface{}{{"timestamp": s.ts, "message": "ERROR " + s.stream}},
+		})
+	}
+
+	w := cwlReq(t, svc, "FilterLogEvents", map[string]interface{}{
+		"logGroupName":  "/app",
+		"filterPattern": "ERROR",
+		"limit":         2,
+	})
+	events := decode(t, w)["events"].([]interface{})
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	for i, want := range []string{"ERROR b", "ERROR c"} {
+		if got := events[i].(map[string]interface{})["message"]; got != want {
+			t.Errorf("event %d = %v, want %q", i, got, want)
+		}
+	}
+}
+
 // --- Inspection handler ---
 
 // --- Retention policy ---
