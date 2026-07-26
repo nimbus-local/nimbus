@@ -9,6 +9,10 @@ provider "aws" {
   # Path-style required for Nimbus S3
   s3_use_path_style = true
 
+  # Every service Nimbus emulates needs an entry here. Once this block exists,
+  # a service that is missing from it resolves to real AWS — silently, if
+  # AWS_ENDPOINT_URL happens to be set in the environment (infra/Makefile
+  # exports it, which masks the mistake when running through make).
   endpoints {
     s3             = var.nimbus_endpoint
     sqs            = var.nimbus_endpoint
@@ -19,6 +23,7 @@ provider "aws" {
     sesv2          = var.nimbus_endpoint
     lambda         = var.nimbus_endpoint
     apigateway     = var.nimbus_endpoint
+    apigatewayv2   = var.nimbus_endpoint
     ecr            = var.nimbus_endpoint
     ecs            = var.nimbus_endpoint
     kms            = var.nimbus_endpoint

@@ -8,10 +8,11 @@ import (
 
 func (s *Service) createHTTPApi(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name                     string `json:"name"`
-		Description              string `json:"description"`
-		ProtocolType             string `json:"protocolType"`
-		RouteSelectionExpression string `json:"routeSelectionExpression"`
+		Name                      string `json:"name"`
+		Description               string `json:"description"`
+		ProtocolType              string `json:"protocolType"`
+		RouteSelectionExpression  string `json:"routeSelectionExpression"`
+		ApiKeySelectionExpression string `json:"apiKeySelectionExpression"`
 	}
 	if err := jsonDecode(r, &req); err != nil {
 		apiError(w, http.StatusBadRequest, "BadRequestException", "invalid request body: "+err.Error())
@@ -21,7 +22,8 @@ func (s *Service) createHTTPApi(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "BadRequestException", "name is required")
 		return
 	}
-	api := s.v2.createAPI(req.Name, req.Description, req.ProtocolType, req.RouteSelectionExpression, 4566)
+	api := s.v2.createAPI(req.Name, req.Description, req.ProtocolType,
+		req.RouteSelectionExpression, req.ApiKeySelectionExpression, 4566)
 	jsonhttp.Write(w, http.StatusCreated, api)
 }
 
