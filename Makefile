@@ -1,6 +1,6 @@
 INFRA := $(MAKE) -C infra
 
-.PHONY: setup build fmt vet pr _fmt-check _build _vet
+.PHONY: setup build fmt vet pr _branch-check _fmt-check _build _vet
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ vet:
 # Usage: make pr
 # Optional overrides: make pr TITLE="feat: override title" BODY="override body"
 
-pr: _fmt-check _build _vet
+pr: _branch-check _fmt-check _build _vet
 	@echo "── Destroying existing environment..."
 	$(INFRA) stop
 	@echo "── Starting Nimbus (rebuilding image)..."
@@ -33,12 +33,25 @@ pr: _fmt-check _build _vet
 	$(INFRA) apply
 	@echo "── Running smoke tests..."
 	$(INFRA) smoke-test
-	@echo "── All checks passed. Creating PR..."
+	@echo "── All checks passed. Pushing branch..."
+	git push -u origin HEAD
+	@echo "── Creating PR..."
 	gh pr create --fill \
 		$(if $(TITLE),--title "$(TITLE)") \
 		$(if $(BODY),--body "$(BODY)")
 
 # ── Internal check targets ────────────────────────────────────────────────────
+
+# Guards the push in `pr`: a feature branch is required so the target can never
+# push straight to the default branch.
+_branch-check:
+	@echo "Checking branch..."
+	@branch=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" = "master" ] || [ "$$branch" = "main" ] || [ "$$branch" = "HEAD" ]; then \
+		echo "✗ 'make pr' needs a feature branch (on: $$branch)"; \
+		exit 1; \
+	fi; \
+	echo "✓ on branch $$branch"
 
 _fmt-check:
 	@echo "Checking gofmt..."
