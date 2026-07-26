@@ -34,6 +34,8 @@ type Service struct {
 	responses     map[string]json.RawMessage // configured mock response per function name
 	invocations   []*InvocationRecord
 	liveEndpoints map[string]string // function name → live HTTP endpoint
+	images        ImageFunctionSource
+	runner        *containerRunner
 }
 
 func New(checker FunctionChecker) *Service {
@@ -44,13 +46,111 @@ func New(checker FunctionChecker) *Service {
 	}
 }
 
-// Reset clears all mock responses, recorded invocations, and live endpoints.
-func (s *Service) Reset() {
+// EnableContainers turns on real execution for container-image functions.
+// Without it — or without a reachable Docker daemon — image functions keep
+// using the mock/proxy path.
+func (s *Service) EnableContainers(images ImageFunctionSource, dataDir string, logs LogSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.images = images
+	s.runner = newContainerRunner(dataDir, logs)
+}
+
+// Reset clears all mock responses, recorded invocations, and live endpoints,
+// and tears down any running function containers.
+func (s *Service) Reset() {
+	s.mu.Lock()
+	runner := s.runner
 	s.responses = map[string]json.RawMessage{}
 	s.invocations = nil
 	s.liveEndpoints = map[string]string{}
+	s.mu.Unlock()
+
+	if runner != nil {
+		runner.stopAll()
+	}
+}
+
+// StopContainers tears down every running function container, leaving the
+// service able to start more.
+func (s *Service) StopContainers() {
+	s.mu.RLock()
+	runner := s.runner
+	s.mu.RUnlock()
+	if runner != nil {
+		runner.stopAll()
+	}
+}
+
+// Shutdown tears down every container and stops the idle reaper. Called on
+// process exit so containers do not outlive the process that started them.
+func (s *Service) Shutdown() {
+	s.mu.RLock()
+	runner := s.runner
+	s.mu.RUnlock()
+	if runner != nil {
+		runner.shutdown()
+	}
+}
+
+// ReleaseFunction tears down a function's container, if it has one. Called
+// when the function is deleted.
+func (s *Service) ReleaseFunction(name string) {
+	s.mu.RLock()
+	runner := s.runner
+	s.mu.RUnlock()
+	if runner != nil {
+		runner.stop(name)
+	}
+}
+
+// containerTarget resolves the invoke URL for a container-image function,
+// starting its container if it is not already warm. An empty endpoint with no
+// error means the function is not backed by a container.
+func (s *Service) containerTarget(name string) (string, time.Duration, func(), error) {
+	s.mu.RLock()
+	images, runner := s.images, s.runner
+	s.mu.RUnlock()
+
+	if images == nil || runner == nil || !runner.available {
+		return "", 0, nil, nil
+	}
+	spec, ok := images.ImageSpec(name)
+	if !ok {
+		return "", 0, nil, nil
+	}
+
+	endpoint, release, err := runner.ensure(name, spec)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("start container for %s: %w", name, err)
+	}
+	return invokeURL(endpoint), time.Duration(spec.TimeoutSec) * time.Second, release, nil
+}
+
+// Containers reports the container ID backing each running image function.
+func (s *Service) Containers() map[string]string {
+	s.mu.RLock()
+	runner := s.runner
+	s.mu.RUnlock()
+	if runner == nil {
+		return map[string]string{}
+	}
+	return runner.running()
+}
+
+// ContainersHandler serves GET /_nimbus/lambda/containers for inspection and
+// DELETE to tear every running container down.
+func (s *Service) ContainersHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.Containers()) //nolint:errcheck
+	case http.MethodDelete:
+		s.StopContainers()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // LiveEndpoint returns the registered live endpoint for the given function, if any.
@@ -174,6 +274,17 @@ func (s *Service) DirectInvoke(functionName string, payload []byte) ([]byte, err
 	response := s.responses[functionName]
 	endpoint := s.liveEndpoints[functionName]
 	s.mu.Unlock()
+
+	if endpoint == "" {
+		target, _, release, err := s.containerTarget(functionName)
+		if err != nil {
+			return nil, err
+		}
+		if release != nil {
+			defer release()
+		}
+		endpoint = target
+	}
 
 	if endpoint != "" {
 		return directProxyInvoke(endpoint, payload)

@@ -61,6 +61,47 @@ func New(region string) *Service {
 	}
 }
 
+// imageSource adapts the function store to the container-image details the
+// invocation service needs, so neither sub-package has to import the other.
+type imageSource struct{ crud *function_crud.Service }
+
+func (s imageSource) ImageSpec(name string) (invocation.ImageSpec, bool) {
+	fn, ok := s.crud.Function(name)
+	if !ok || fn.PackageType != function_crud.PackageTypeImage || fn.ImageUri == "" {
+		return invocation.ImageSpec{}, false
+	}
+
+	spec := invocation.ImageSpec{
+		ImageURI:   fn.ImageUri,
+		Arch:       "x86_64",
+		MemoryMB:   fn.MemorySize,
+		TimeoutSec: fn.Timeout,
+	}
+	if len(fn.Architectures) > 0 {
+		spec.Arch = fn.Architectures[0]
+	}
+	if fn.EphemeralStorage != nil {
+		spec.EphemeralMB = fn.EphemeralStorage.Size
+	}
+	if fn.Environment != nil {
+		spec.Env = fn.Environment.Variables
+	}
+	if fn.ImageConfigResponse != nil && fn.ImageConfigResponse.ImageConfig != nil {
+		ic := fn.ImageConfigResponse.ImageConfig
+		spec.EntryPoint = ic.EntryPoint
+		spec.Command = ic.Command
+		spec.WorkingDir = ic.WorkingDirectory
+	}
+	return spec, true
+}
+
+// EnableContainers turns on real execution for container-image functions,
+// caching the runtime emulator under dataDir and forwarding container output
+// to logs.
+func (s *Service) EnableContainers(dataDir string, logs invocation.LogSink) {
+	s.Invocation.EnableContainers(imageSource{crud: s.CRUD}, dataDir, logs)
+}
+
 func (s *Service) Name() string { return "lambda" }
 
 // Reset clears all Lambda state across all sub-services.
@@ -160,6 +201,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut && suffix == "configuration":
 		s.CRUD.UpdateConfiguration(w, r, name)
 	case r.Method == http.MethodDelete && suffix == "":
+		// Tear the container down with the function so it does not outlive it.
+		s.Invocation.ReleaseFunction(name)
 		s.CRUD.Delete(w, r, name)
 	case r.Method == http.MethodGet && suffix == "versions":
 		s.CRUD.ListVersions(w, r, name)

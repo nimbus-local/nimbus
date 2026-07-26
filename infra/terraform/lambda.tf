@@ -31,3 +31,27 @@ resource "aws_lambda_function" "nimbus_test" {
     }
   }
 }
+
+# Container-image function. The image reference must round-trip through
+# GetFunction's Code block or the provider reads image_uri back as empty and
+# plans a change on every run — so a clean second plan is what this fixture
+# checks. Nimbus never pulls the image, so the tag need not exist.
+resource "aws_lambda_function" "nimbus_test_image" {
+  function_name = "${var.prefix}-image"
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.nimbus_test.repository_url}:latest"
+  role          = "arn:aws:iam::000000000000:role/lambda-exec"
+
+  memory_size = 2048
+  timeout     = 300
+
+  ephemeral_storage {
+    size = 1024
+  }
+
+  image_config {
+    command           = ["app.handler"]
+    entry_point       = ["/usr/bin/python3"]
+    working_directory = "/var/task"
+  }
+}

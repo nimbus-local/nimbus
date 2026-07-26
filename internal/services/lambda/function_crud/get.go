@@ -26,7 +26,7 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{
 		"Configuration": fn,
-		"Code":          map[string]string{"Location": "", "RepositoryType": "S3"},
+		"Code":          fn.CodeLocation(),
 		"Tags":          tags,
 	})
 }

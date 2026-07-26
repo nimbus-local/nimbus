@@ -29,6 +29,7 @@ type logGroup struct {
 	createdAt       int64 // unix ms
 	tags            map[string]string
 	retentionInDays int
+	kmsKeyID        string
 	streams         map[string]*logStream // streamName -> stream
 }
 
@@ -61,6 +62,60 @@ func New(region string) *Service {
 }
 
 func (s *Service) Name() string { return "cloudwatchlogs" }
+
+// Ingest appends messages to a stream on behalf of another Nimbus service,
+// creating the group and stream if they do not exist. AWS delivers a workload's
+// output to CloudWatch without anyone calling CreateLogGroup first, so callers
+// forwarding container output should not have to either.
+//
+// Messages are stamped with the current time: the emitting process reports no
+// timestamp of its own on stdout.
+func (s *Service) Ingest(group, stream string, messages []string) {
+	if group == "" || stream == "" || len(messages) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, ok := s.groups[group]
+	if !ok {
+		g = &logGroup{
+			name:      group,
+			arn:       s.groupARN(group),
+			createdAt: nowMS(),
+			tags:      map[string]string{},
+			streams:   map[string]*logStream{},
+		}
+		s.groups[group] = g
+	}
+
+	st, ok := g.streams[stream]
+	if !ok {
+		st = &logStream{
+			name:      stream,
+			arn:       s.streamARN(group, stream),
+			createdAt: nowMS(),
+		}
+		g.streams[stream] = st
+	}
+
+	now := nowMS()
+	for _, msg := range messages {
+		st.events = append(st.events, logEvent{timestamp: now, message: msg})
+	}
+	if st.firstEventTimestamp == nil {
+		first := now
+		st.firstEventTimestamp = &first
+	}
+	last := now
+	st.lastEventTimestamp = &last
+	st.lastIngestionTime = &last
+
+	if len(st.events) > maxEvents {
+		st.events = st.events[len(st.events)-maxEvents:]
+	}
+}
 
 // Reset clears all in-memory state.
 func (s *Service) Reset() {
@@ -101,6 +156,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.putRetentionPolicy(w, r)
 	case "DeleteRetentionPolicy":
 		s.deleteRetentionPolicy(w, r)
+	case "AssociateKmsKey":
+		s.associateKmsKey(w, r)
+	case "DisassociateKmsKey":
+		s.disassociateKmsKey(w, r)
 	case "ListTagsForResource", "ListTagsLogGroup":
 		jsonhttp.Write(w, http.StatusOK, map[string]interface{}{"tags": map[string]string{}})
 	default:
@@ -114,6 +173,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Service) createLogGroup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LogGroupName string            `json:"logGroupName"`
+		KmsKeyID     string            `json:"kmsKeyId"`
 		Tags         map[string]string `json:"tags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LogGroupName == "" {
@@ -139,6 +199,7 @@ func (s *Service) createLogGroup(w http.ResponseWriter, r *http.Request) {
 		arn:       s.groupARN(req.LogGroupName),
 		createdAt: nowMS(),
 		tags:      tags,
+		kmsKeyID:  req.KmsKeyID,
 		streams:   map[string]*logStream{},
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
@@ -162,6 +223,52 @@ func (s *Service) deleteLogGroup(w http.ResponseWriter, r *http.Request) {
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
 }
 
+// AssociateKmsKey records the CMK a log group's data is encrypted under.
+// Nimbus stores logs in memory and never encrypts them; the key is tracked only
+// so it reads back on DescribeLogGroups.
+func (s *Service) associateKmsKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName string `json:"logGroupName"`
+		KmsKeyID     string `json:"kmsKeyId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LogGroupName == "" || req.KmsKeyID == "" {
+		jsonhttp.Error(w, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName and kmsKeyId are required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+	g.kmsKeyID = req.KmsKeyID
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
+}
+
+func (s *Service) disassociateKmsKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogGroupName string `json:"logGroupName"`
+	}
+	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck — missing group is reported below
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, ok := s.groups[req.LogGroupName]
+	if !ok {
+		jsonhttp.Error(w, http.StatusBadRequest, "ResourceNotFoundException",
+			fmt.Sprintf("Log group %s not found.", req.LogGroupName))
+		return
+	}
+	g.kmsKeyID = ""
+	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{})
+}
+
 func (s *Service) describeLogGroups(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LogGroupNamePrefix string `json:"logGroupNamePrefix"`
@@ -172,10 +279,16 @@ func (s *Service) describeLogGroups(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Attributes configured after creation (retention, KMS key) must be echoed
+	// back here — clients read their current state from DescribeLogGroups, and
+	// omitting a configured value reads as "unset".
 	type groupEntry struct {
-		LogGroupName string `json:"logGroupName"`
-		Arn          string `json:"arn"`
-		CreationTime int64  `json:"creationTime"`
+		LogGroupName    string `json:"logGroupName"`
+		Arn             string `json:"arn"`
+		CreationTime    int64  `json:"creationTime"`
+		RetentionInDays int    `json:"retentionInDays,omitempty"`
+		KmsKeyID        string `json:"kmsKeyId,omitempty"`
+		StoredBytes     int64  `json:"storedBytes"`
 	}
 	var results []groupEntry
 	for _, g := range s.groups {
@@ -183,9 +296,12 @@ func (s *Service) describeLogGroups(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		results = append(results, groupEntry{
-			LogGroupName: g.name,
-			Arn:          g.arn,
-			CreationTime: g.createdAt,
+			LogGroupName:    g.name,
+			Arn:             g.arn,
+			CreationTime:    g.createdAt,
+			RetentionInDays: g.retentionInDays,
+			KmsKeyID:        g.kmsKeyID,
+			StoredBytes:     0,
 		})
 	}
 	jsonhttp.Write(w, http.StatusOK, map[string]interface{}{

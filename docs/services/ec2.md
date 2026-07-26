@@ -18,12 +18,53 @@ existing smoke stacks that pass hardcoded subnet IDs continue to work.
 | `CreateSubnet` / `DescribeSubnets` / `ModifySubnetAttribute` / `DeleteSubnet` | `DescribeSubnets` returns synthetic entries for unknown IDs (backwards compat) |
 | `CreateInternetGateway` / `DescribeInternetGateways` / `AttachInternetGateway` / `DetachInternetGateway` / `DeleteInternetGateway` | In-memory attachment tracking |
 | `CreateSecurityGroup` / `DeleteSecurityGroup` | Custom (non-default) security groups, alongside the default SG auto-created with each VPC |
-| `DescribeSecurityGroups` / `DescribeSecurityGroupRules` / `AuthorizeSecurityGroupIngress` / `AuthorizeSecurityGroupEgress` / `RevokeSecurityGroupIngress` / `RevokeSecurityGroupEgress` / `ModifySecurityGroupRules` | Rules stored with generated `sgr-` IDs; default SG auto-created with each VPC |
+| `DescribeSecurityGroups` / `DescribeSecurityGroupRules` / `AuthorizeSecurityGroupIngress` / `AuthorizeSecurityGroupEgress` / `RevokeSecurityGroupIngress` / `RevokeSecurityGroupEgress` / `ModifySecurityGroupRules` | Rules stored with generated `sgr-` IDs; targets may be a CIDR, a prefix list, or a referenced security group; default SG auto-created with each VPC |
+| `CreateVpcEndpoint` / `DescribeVpcEndpoints` / `ModifyVpcEndpoint` / `DeleteVpcEndpoints` | Gateway and Interface endpoints; `DescribeVpcEndpoints` filters on `vpc-id`, `service-name`, `vpc-endpoint-id`, `vpc-endpoint-type`, `vpc-endpoint-state`, and `tag:<key>` |
+| `DescribePrefixLists` / `DescribeManagedPrefixLists` / `GetManagedPrefixListEntries` | AWS-managed service prefix lists only; see below |
 | `CreateRouteTable` / `DescribeRouteTables` / `DeleteRouteTable` | Includes local route; supports filter by `vpc-id`, `route-table-id`, and `association.*` |
 | `CreateRoute` / `DeleteRoute` | Stored per route table; local route is never deleted |
 | `AssociateRouteTable` / `DisassociateRouteTable` | Associations tracked by `rtbassoc-` ID |
 | `DescribeNetworkInterfaces` | Always returns an empty set — no real ENIs exist; unblocks subnet/VPC teardown |
 | `CreateTags` / `DeleteTags` | Applied to VPCs, subnets, IGWs, security groups, and route tables |
+
+## VPC endpoints and prefix lists
+
+The AWS-managed service prefix lists that back gateway endpoints —
+`com.amazonaws.<region>.s3` and `com.amazonaws.<region>.dynamodb` — exist from
+startup and survive `/_nimbus/reset`, matching AWS, where they are not account
+resources. Their IDs are derived from the list name, so they stay the same
+across restarts and a recorded ID in a state file keeps resolving. The CIDRs
+behind them are reserved documentation ranges: nothing routes through Nimbus,
+and a synthetic range makes that obvious.
+
+Customer-managed prefix lists (`CreateManagedPrefixList`) are not implemented.
+
+Endpoints are **not** created automatically with a VPC. A module that looks one
+up rather than managing it — the common pattern when the VPC is owned
+elsewhere — needs an `aws_vpc_endpoint` resource in the local stack, or
+`data.aws_vpc_endpoint` finds nothing:
+
+```hcl
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id       = data.aws_vpc.selected.id
+  service_name = "com.amazonaws.us-east-1.s3"
+}
+```
+
+Security group rules may target a prefix list instead of a CIDR, which is how
+egress is scoped to a gateway endpoint:
+
+```hcl
+egress {
+  from_port       = 443
+  to_port         = 443
+  protocol        = "tcp"
+  prefix_list_ids = [data.aws_vpc_endpoint.s3.prefix_list_id]
+}
+```
+
+Nimbus enforces no network policy — rules are stored and reported back so
+configuration round-trips, but traffic is never filtered.
 
 ## Example
 

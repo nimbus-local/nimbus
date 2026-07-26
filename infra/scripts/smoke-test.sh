@@ -158,6 +158,124 @@ try_match "/_nimbus/ses/messages captured" "smoke test" \
 section "Lambda"
 try_match "get-function config" '"python3.12"' \
   $CLI lambda get-function --function-name "$PREFIX" --query 'Configuration.Runtime'
+try_match "zip function reports an S3 repository" '"S3"' \
+  $CLI lambda get-function --function-name "$PREFIX" --query 'Code.RepositoryType'
+
+# Container-image function. The image reference lives in the Code block, not in
+# FunctionConfiguration — an empty ImageUri here is what makes the provider plan
+# a change on every run.
+try_match "image function reports an ECR repository" '"ECR"' \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.RepositoryType'
+try_match "image function round-trips image_uri" "$PREFIX:latest" \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.ImageUri'
+try_match "image function resolves a digest" "@sha256:" \
+  $CLI lambda get-function --function-name "$PREFIX-image" --query 'Code.ResolvedImageUri'
+try_match "image function round-trips image_config" "app.handler" \
+  $CLI lambda get-function --function-name "$PREFIX-image" \
+  --query 'Configuration.ImageConfigResponse.ImageConfig.Command'
+try_match "image function keeps ephemeral storage" "1024" \
+  $CLI lambda get-function --function-name "$PREFIX-image" \
+  --query 'Configuration.EphemeralStorage.Size'
+# Creating an Image function without a reference is rejected rather than stored
+# as a function that could never run.
+try_fail "create-function Image without image-uri is rejected" \
+  $CLI lambda create-function --function-name "$PREFIX-no-image" \
+  --package-type Image --role arn:aws:iam::000000000000:role/lambda-exec
+
+# ── Lambda container execution ────────────────────────────────────────────────
+
+section "Lambda container execution"
+
+if docker info >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    arm64 | aarch64) LAMBDA_ARCH="arm64" ;;
+    *) LAMBDA_ARCH="x86_64" ;;
+  esac
+  FIXTURE_DIR="$(dirname "$0")/fixtures/lambda-image"
+  CONTAINER_FN="$PREFIX-container"
+
+  if docker build -q -t nimbus-smoke-lambda:dev "$FIXTURE_DIR" >/dev/null 2>&1; then
+    ok "build container image fixture"
+
+    $CLI lambda delete-function --function-name "$CONTAINER_FN" >/dev/null 2>&1 || true
+    if $CLI lambda create-function --function-name "$CONTAINER_FN" \
+      --package-type Image \
+      --code ImageUri=nimbus-smoke-lambda:dev \
+      --role arn:aws:iam::000000000000:role/lambda-exec \
+      --architectures "$LAMBDA_ARCH" \
+      --timeout 60 --memory-size 512 \
+      --environment "Variables={NIMBUS_SMOKE_MARKER=container-ok}" >/dev/null 2>&1; then
+      ok "create-function (container image)"
+
+      # First invoke pays the container start; the image ships no runtime
+      # emulator, so this only works if Nimbus injected one.
+      INVOKE_OUT=$(mktemp)
+      if $CLI lambda invoke --function-name "$CONTAINER_FN" \
+        --cli-binary-format raw-in-base64-out \
+        --payload '{"ping":"pong"}' "$INVOKE_OUT" >/dev/null 2>&1; then
+        ok "invoke runs the real container"
+        try_match "handler received the payload" "pong" cat "$INVOKE_OUT"
+        try_match "handler was pointed back at Nimbus" "4566" cat "$INVOKE_OUT"
+        try_match "handler saw its configured environment" "container-ok" cat "$INVOKE_OUT"
+      else
+        fail "invoke runs the real container"
+      fi
+      rm -f "$INVOKE_OUT"
+
+      try_match "/_nimbus/lambda/containers lists the warm container" "$CONTAINER_FN" \
+        curl -sf "$NIMBUS/_nimbus/lambda/containers"
+
+      # Container output lands in the log group Lambda would use. Forwarding is
+      # batched, so give the pump a moment to flush.
+      LOG_GROUP="/aws/lambda/$CONTAINER_FN"
+      LOGS_FOUND=""
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if $CLI logs filter-log-events --log-group-name "$LOG_GROUP" \
+          --query "events[].message" --output text 2>/dev/null |
+          grep -q "HANDLER-LOG-LINE"; then
+          LOGS_FOUND=yes
+          break
+        fi
+        sleep 0.5
+      done
+      if [ -n "$LOGS_FOUND" ]; then
+        ok "container stdout forwarded to CloudWatch Logs"
+      else
+        fail "container stdout forwarded to CloudWatch Logs"
+      fi
+
+      try_match "container stderr forwarded to the same stream" "HANDLER-STDERR-LINE" \
+        $CLI logs filter-log-events --log-group-name "$LOG_GROUP" \
+        --query "events[].message" --output text
+      try_match "log stream named per execution environment" '\[\$LATEST\]' \
+        $CLI logs describe-log-streams --log-group-name "$LOG_GROUP" \
+        --query "logStreams[].logStreamName" --output text
+
+      # Second invoke reuses the warm container rather than starting another.
+      REUSE_OUT=$(mktemp)
+      try "second invoke reuses the warm container" \
+        $CLI lambda invoke --function-name "$CONTAINER_FN" \
+        --cli-binary-format raw-in-base64-out \
+        --payload '{"ping":"again"}' "$REUSE_OUT"
+      rm -f "$REUSE_OUT"
+
+      try "delete-function tears the container down" \
+        $CLI lambda delete-function --function-name "$CONTAINER_FN"
+
+      if curl -sf "$NIMBUS/_nimbus/lambda/containers" | grep -q "$CONTAINER_FN"; then
+        fail "container released on delete-function"
+      else
+        ok "container released on delete-function"
+      fi
+    else
+      fail "create-function (container image)"
+    fi
+  else
+    fail "build container image fixture"
+  fi
+else
+  echo "  – Docker unavailable, skipping container execution checks"
+fi
 
 # ── API Gateway ───────────────────────────────────────────────────────────────
 
@@ -545,6 +663,16 @@ try_match "describe-log-groups finds group" "/nimbus/$PREFIX/app" \
   $CLI logs describe-log-groups \
     --log-group-name-prefix "/nimbus/$PREFIX" \
     --query "logGroups[].logGroupName" --output text
+# Retention and the CMK are set at or after creation and must read back, or the
+# provider sees them as unset on refresh.
+try_match "describe-log-groups reports retention" "14" \
+  $CLI logs describe-log-groups \
+    --log-group-name-prefix "/nimbus/$PREFIX/app" \
+    --query "logGroups[].retentionInDays" --output text
+try_match "describe-log-groups reports kms key" "arn:aws:kms:" \
+  $CLI logs describe-log-groups \
+    --log-group-name-prefix "/nimbus/$PREFIX/app" \
+    --query "logGroups[].kmsKeyId" --output text
 try_match "describe-log-streams finds stream" "container" \
   $CLI logs describe-log-streams \
     --log-group-name "/nimbus/$PREFIX/app" \
@@ -1022,6 +1150,72 @@ if [ -n "${VPC_ID:-}" ] && [ "$VPC_ID" != "None" ]; then
   try_match "describe-vpcs shows tag" "smoke" \
     $CLI ec2 describe-vpcs --vpc-ids "$VPC_ID" \
       --query "Vpcs[0].Tags[?Key=='env'].Value" --output text
+
+  # VPC endpoints and prefix lists. The service prefix lists exist without
+  # anyone creating them, the way AWS-managed lists do.
+  S3_PL_ID=$($CLI ec2 describe-prefix-lists \
+    --filters "Name=prefix-list-name,Values=com.amazonaws.us-east-1.s3" \
+    --query "PrefixLists[0].PrefixListId" --output text 2>/dev/null)
+  if [ -n "${S3_PL_ID:-}" ] && [ "$S3_PL_ID" != "None" ]; then
+    ok "describe-prefix-lists resolves the S3 service list"
+
+    try_match "get-managed-prefix-list-entries returns CIDRs" "/" \
+      $CLI ec2 get-managed-prefix-list-entries --prefix-list-id "$S3_PL_ID" \
+        --query "Entries[0].Cidr" --output text
+    try_match "describe-managed-prefix-lists reports AWS as owner" "AWS" \
+      $CLI ec2 describe-managed-prefix-lists --prefix-list-ids "$S3_PL_ID" \
+        --query "PrefixLists[0].OwnerId" --output text
+  else
+    fail "describe-prefix-lists resolves the S3 service list"
+  fi
+
+  VPCE_ID=$($CLI ec2 create-vpc-endpoint --vpc-id "$VPC_ID" \
+    --service-name "com.amazonaws.us-east-1.s3" \
+    --query VpcEndpoint.VpcEndpointId --output text 2>/dev/null)
+  if [ -n "${VPCE_ID:-}" ] && [ "$VPCE_ID" != "None" ]; then
+    ok "create-vpc-endpoint"
+
+    # Looking an endpoint up by vpc-id + service-name is how a module finds one
+    # it does not manage.
+    try_match "describe-vpc-endpoints filters by vpc and service" "$VPCE_ID" \
+      $CLI ec2 describe-vpc-endpoints \
+        --filters "Name=vpc-id,Values=$VPC_ID" \
+          "Name=service-name,Values=com.amazonaws.us-east-1.s3" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text
+    try_match "vpc endpoint defaults to Gateway type" "Gateway" \
+      $CLI ec2 describe-vpc-endpoints --vpc-endpoint-ids "$VPCE_ID" \
+        --query "VpcEndpoints[0].VpcEndpointType" --output text
+
+    try "delete-vpc-endpoints" \
+      $CLI ec2 delete-vpc-endpoints --vpc-endpoint-ids "$VPCE_ID"
+  else
+    fail "create-vpc-endpoint"
+  fi
+
+  # A rule targeting a prefix list instead of a CIDR must read back, or the
+  # configured egress restriction looks unset.
+  PL_SG_ID=$($CLI ec2 create-security-group \
+    --group-name "$PREFIX-plsg" --description "prefix list egress" --vpc-id "$VPC_ID" \
+    --query GroupId --output text 2>/dev/null)
+  if [ -n "${PL_SG_ID:-}" ] && [ "$PL_SG_ID" != "None" ] && [ -n "${S3_PL_ID:-}" ]; then
+    try "authorize-security-group-egress (prefix list target)" \
+      $CLI ec2 authorize-security-group-egress --group-id "$PL_SG_ID" \
+        --ip-permissions "IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=$S3_PL_ID}]"
+
+    try_match "describe-security-groups reports the prefix list target" "$S3_PL_ID" \
+      $CLI ec2 describe-security-groups --group-ids "$PL_SG_ID" \
+        --query "SecurityGroups[0].IpPermissionsEgress[0].PrefixListIds[0].PrefixListId" \
+        --output text
+    try_match "describe-security-group-rules reports the prefix list target" "$S3_PL_ID" \
+      $CLI ec2 describe-security-group-rules \
+        --filters "Name=group-id,Values=$PL_SG_ID" \
+        --query "SecurityGroupRules[0].PrefixListId" --output text
+
+    try "delete-security-group (prefix list sg)" \
+      $CLI ec2 delete-security-group --group-id "$PL_SG_ID"
+  else
+    fail "create-security-group (prefix list egress)"
+  fi
 
   # Cleanup
   if [ -n "${IGW_ID:-}" ] && [ "$IGW_ID" != "None" ]; then

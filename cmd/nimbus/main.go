@@ -88,6 +88,8 @@ func main() {
 	r.Register(cwmSvc)
 	r.Register(dynamodb.New(cfg.DynamoDBEndpoint, logger))
 	lambdaSvc := lambda.New(cfg.DefaultRegion)
+	// Container-image functions run as real containers when Docker is reachable.
+	lambdaSvc.EnableContainers(cfg.DataDir, cwlSvc)
 	r.Register(lambdaSvc)
 	appSyncSvc := appsync.New(cfg.DefaultRegion, lambdaSvc.Invocation)
 	r.Register(appSyncSvc)
@@ -216,6 +218,9 @@ func main() {
 	mux.HandleFunc("/_nimbus/lambda/register", lambdaSvc.Invocation.RegisterHandler)
 	mux.HandleFunc("/_nimbus/lambda/register/", lambdaSvc.Invocation.RegisterHandler)
 
+	// Running container-image function containers
+	mux.HandleFunc("/_nimbus/lambda/containers", lambdaSvc.Invocation.ContainersHandler)
+
 	// AppSync inspection endpoint — not AWS API, Nimbus-specific
 	mux.HandleFunc("/_nimbus/appsync/apis", appSyncSvc.APIsHandler)
 
@@ -321,4 +326,7 @@ func main() {
 
 	<-done
 	logger.Info("shutting down")
+	// Function containers are children of this process in spirit, not in the
+	// process tree — nothing else will reap them.
+	lambdaSvc.Invocation.Shutdown()
 }
