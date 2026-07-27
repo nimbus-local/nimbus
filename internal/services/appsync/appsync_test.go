@@ -550,3 +550,114 @@ func TestReset(t *testing.T) {
 		t.Fatal("expected 0 apis after reset")
 	}
 }
+
+// --- ForceNew attributes the Terraform provider reads ---
+
+// apiType and visibility are ForceNew for the provider: omitting them from the
+// read made every re-apply plan an API replacement. introspectionConfig and
+// xrayEnabled are the same class of gap, in-place rather than destructive.
+func TestCreateGraphqlAPIDefaultsProviderAttributes(t *testing.T) {
+	svc := newSvc()
+
+	w := doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]interface{}{
+		"name":               "MyAPI",
+		"authenticationType": "API_KEY",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		GraphqlAPI map[string]interface{} `json:"graphqlApi"`
+	}
+	decode(t, w, &created)
+	for field, want := range map[string]interface{}{
+		"apiType":             "GRAPHQL",
+		"visibility":          "GLOBAL",
+		"introspectionConfig": "ENABLED",
+		"xrayEnabled":         false,
+	} {
+		if got := created.GraphqlAPI[field]; got != want {
+			t.Errorf("create: %s = %v, want %v", field, got, want)
+		}
+	}
+
+	// The provider re-reads through GetGraphqlApi on every plan.
+	apiID := created.GraphqlAPI["apiId"].(string)
+	w = doJSON(t, svc, http.MethodGet, "/v1/apis/"+apiID, nil)
+	var fetched struct {
+		GraphqlAPI map[string]interface{} `json:"graphqlApi"`
+	}
+	decode(t, w, &fetched)
+	for field, want := range map[string]interface{}{
+		"apiType":             "GRAPHQL",
+		"visibility":          "GLOBAL",
+		"introspectionConfig": "ENABLED",
+		"xrayEnabled":         false,
+	} {
+		if got := fetched.GraphqlAPI[field]; got != want {
+			t.Errorf("get: %s = %v, want %v", field, got, want)
+		}
+	}
+}
+
+func TestCreateGraphqlAPIRoundTripsProviderAttributes(t *testing.T) {
+	svc := newSvc()
+
+	w := doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]interface{}{
+		"name":                "MergedAPI",
+		"authenticationType":  "API_KEY",
+		"apiType":             "MERGED",
+		"visibility":          "PRIVATE",
+		"introspectionConfig": "DISABLED",
+		"xrayEnabled":         true,
+	})
+	var created struct {
+		GraphqlAPI map[string]interface{} `json:"graphqlApi"`
+	}
+	decode(t, w, &created)
+	for field, want := range map[string]interface{}{
+		"apiType":             "MERGED",
+		"visibility":          "PRIVATE",
+		"introspectionConfig": "DISABLED",
+		"xrayEnabled":         true,
+	} {
+		if got := created.GraphqlAPI[field]; got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
+		}
+	}
+
+	// ...and survive the read-back.
+	apiID := created.GraphqlAPI["apiId"].(string)
+	w = doJSON(t, svc, http.MethodGet, "/v1/apis/"+apiID, nil)
+	var fetched struct {
+		GraphqlAPI map[string]interface{} `json:"graphqlApi"`
+	}
+	decode(t, w, &fetched)
+	if fetched.GraphqlAPI["apiType"] != "MERGED" || fetched.GraphqlAPI["visibility"] != "PRIVATE" {
+		t.Errorf("read-back lost the values: %v", fetched.GraphqlAPI)
+	}
+}
+
+// ListGraphqlApis is the other read path the provider uses.
+func TestListGraphqlAPIsReportsProviderAttributes(t *testing.T) {
+	svc := newSvc()
+	doJSON(t, svc, http.MethodPost, "/v1/apis", map[string]interface{}{
+		"name":               "MyAPI",
+		"authenticationType": "API_KEY",
+	})
+
+	w := doJSON(t, svc, http.MethodGet, "/v1/apis", nil)
+	var list struct {
+		GraphqlAPIs []map[string]interface{} `json:"graphqlApis"`
+	}
+	decode(t, w, &list)
+	if len(list.GraphqlAPIs) != 1 {
+		t.Fatalf("expected 1 API, got %d", len(list.GraphqlAPIs))
+	}
+	if got := list.GraphqlAPIs[0]["apiType"]; got != "GRAPHQL" {
+		t.Errorf("list: apiType = %v, want GRAPHQL", got)
+	}
+	if got := list.GraphqlAPIs[0]["visibility"]; got != "GLOBAL" {
+		t.Errorf("list: visibility = %v, want GLOBAL", got)
+	}
+}
