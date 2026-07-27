@@ -1566,7 +1566,9 @@ try_match "list-metrics finds metric name" "RequestCount" \
 # and one does not. The counts are deliberately asymmetric — a filter that
 # matched the *complement* (the old bug) would return 1 where correct behaviour
 # returns 2, so these assertions fail if the semantics ever invert again.
-DIM_NS="Nimbus/$PREFIX-dims"
+# Unique per run: the data-query assertions below check exact sums, which would
+# drift if a re-run against the same Nimbus appended more points to one series.
+DIM_NS="Nimbus/$PREFIX-dims-$$"
 $CLI cloudwatch put-metric-data --namespace "$DIM_NS" \
   --metric-data "[{\"MetricName\":\"RequestCount\",\"Dimensions\":[{\"Name\":\"ServiceName\",\"Value\":\"web\"},{\"Name\":\"TargetDiscoveryName\",\"Value\":\"api\"}],\"Value\":120}]" >/dev/null 2>&1
 $CLI cloudwatch put-metric-data --namespace "$DIM_NS" \
@@ -1607,6 +1609,38 @@ try_match "list-metrics ANDed filters exclude a non-matching pair" "^0$" \
   $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
     --dimensions Name=ServiceName,Value=other Name=TargetDiscoveryName \
     --query "length(Metrics)" --output text
+
+# In the data-query APIs a dimension set identifies the metric rather than
+# filtering it, so the two granularities seeded above must not read each other.
+# The values differ (120 vs 55), which is what makes a leak visible.
+MD_START=$(date -u -v-10M '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+MD_END=$(date -u -v+1M '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '1 minute' '+%Y-%m-%dT%H:%M:%SZ')
+md_sum() {  # md_sum <dimensions-json>
+  $CLI cloudwatch get-metric-data --start-time "$MD_START" --end-time "$MD_END" \
+    --metric-data-queries "[{\"Id\":\"m0\",\"MetricStat\":{\"Metric\":{\"Namespace\":\"$DIM_NS\",\"MetricName\":\"RequestCount\",\"Dimensions\":$1},\"Period\":60,\"Stat\":\"Sum\"}}]" \
+    --query 'sum(MetricDataResults[0].Values)' --output text 2>/dev/null
+}
+
+try_match "get-metric-data reads the exact dimension set" "^120" \
+  md_sum '[{"Name":"ServiceName","Value":"web"},{"Name":"TargetDiscoveryName","Value":"api"}]'
+try_match "get-metric-data on a coarser set reads only its own series" "^55" \
+  md_sum '[{"Name":"ServiceName","Value":"web"}]'
+try_match "get-metric-data with no dimensions reads no dimensioned series" "^0" \
+  md_sum '[]'
+try_match "get-metric-data ignores a dimension no series carries" "^0" \
+  md_sum '[{"Name":"ServiceName","Value":"web"},{"Name":"TargetDiscoveryName","Value":"api"},{"Name":"Extra","Value":"x"}]'
+
+# GetMetricStatistics resolves series the same way.
+try_match "get-metric-statistics reads the exact dimension set" "^120" \
+  $CLI cloudwatch get-metric-statistics --namespace "$DIM_NS" --metric-name RequestCount \
+    --dimensions Name=ServiceName,Value=web Name=TargetDiscoveryName,Value=api \
+    --start-time "$MD_START" --end-time "$MD_END" --period 60 --statistics Sum \
+    --query 'sum(Datapoints[].Sum)' --output text
+try_match "get-metric-statistics on a coarser set reads only its own series" "^55" \
+  $CLI cloudwatch get-metric-statistics --namespace "$DIM_NS" --metric-name RequestCount \
+    --dimensions Name=ServiceName,Value=web \
+    --start-time "$MD_START" --end-time "$MD_END" --period 60 --statistics Sum \
+    --query 'sum(Datapoints[].Sum)' --output text
 
 try "get-metric-statistics" \
   $CLI cloudwatch get-metric-statistics \

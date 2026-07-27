@@ -49,9 +49,28 @@ nimbuslocal cloudwatch list-metrics \
 
 A filter naming a dimension no metric carries matches nothing.
 
-`GetMetricStatistics`, `GetMetricData`, and `DescribeAlarmsForMetric` do **not** use
-these rules: there a dimension list identifies a series, so every entry must match by
-value.
+## Dimensions identify a metric in data queries
+
+`GetMetricData` and `GetMetricStatistics` do **not** filter by dimensions — the
+dimension set is part of the metric's identity, and a query reads the one series
+stored under exactly that set. Publishing `probe` with `[a=1, b=2]` creates a metric
+distinct from `probe` with `[a=1]` and from the dimensionless `probe`:
+
+| Query dimensions | Reads the `[a=1, b=2]` series? |
+|------------------|-------------------------------|
+| `[a=1, b=2]` | Yes — the exact set |
+| `[a=1]` | No — names a different metric, which may have its own data |
+| `[]` (none) | No — names the dimensionless metric |
+| `[a=1, b=2, c=3]` | No — no series carries `c` |
+
+This matters when two clients share a metric name at different granularities. A
+dashboard querying `AWS/ApplicationELB RequestCount` by `[LoadBalancer]` must not pick
+up the per-target series stored under `[LoadBalancer, TargetGroup]`; each reads only
+its own points. `PutMetricData` follows the same rule when storing — a point lands on
+the series whose dimension set matches exactly, or starts a new one.
+
+`DescribeAlarmsForMetric` is the exception: its dimension list is a filter, and an
+alarm matches when it carries at least the given pairs.
 
 ## Example
 

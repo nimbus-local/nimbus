@@ -923,7 +923,9 @@ func TestCBOR_ListMetrics_DimensionFilterNameOnly(t *testing.T) {
 
 // matchDims keeps its exact-match semantics: GetMetricStatistics and the alarm
 // lookups identify one series and must not adopt DimensionFilter behaviour.
-func TestMatchDimsKeepsExactSemantics(t *testing.T) {
+// matchDims is subset matching, and only the alarm lookup may use it. The
+// data-query APIs use dimsEqual instead — see the exact-identity tests below.
+func TestMatchDimsIsSubsetMatching(t *testing.T) {
 	target := map[string]string{"ClusterName": "demo", "ServiceName": "web"}
 	if !matchDims(target, map[string]string{"ClusterName": "demo"}) {
 		t.Error("matchDims should match a subset with equal values")
@@ -931,9 +933,277 @@ func TestMatchDimsKeepsExactSemantics(t *testing.T) {
 	if matchDims(target, map[string]string{"ClusterName": "other"}) {
 		t.Error("matchDims should reject a differing value")
 	}
-	// Still the old behaviour here, and deliberately so: an empty value means
-	// "absent" to the exact matcher.
-	if matchDims(target, map[string]string{"Missing": ""}) != true {
+	// An empty filter value reads as "absent" here — which is why ListMetrics
+	// needs matchDimFilters rather than this.
+	if !matchDims(target, map[string]string{"Missing": ""}) {
 		t.Error("matchDims treats an empty filter value as absent")
+	}
+}
+
+func TestDimsEqualRequiresIdenticalSets(t *testing.T) {
+	full := map[string]string{"a": "1", "b": "2"}
+	for _, tc := range []struct {
+		name  string
+		other map[string]string
+		want  bool
+	}{
+		{"identical", map[string]string{"a": "1", "b": "2"}, true},
+		{"strict subset", map[string]string{"a": "1"}, false},
+		{"superset", map[string]string{"a": "1", "b": "2", "c": "3"}, false},
+		{"empty", map[string]string{}, false},
+		{"same size, different value", map[string]string{"a": "1", "b": "9"}, false},
+		{"same size, different name", map[string]string{"a": "1", "z": "2"}, false},
+	} {
+		if got := dimsEqual(full, tc.other); got != tc.want {
+			t.Errorf("%s: dimsEqual = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// --- Dimension identity in the data-query APIs ---
+
+// seedProbeSeries stores the issue's shape: one series with two dimensions.
+// Any query for a different dimension set is a query for a different metric.
+func seedProbeSeries(t *testing.T, s *Service, now time.Time) {
+	t.Helper()
+	jsonReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "argus/test",
+		"MetricData": []map[string]interface{}{{
+			"MetricName": "probe",
+			"Dimensions": []map[string]string{
+				{"Name": "a", "Value": "1"},
+				{"Name": "b", "Value": "2"},
+			},
+			"Value":     100.0,
+			"Timestamp": now.Format(time.RFC3339),
+		}},
+	})
+}
+
+// getMetricDataValues runs a one-query GetMetricData for the given dimensions
+// and returns the values it produced.
+func getMetricDataValues(t *testing.T, s *Service, now time.Time, dims []map[string]string) []interface{} {
+	t.Helper()
+	w := jsonReq(t, s, "GetMetricData", map[string]interface{}{
+		"StartTime": now.Add(-10 * time.Minute).Format(time.RFC3339),
+		"EndTime":   now.Add(time.Minute).Format(time.RFC3339),
+		"MetricDataQueries": []map[string]interface{}{{
+			"Id": "m0",
+			"MetricStat": map[string]interface{}{
+				"Metric": map[string]interface{}{
+					"Namespace":  "argus/test",
+					"MetricName": "probe",
+					"Dimensions": dims,
+				},
+				"Period": 60,
+				"Stat":   "Sum",
+			},
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		MetricDataResults []struct {
+			Values []interface{} `json:"Values"`
+		} `json:"MetricDataResults"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.MetricDataResults) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.MetricDataResults))
+	}
+	return resp.MetricDataResults[0].Values
+}
+
+func TestGetMetricData_ExactDimensionSetMatches(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	values := getMetricDataValues(t, s, now, []map[string]string{
+		{"Name": "a", "Value": "1"},
+		{"Name": "b", "Value": "2"},
+	})
+	if len(values) != 1 {
+		t.Fatalf("the exact dimension set should return the datapoint, got %v", values)
+	}
+	if values[0].(float64) != 100 {
+		t.Errorf("got %v, want 100", values[0])
+	}
+}
+
+// A subset of a series' dimensions names a *different* metric, which has no data.
+func TestGetMetricData_DimensionSubsetMatchesNothing(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	if values := getMetricDataValues(t, s, now, []map[string]string{{"Name": "a", "Value": "1"}}); len(values) != 0 {
+		t.Errorf("subset [a=1] must not read the [a=1,b=2] series, got %v", values)
+	}
+}
+
+func TestGetMetricData_NoDimensionsMatchesOnlyDimensionlessSeries(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	if values := getMetricDataValues(t, s, now, []map[string]string{}); len(values) != 0 {
+		t.Errorf("a dimensionless query must not read a dimensioned series, got %v", values)
+	}
+
+	// Publish the dimensionless series of the same metric: now the same query
+	// has its own data, and the dimensioned series still keeps its own.
+	jsonReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "argus/test",
+		"MetricData": []map[string]interface{}{{
+			"MetricName": "probe", "Value": 7.0, "Timestamp": now.Format(time.RFC3339),
+		}},
+	})
+	values := getMetricDataValues(t, s, now, []map[string]string{})
+	if len(values) != 1 || values[0].(float64) != 7 {
+		t.Errorf("dimensionless query should read only its own 7, got %v", values)
+	}
+	dimensioned := getMetricDataValues(t, s, now, []map[string]string{
+		{"Name": "a", "Value": "1"}, {"Name": "b", "Value": "2"},
+	})
+	if len(dimensioned) != 1 || dimensioned[0].(float64) != 100 {
+		t.Errorf("dimensioned query should still read only its own 100, got %v", dimensioned)
+	}
+}
+
+// A superset cannot match either — the stored series has no such dimension.
+func TestGetMetricData_DimensionSupersetMatchesNothing(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	values := getMetricDataValues(t, s, now, []map[string]string{
+		{"Name": "a", "Value": "1"},
+		{"Name": "b", "Value": "2"},
+		{"Name": "c", "Value": "3"},
+	})
+	if len(values) != 0 {
+		t.Errorf("superset query must match nothing, got %v", values)
+	}
+}
+
+// The argus flake: two granularities of one metric name must stay separate.
+func TestGetMetricData_SiblingGranularitiesDoNotLeak(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	put := func(dims []map[string]string, v float64) {
+		jsonReq(t, s, "PutMetricData", map[string]interface{}{
+			"Namespace": "argus/test",
+			"MetricData": []map[string]interface{}{{
+				"MetricName": "probe", "Dimensions": dims, "Value": v,
+				"Timestamp": now.Format(time.RFC3339),
+			}},
+		})
+	}
+	// The edges test's series, and the metricslane test's coarser one.
+	put([]map[string]string{{"Name": "a", "Value": "1"}, {"Name": "b", "Value": "2"}}, 100.0)
+	put([]map[string]string{{"Name": "a", "Value": "1"}}, 5.0)
+
+	coarse := getMetricDataValues(t, s, now, []map[string]string{{"Name": "a", "Value": "1"}})
+	if len(coarse) != 1 || coarse[0].(float64) != 5 {
+		t.Errorf("[a=1] query should sum only its own 5, got %v", coarse)
+	}
+	fine := getMetricDataValues(t, s, now, []map[string]string{
+		{"Name": "a", "Value": "1"}, {"Name": "b", "Value": "2"},
+	})
+	if len(fine) != 1 || fine[0].(float64) != 100 {
+		t.Errorf("[a=1,b=2] query should sum only its own 100, got %v", fine)
+	}
+}
+
+// GetMetricStatistics shares find() with GetMetricData, so it inherits the same
+// identity rule.
+func TestGetMetricStatistics_DimensionSubsetMatchesNothing(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	stats := func(dims []map[string]string) int {
+		t.Helper()
+		w := jsonReq(t, s, "GetMetricStatistics", map[string]interface{}{
+			"Namespace":  "argus/test",
+			"MetricName": "probe",
+			"Dimensions": dims,
+			"StartTime":  now.Add(-10 * time.Minute).Format(time.RFC3339),
+			"EndTime":    now.Add(time.Minute).Format(time.RFC3339),
+			"Period":     60,
+			"Statistics": []string{"Sum"},
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var resp struct {
+			Datapoints []map[string]interface{} `json:"Datapoints"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		return len(resp.Datapoints)
+	}
+
+	if n := stats([]map[string]string{{"Name": "a", "Value": "1"}, {"Name": "b", "Value": "2"}}); n != 1 {
+		t.Errorf("exact set: expected 1 datapoint, got %d", n)
+	}
+	if n := stats([]map[string]string{{"Name": "a", "Value": "1"}}); n != 0 {
+		t.Errorf("subset: expected no datapoints, got %d", n)
+	}
+	if n := stats([]map[string]string{}); n != 0 {
+		t.Errorf("no dimensions: expected no datapoints, got %d", n)
+	}
+}
+
+// The Terraform/SDK CBOR path resolves series through the same helper.
+func TestCBOR_GetMetricData_DimensionSubsetMatchesNothing(t *testing.T) {
+	s := newSvc()
+	now := time.Now().UTC()
+	seedProbeSeries(t, s, now)
+
+	query := func(dims []interface{}) int {
+		t.Helper()
+		w := cborReq(t, s, "GetMetricData", map[string]interface{}{
+			"StartTime": now.Add(-10 * time.Minute),
+			"EndTime":   now.Add(time.Minute),
+			"MetricDataQueries": []interface{}{
+				map[string]interface{}{
+					"Id": "m0",
+					"MetricStat": map[string]interface{}{
+						"Metric": map[string]interface{}{
+							"Namespace":  "argus/test",
+							"MetricName": "probe",
+							"Dimensions": dims,
+						},
+						"Period": 60,
+						"Stat":   "Sum",
+					},
+				},
+			},
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		results, _ := decodeCBOR(t, w)["MetricDataResults"].([]interface{})
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
+		vals, _ := results[0].(map[string]interface{})["Values"].([]interface{})
+		return len(vals)
+	}
+
+	exact := []interface{}{
+		map[string]interface{}{"Name": "a", "Value": "1"},
+		map[string]interface{}{"Name": "b", "Value": "2"},
+	}
+	if n := query(exact); n != 1 {
+		t.Errorf("exact set over CBOR: expected 1 value, got %d", n)
+	}
+	subset := []interface{}{map[string]interface{}{"Name": "a", "Value": "1"}}
+	if n := query(subset); n != 0 {
+		t.Errorf("subset over CBOR: expected no values, got %d", n)
 	}
 }
