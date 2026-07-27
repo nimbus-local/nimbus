@@ -686,15 +686,25 @@ func (s *Service) findOrCreate(namespace, metricName string, dims map[string]str
 	return series
 }
 
+// find returns the series stored under exactly the requested dimension set, or
+// nil when no series has it.
+//
+// The dimension set identifies the metric in the data-query APIs
+// (GetMetricData, GetMetricStatistics) — it is not a filter. A metric stored as
+// [a=1, b=2] is a distinct metric from [a=1] and from the dimensionless one, so
+// matching a subset here would let any two clients that share a metric name but
+// use different dimension granularities read each other's data. Storage agrees:
+// findOrCreate keys a series on its full dimension set.
 func (s *Service) find(namespace, metricName string, dims map[string]string) *metricSeries {
 	for _, series := range s.metrics[namespace+"/"+metricName] {
-		if matchDims(series.dimensions, dims) {
+		if dimsEqual(series.dimensions, dims) {
 			return series
 		}
 	}
 	return nil
 }
 
+// dimsEqual reports whether two dimension sets are identical.
 func dimsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
@@ -707,6 +717,12 @@ func dimsEqual(a, b map[string]string) bool {
 	return true
 }
 
+// matchDims reports whether target carries every name/value pair in filter.
+// This is *subset* matching: extra dimensions on target are ignored, so a
+// filter of [a=1] matches a target of [a=1, b=2].
+//
+// Only the alarm lookup (DescribeAlarmsForMetric) uses it. The data-query APIs
+// must not — see find, where a subset match would return another metric's data.
 func matchDims(target, filter map[string]string) bool {
 	for k, v := range filter {
 		if target[k] != v {
@@ -717,9 +733,10 @@ func matchDims(target, filter map[string]string) bool {
 }
 
 // matchDimFilters applies ListMetrics DimensionFilter semantics, which differ
-// from the exact matching above: a filter naming a dimension with no value
-// matches every metric that *carries* a dimension of that name, whatever its
-// value, and one naming both matches only that exact pair. Filters are ANDed.
+// from both the subset matching above and the exact identity find uses: a
+// filter naming a dimension with no value matches every metric that *carries* a
+// dimension of that name, whatever its value, and one naming both matches only
+// that exact pair. Filters are ANDed.
 //
 // matchDims cannot express the name-only case. A missing map key and an empty
 // value both read as "", so it treats a name-only filter as "this dimension
