@@ -2110,6 +2110,14 @@ if [ -n "$APPSYNC_API_ID" ]; then
   try_match "get-graphql-api returns API_KEY auth" "API_KEY" \
     $CLI appsync get-graphql-api --api-id "$APPSYNC_API_ID" \
       --query "graphqlApi.authenticationType" --output text
+  # apiType and visibility are ForceNew for the provider: if the read omits them,
+  # every re-apply plans an API replacement.
+  try_match "get-graphql-api reports apiType" "^GRAPHQL$" \
+    $CLI appsync get-graphql-api --api-id "$APPSYNC_API_ID" \
+      --query "graphqlApi.apiType" --output text
+  try_match "get-graphql-api reports visibility" "^GLOBAL$" \
+    $CLI appsync get-graphql-api --api-id "$APPSYNC_API_ID" \
+      --query "graphqlApi.visibility" --output text
 
   try_match "list-api-keys finds TF-provisioned key" "da2-" \
     $CLI appsync list-api-keys --api-id "$APPSYNC_API_ID" \

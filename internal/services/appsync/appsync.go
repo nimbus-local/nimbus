@@ -40,8 +40,15 @@ type graphqlAPI struct {
 	AuthenticationType string            `json:"authenticationType"`
 	Tags               map[string]string `json:"tags,omitempty"`
 	ARN                string            `json:"arn"`
-	schemaStatus       string
-	schemaDefinition   string
+	// APIType and Visibility are ForceNew for the Terraform provider: omitting
+	// them from the read makes every re-apply plan an API replacement. Nimbus
+	// serves one flavour of API, but the values still have to read back.
+	APIType             string `json:"apiType"`
+	Visibility          string `json:"visibility"`
+	IntrospectionConfig string `json:"introspectionConfig"`
+	XrayEnabled         bool   `json:"xrayEnabled"`
+	schemaStatus        string
+	schemaDefinition    string
 }
 
 type dataSource struct {
@@ -297,9 +304,13 @@ func (s *Service) routeResolver(w http.ResponseWriter, r *http.Request, apiID, t
 
 func (s *Service) createGraphqlAPI(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name               string            `json:"name"`
-		AuthenticationType string            `json:"authenticationType"`
-		Tags               map[string]string `json:"tags"`
+		Name                string            `json:"name"`
+		AuthenticationType  string            `json:"authenticationType"`
+		Tags                map[string]string `json:"tags"`
+		APIType             string            `json:"apiType"`
+		Visibility          string            `json:"visibility"`
+		IntrospectionConfig string            `json:"introspectionConfig"`
+		XrayEnabled         bool              `json:"xrayEnabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		jsonError(w, http.StatusBadRequest, "BadRequestException", "name is required")
@@ -307,6 +318,16 @@ func (s *Service) createGraphqlAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AuthenticationType == "" {
 		req.AuthenticationType = "API_KEY"
+	}
+	// AWS defaults, which the Terraform provider also assumes.
+	if req.APIType == "" {
+		req.APIType = "GRAPHQL"
+	}
+	if req.Visibility == "" {
+		req.Visibility = "GLOBAL"
+	}
+	if req.IntrospectionConfig == "" {
+		req.IntrospectionConfig = "ENABLED"
 	}
 
 	// Real AppSync API IDs are dash-free; the TF provider splits composite IDs
@@ -316,12 +337,16 @@ func (s *Service) createGraphqlAPI(w http.ResponseWriter, r *http.Request) {
 	arn := fmt.Sprintf("arn:aws:appsync:%s:%s:apis/%s", s.region, accountID, apiID)
 
 	api := &graphqlAPI{
-		ID:                 apiID,
-		Name:               req.Name,
-		AuthenticationType: req.AuthenticationType,
-		Tags:               req.Tags,
-		ARN:                arn,
-		schemaStatus:       "ACTIVE",
+		ID:                  apiID,
+		Name:                req.Name,
+		AuthenticationType:  req.AuthenticationType,
+		Tags:                req.Tags,
+		ARN:                 arn,
+		APIType:             req.APIType,
+		Visibility:          req.Visibility,
+		IntrospectionConfig: req.IntrospectionConfig,
+		XrayEnabled:         req.XrayEnabled,
+		schemaStatus:        "ACTIVE",
 	}
 
 	s.mu.Lock()
@@ -415,12 +440,28 @@ func (s *Service) listGraphqlAPIs(w http.ResponseWriter) {
 }
 
 func (s *Service) apiResponse(api *graphqlAPI) map[string]interface{} {
+	// APIs created before these fields were modelled read back as the AWS
+	// defaults rather than as empty strings, which the provider treats as drift.
+	apiType, visibility, introspection := api.APIType, api.Visibility, api.IntrospectionConfig
+	if apiType == "" {
+		apiType = "GRAPHQL"
+	}
+	if visibility == "" {
+		visibility = "GLOBAL"
+	}
+	if introspection == "" {
+		introspection = "ENABLED"
+	}
 	return map[string]interface{}{
-		"apiId":              api.ID,
-		"name":               api.Name,
-		"authenticationType": api.AuthenticationType,
-		"arn":                api.ARN,
-		"tags":               api.Tags,
+		"apiId":               api.ID,
+		"name":                api.Name,
+		"authenticationType":  api.AuthenticationType,
+		"arn":                 api.ARN,
+		"tags":                api.Tags,
+		"apiType":             apiType,
+		"visibility":          visibility,
+		"introspectionConfig": introspection,
+		"xrayEnabled":         api.XrayEnabled,
 		"uris": map[string]string{
 			"GRAPHQL": fmt.Sprintf("http://%s.appsync-api.%s.nimbus.local/graphql", api.ID, s.region),
 		},

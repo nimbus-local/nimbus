@@ -33,6 +33,26 @@ In-memory AppSync emulator covering both the management plane (CRUD for APIs, sc
 | `ListTagsForResource` | `GET /v1/tags/{resourceArn}` |
 | `UntagResource` | `DELETE /v1/tags/{resourceArn}?tagKeys=...` |
 
+## API attributes and re-apply stability
+
+Reads report four attributes the Terraform provider expects, defaulting to the AWS
+defaults when the create request omits them:
+
+| Attribute | Default | Notes |
+|-----------|---------|-------|
+| `apiType` | `GRAPHQL` | ForceNew for the provider |
+| `visibility` | `GLOBAL` | ForceNew for the provider |
+| `introspectionConfig` | `ENABLED` | |
+| `xrayEnabled` | `false` | Recorded only; Nimbus traces nothing |
+
+Nimbus serves one flavour of API regardless of `apiType` and `visibility`, but leaving
+either out of the read made every `terraform apply` plan an **API replacement**:
+
+```
++ api_type   = "GRAPHQL" # forces replacement
++ visibility = "GLOBAL"  # forces replacement
+```
+
 ## GraphQL execution
 
 When a resolver is configured with an `AWS_LAMBDA` data source, Nimbus:
