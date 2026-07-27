@@ -1562,6 +1562,52 @@ try_match "list-metrics finds namespace" "Nimbus/$PREFIX" \
 try_match "list-metrics finds metric name" "RequestCount" \
   $CLI cloudwatch list-metrics --namespace "Nimbus/$PREFIX" --query "Metrics[*].MetricName" --output text
 
+# Dimension filters. Three series of one metric: two carry TargetDiscoveryName
+# and one does not. The counts are deliberately asymmetric — a filter that
+# matched the *complement* (the old bug) would return 1 where correct behaviour
+# returns 2, so these assertions fail if the semantics ever invert again.
+DIM_NS="Nimbus/$PREFIX-dims"
+$CLI cloudwatch put-metric-data --namespace "$DIM_NS" \
+  --metric-data "[{\"MetricName\":\"RequestCount\",\"Dimensions\":[{\"Name\":\"ServiceName\",\"Value\":\"web\"},{\"Name\":\"TargetDiscoveryName\",\"Value\":\"api\"}],\"Value\":120}]" >/dev/null 2>&1
+$CLI cloudwatch put-metric-data --namespace "$DIM_NS" \
+  --metric-data "[{\"MetricName\":\"RequestCount\",\"Dimensions\":[{\"Name\":\"ServiceName\",\"Value\":\"web\"}],\"Value\":55}]" >/dev/null 2>&1
+$CLI cloudwatch put-metric-data --namespace "$DIM_NS" \
+  --metric-data "[{\"MetricName\":\"RequestCount\",\"Dimensions\":[{\"Name\":\"ServiceName\",\"Value\":\"worker\"},{\"Name\":\"TargetDiscoveryName\",\"Value\":\"db\"}],\"Value\":9}]" >/dev/null 2>&1
+
+try_match "list-metrics sees all three seeded series" "^3$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" --query "length(Metrics)" --output text
+
+# A filter with a name and no value matches every metric *carrying* that
+# dimension — 2 of the 3 — whatever its value.
+try_match "list-metrics name-only dimension filter matches both carriers" "^2$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=TargetDiscoveryName --query "length(Metrics)" --output text
+try_match "list-metrics name-only filter returns the dimension values" "api.*db\|db.*api" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=TargetDiscoveryName \
+    --query "sort(Metrics[].Dimensions[?Name=='TargetDiscoveryName'].Value[])" --output text
+
+try_match "list-metrics name+value dimension filter matches" "^1$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=TargetDiscoveryName,Value=api --query "length(Metrics)" --output text
+try_match "list-metrics rejects an unpublished dimension value" "^0$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=TargetDiscoveryName,Value=nope --query "length(Metrics)" --output text
+try_match "list-metrics unknown dimension name matches nothing" "^0$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=NoSuchDimension --query "length(Metrics)" --output text
+
+# Filters are ANDed. Asserting the matched value, not just the count: the
+# inverted behaviour also returned one series here, but the wrong one.
+try_match "list-metrics ANDs multiple dimension filters" "^api$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=ServiceName,Value=web Name=TargetDiscoveryName \
+    --query "Metrics[].Dimensions[?Name=='TargetDiscoveryName'].Value[]" --output text
+try_match "list-metrics ANDed filters exclude a non-matching pair" "^0$" \
+  $CLI cloudwatch list-metrics --namespace "$DIM_NS" \
+    --dimensions Name=ServiceName,Value=other Name=TargetDiscoveryName \
+    --query "length(Metrics)" --output text
+
 try "get-metric-statistics" \
   $CLI cloudwatch get-metric-statistics \
     --namespace "Nimbus/$PREFIX" \
