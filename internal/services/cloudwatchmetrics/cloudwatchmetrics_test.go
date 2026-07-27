@@ -1207,3 +1207,64 @@ func TestCBOR_GetMetricData_DimensionSubsetMatchesNothing(t *testing.T) {
 		t.Errorf("subset over CBOR: expected no values, got %d", n)
 	}
 }
+
+// --- DatapointsToAlarm ---
+
+// DatapointsToAlarm is optional in AWS and absent unless set. Echoing
+// EvaluationPeriods in its place put a value in Terraform state that the
+// configuration never asked for, so every plan wanted to remove it.
+func TestPutMetricAlarm_DatapointsToAlarmOmittedWhenUnset(t *testing.T) {
+	s := newSvc()
+	jsonReq(t, s, "PutMetricAlarm", map[string]interface{}{
+		"AlarmName":          "cpu",
+		"Namespace":          "AWS/EC2",
+		"MetricName":         "CPUUtilization",
+		"ComparisonOperator": "GreaterThanThreshold",
+		"Threshold":          80.0,
+		"EvaluationPeriods":  2,
+		"Period":             60,
+	})
+
+	w := jsonReq(t, s, "DescribeAlarms", map[string]interface{}{"AlarmNames": []string{"cpu"}})
+	var resp struct {
+		MetricAlarms []map[string]interface{} `json:"MetricAlarms"`
+	}
+	decode := json.NewDecoder(w.Body)
+	if err := decode.Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.MetricAlarms) != 1 {
+		t.Fatalf("expected 1 alarm, got %d", len(resp.MetricAlarms))
+	}
+	if v, ok := resp.MetricAlarms[0]["DatapointsToAlarm"]; ok {
+		t.Errorf("DatapointsToAlarm should be absent when unset, got %v", v)
+	}
+	if got := resp.MetricAlarms[0]["EvaluationPeriods"].(float64); got != 2 {
+		t.Errorf("EvaluationPeriods = %v, want 2", got)
+	}
+}
+
+func TestPutMetricAlarm_DatapointsToAlarmRoundTrips(t *testing.T) {
+	s := newSvc()
+	jsonReq(t, s, "PutMetricAlarm", map[string]interface{}{
+		"AlarmName":          "cpu",
+		"Namespace":          "AWS/EC2",
+		"MetricName":         "CPUUtilization",
+		"ComparisonOperator": "GreaterThanThreshold",
+		"Threshold":          80.0,
+		"EvaluationPeriods":  3,
+		"DatapointsToAlarm":  2,
+		"Period":             60,
+	})
+
+	w := jsonReq(t, s, "DescribeAlarms", map[string]interface{}{"AlarmNames": []string{"cpu"}})
+	var resp struct {
+		MetricAlarms []map[string]interface{} `json:"MetricAlarms"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := resp.MetricAlarms[0]["DatapointsToAlarm"]; got != float64(2) {
+		t.Errorf("DatapointsToAlarm = %v, want 2 (not EvaluationPeriods)", got)
+	}
+}

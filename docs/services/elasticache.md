@@ -12,7 +12,7 @@ verbatim — no VPC or subnet validation is performed.
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateCacheSubnetGroup` / `DescribeCacheSubnetGroups` / `DeleteCacheSubnetGroup` | In-memory; always returns `SubnetGroupStatus: Complete` |
+| `CreateCacheSubnetGroup` / `DescribeCacheSubnetGroups` / `DeleteCacheSubnetGroup` | In-memory; always returns `SubnetGroupStatus: Complete`; records the `SubnetIds` it was given and reports them back |
 | `CreateCacheParameterGroup` / `DescribeCacheParameterGroups` / `DescribeCacheParameters` / `ModifyCacheParameterGroup` / `DeleteCacheParameterGroup` | Accepted and stored; parameters are always empty |
 | `CreateCacheCluster` / `DescribeCacheClusters` / `ModifyCacheCluster` / `DeleteCacheCluster` | Endpoint resolves to Valkey sidecar |
 | `CreateReplicationGroup` / `DescribeReplicationGroups` / `ModifyReplicationGroup` / `DeleteReplicationGroup` | Endpoint resolves to Valkey sidecar; `ClusterEnabled: false` |

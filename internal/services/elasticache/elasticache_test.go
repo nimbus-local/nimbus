@@ -222,3 +222,93 @@ func TestCreateCacheCluster_TagsStored(t *testing.T) {
 	}
 	assertTag(t, svc, svc.clusterARN("my-cluster"), "forge:app", "smoke")
 }
+
+// --- Attributes the provider re-applies when they are not echoed ---
+
+// The subnet list used to come back as an empty <Subnets/>, so Terraform
+// re-applied subnet_ids on every plan.
+func TestCreateCacheSubnetGroup_EchoesSubnets(t *testing.T) {
+	svc := newSvc()
+	ecReq(t, svc, "CreateCacheSubnetGroup", url.Values{
+		"CacheSubnetGroupName":         {"cache-subnets"},
+		"CacheSubnetGroupDescription":  {"test"},
+		"SubnetIds.SubnetIdentifier.1": {"subnet-aaa"},
+		"SubnetIds.SubnetIdentifier.2": {"subnet-bbb"},
+	})
+
+	w := ecReq(t, svc, "DescribeCacheSubnetGroups", url.Values{
+		"CacheSubnetGroupName": {"cache-subnets"},
+	})
+	body := w.Body.String()
+	for _, want := range []string{
+		"<SubnetIdentifier>subnet-aaa</SubnetIdentifier>",
+		"<SubnetIdentifier>subnet-bbb</SubnetIdentifier>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("describe missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "<Subnets/>") {
+		t.Errorf("subnets should not be reported as empty:\n%s", body)
+	}
+}
+
+func TestModifyCacheSubnetGroup_ReplacesSubnets(t *testing.T) {
+	svc := newSvc()
+	ecReq(t, svc, "CreateCacheSubnetGroup", url.Values{
+		"CacheSubnetGroupName":         {"cache-subnets"},
+		"SubnetIds.SubnetIdentifier.1": {"subnet-aaa"},
+	})
+	ecReq(t, svc, "ModifyCacheSubnetGroup", url.Values{
+		"CacheSubnetGroupName":         {"cache-subnets"},
+		"SubnetIds.SubnetIdentifier.1": {"subnet-ccc"},
+	})
+
+	body := ecReq(t, svc, "DescribeCacheSubnetGroups", url.Values{
+		"CacheSubnetGroupName": {"cache-subnets"},
+	}).Body.String()
+	if !strings.Contains(body, "subnet-ccc") {
+		t.Errorf("modify did not apply the new subnet list:\n%s", body)
+	}
+	if strings.Contains(body, "subnet-aaa") {
+		t.Errorf("modify should have replaced the old list:\n%s", body)
+	}
+}
+
+// Terraform derives num_cache_clusters from MemberClusters, so an empty list read
+// as zero nodes and drifted on every plan.
+func TestCreateReplicationGroup_ReportsMemberClusters(t *testing.T) {
+	svc := newSvc()
+	ecReq(t, svc, "CreateReplicationGroup", url.Values{
+		"ReplicationGroupId":          {"rg"},
+		"ReplicationGroupDescription": {"test"},
+		"NumCacheClusters":            {"2"},
+	})
+
+	body := ecReq(t, svc, "DescribeReplicationGroups", url.Values{
+		"ReplicationGroupId": {"rg"},
+	}).Body.String()
+	for _, want := range []string{"<ClusterId>rg-001</ClusterId>", "<ClusterId>rg-002</ClusterId>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("describe missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// A group created without a node count still reports one member, the AWS minimum.
+func TestCreateReplicationGroup_DefaultsToOneMember(t *testing.T) {
+	svc := newSvc()
+	ecReq(t, svc, "CreateReplicationGroup", url.Values{
+		"ReplicationGroupId":          {"rg"},
+		"ReplicationGroupDescription": {"test"},
+	})
+	body := ecReq(t, svc, "DescribeReplicationGroups", url.Values{
+		"ReplicationGroupId": {"rg"},
+	}).Body.String()
+	if !strings.Contains(body, "<ClusterId>rg-001</ClusterId>") {
+		t.Errorf("expected one member cluster by default:\n%s", body)
+	}
+	if strings.Contains(body, "<ClusterId>rg-002</ClusterId>") {
+		t.Errorf("expected exactly one member:\n%s", body)
+	}
+}

@@ -109,7 +109,22 @@ type ecsService struct {
 	schedulingStrategy string
 	status             string
 	loadBalancers      []loadBalancer
-	createdAt          time.Time
+	// networkConfiguration is stored verbatim. Nimbus attaches containers to its
+	// own Docker network rather than to these subnets, but the block has to read
+	// back or the provider re-applies it on every plan.
+	networkConfig *networkConfiguration
+	createdAt     time.Time
+}
+
+// networkConfiguration mirrors the awsvpcConfiguration block of CreateService.
+type networkConfiguration struct {
+	AwsvpcConfiguration *awsvpcConfiguration `json:"awsvpcConfiguration,omitempty"`
+}
+
+type awsvpcConfiguration struct {
+	Subnets        []string `json:"subnets"`
+	SecurityGroups []string `json:"securityGroups,omitempty"`
+	AssignPublicIp string   `json:"assignPublicIp,omitempty"`
 }
 
 // loadBalancer is one entry of a service's loadBalancers block. Nimbus does not
@@ -697,13 +712,14 @@ func (s *Service) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Cluster            string         `json:"cluster"`
-		ServiceName        string         `json:"serviceName"`
-		TaskDefinition     string         `json:"taskDefinition"`
-		DesiredCount       int            `json:"desiredCount"`
-		LaunchType         string         `json:"launchType"`
-		SchedulingStrategy string         `json:"schedulingStrategy"`
-		LoadBalancers      []loadBalancer `json:"loadBalancers"`
+		Cluster            string                `json:"cluster"`
+		ServiceName        string                `json:"serviceName"`
+		TaskDefinition     string                `json:"taskDefinition"`
+		DesiredCount       int                   `json:"desiredCount"`
+		LaunchType         string                `json:"launchType"`
+		SchedulingStrategy string                `json:"schedulingStrategy"`
+		LoadBalancers      []loadBalancer        `json:"loadBalancers"`
+		NetworkConfig      *networkConfiguration `json:"networkConfiguration"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ServiceName == "" {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "serviceName is required")
@@ -750,6 +766,7 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 		schedulingStrategy: req.SchedulingStrategy,
 		status:             "ACTIVE",
 		loadBalancers:      req.LoadBalancers,
+		networkConfig:      req.NetworkConfig,
 		createdAt:          time.Now().UTC(),
 	}
 	s.services[svc.arn] = svc
@@ -1191,7 +1208,7 @@ func serviceMeta(svc *ecsService) map[string]interface{} {
 	if strategy == "" {
 		strategy = "REPLICA"
 	}
-	return map[string]interface{}{
+	meta := map[string]interface{}{
 		"serviceArn":         svc.arn,
 		"serviceName":        svc.name,
 		"clusterArn":         svc.clusterArn,
@@ -1207,6 +1224,10 @@ func serviceMeta(svc *ecsService) map[string]interface{} {
 		"deployments":        []interface{}{},
 		"events":             []interface{}{},
 	}
+	if svc.networkConfig != nil {
+		meta["networkConfiguration"] = svc.networkConfig
+	}
+	return meta
 }
 
 // --- Key helpers ---

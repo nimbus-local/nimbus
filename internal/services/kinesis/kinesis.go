@@ -213,8 +213,9 @@ func streamDescription(st *stream, shards []map[string]any) map[string]any {
 
 func (s *Service) createStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		StreamName string `json:"StreamName"`
-		ShardCount int    `json:"ShardCount"`
+		StreamName string            `json:"StreamName"`
+		ShardCount int               `json:"ShardCount"`
+		Tags       map[string]string `json:"Tags"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -232,16 +233,27 @@ func (s *Service) createStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.streams[req.StreamName] = &stream{
-		name:           req.StreamName,
-		arn:            s.arn(req.StreamName),
-		shardCount:     req.ShardCount,
-		shards:         makeShards(req.ShardCount),
-		status:         "ACTIVE",
-		createdAt:      time.Now(),
-		tags:           map[string]string{},
+		name:       req.StreamName,
+		arn:        s.arn(req.StreamName),
+		shardCount: req.ShardCount,
+		shards:     makeShards(req.ShardCount),
+		status:     "ACTIVE",
+		createdAt:  time.Now(),
+		// CreateStream may carry tags; dropping them left the Terraform provider
+		// re-applying them on every plan.
+		tags:           tagsOrEmpty(req.Tags),
 		retentionHours: 24,
 	}
 	jsonhttp.Write(w, http.StatusOK, struct{}{})
+}
+
+// tagsOrEmpty copies a tag map, never returning nil so callers can add to it.
+func tagsOrEmpty(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *Service) deleteStream(w http.ResponseWriter, r *http.Request) {

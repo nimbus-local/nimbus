@@ -8,7 +8,7 @@ In-memory Cognito User Pools emulator. Supports the full infrastructure lifecycl
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateUserPool | Stores pool in-memory; ID format `{region}_{8-char-hex}`; returns `Active` immediately |
+| CreateUserPool | Stores pool in-memory; ID format `{region}_{8-char-hex}`; returns `Active` immediately; `DeletionProtection` round-trips, defaulting to `INACTIVE` |
 | DescribeUserPool | Returns full pool detail including ARN, tags, MFA config |
 | UpdateUserPool | Updates tags, MFA config, auto-verified attributes |
 | DeleteUserPool | Removes pool and cascade-deletes all its clients |

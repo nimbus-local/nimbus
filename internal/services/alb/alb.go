@@ -95,6 +95,62 @@ type targetGroup struct {
 	targetType string
 	createdAt  time.Time
 	targets    map[string]*registeredTarget // "id:port" -> target
+	// health is what CreateTargetGroup/ModifyTargetGroup were given. Nimbus runs
+	// no health checks, but hard-coding the response left the Terraform provider
+	// re-applying any non-default check on every plan.
+	health healthCheck
+}
+
+// healthCheck holds a target group's health-check settings, pre-filled with the
+// AWS defaults for an ALB target group.
+type healthCheck struct {
+	Enabled            string
+	IntervalSeconds    string
+	Path               string
+	Port               string
+	Protocol           string
+	TimeoutSeconds     string
+	HealthyThreshold   string
+	UnhealthyThreshold string
+	Matcher            string
+}
+
+// defaultHealthCheck returns the AWS defaults for the given target protocol.
+func defaultHealthCheck(protocol string) healthCheck {
+	return healthCheck{
+		Enabled:            "true",
+		IntervalSeconds:    "30",
+		Path:               "/",
+		Port:               "traffic-port",
+		Protocol:           protocol,
+		TimeoutSeconds:     "5",
+		HealthyThreshold:   "5",
+		UnhealthyThreshold: "2",
+		Matcher:            "200",
+	}
+}
+
+// applyHealthCheckForm overlays whichever health-check parameters the form
+// carries, leaving the rest at their current values.
+func (h *healthCheck) applyHealthCheckForm(r *http.Request) {
+	for _, f := range []struct {
+		key string
+		dst *string
+	}{
+		{"HealthCheckEnabled", &h.Enabled},
+		{"HealthCheckIntervalSeconds", &h.IntervalSeconds},
+		{"HealthCheckPath", &h.Path},
+		{"HealthCheckPort", &h.Port},
+		{"HealthCheckProtocol", &h.Protocol},
+		{"HealthCheckTimeoutSeconds", &h.TimeoutSeconds},
+		{"HealthyThresholdCount", &h.HealthyThreshold},
+		{"UnhealthyThresholdCount", &h.UnhealthyThreshold},
+		{"Matcher.HttpCode", &h.Matcher},
+	} {
+		if v := r.FormValue(f.key); v != "" {
+			*f.dst = v
+		}
+	}
 }
 
 type registeredTarget struct {
@@ -785,7 +841,9 @@ func (s *Service) createTargetGroup(w http.ResponseWriter, r *http.Request) {
 		arn: arn, name: name, protocol: protocol, port: port,
 		vpcID: vpcID, targetType: targetType, createdAt: time.Now().UTC(),
 		targets: map[string]*registeredTarget{},
+		health:  defaultHealthCheck(protocol),
 	}
+	tg.health.applyHealthCheckForm(r)
 
 	s.mu.Lock()
 	s.targetGroups[arn] = tg
@@ -1225,9 +1283,16 @@ func ruleMember(ru *rule) string {
 		for _, v := range c.values {
 			vals.WriteString(fmt.Sprintf("<member>%s</member>", xmlEsc(v)))
 		}
+		// The typed config block is what the Terraform provider reads —
+		// condition { path_pattern { values } } comes from PathPatternConfig, not
+		// from the flat Values list, which stays for older clients.
+		var typed string
+		if key := fieldConfigKey(c.field); key != "" {
+			typed = fmt.Sprintf(`<%s><Values>%s</Values></%s>`, key, vals.String(), key)
+		}
 		conds.WriteString(fmt.Sprintf(
-			`<member><Field>%s</Field><Values>%s</Values></member>`,
-			xmlEsc(c.field), vals.String(),
+			`<member><Field>%s</Field><Values>%s</Values>%s</member>`,
+			xmlEsc(c.field), vals.String(), typed,
 		))
 	}
 	action := fmt.Sprintf(
@@ -1278,7 +1343,16 @@ func (s *Service) lbARNsForTG(tgARN string) []string {
 }
 
 func tgMember(tg *targetGroup, lbARNs []string) string {
-	hcProtocol := tg.protocol
+	// Target groups created before health checks were stored fall back to the
+	// AWS defaults rather than to empty elements.
+	hc := tg.health
+	if hc.Path == "" {
+		hc = defaultHealthCheck(tg.protocol)
+	}
+	hcProtocol := hc.Protocol
+	if hcProtocol == "" {
+		hcProtocol = tg.protocol
+	}
 	if hcProtocol == "" {
 		hcProtocol = "HTTP"
 	}
@@ -1300,21 +1374,24 @@ func tgMember(tg *targetGroup, lbARNs []string) string {
 			`<Port>%s</Port>`+
 			`<VpcId>%s</VpcId>`+
 			`<TargetType>%s</TargetType>`+
-			`<HealthCheckEnabled>true</HealthCheckEnabled>`+
-			`<HealthCheckIntervalSeconds>30</HealthCheckIntervalSeconds>`+
-			`<HealthCheckPath>/</HealthCheckPath>`+
-			`<HealthCheckPort>traffic-port</HealthCheckPort>`+
+			`<HealthCheckEnabled>%s</HealthCheckEnabled>`+
+			`<HealthCheckIntervalSeconds>%s</HealthCheckIntervalSeconds>`+
+			`<HealthCheckPath>%s</HealthCheckPath>`+
+			`<HealthCheckPort>%s</HealthCheckPort>`+
 			`<HealthCheckProtocol>%s</HealthCheckProtocol>`+
-			`<HealthCheckTimeoutSeconds>5</HealthCheckTimeoutSeconds>`+
-			`<HealthyThresholdCount>5</HealthyThresholdCount>`+
-			`<UnhealthyThresholdCount>2</UnhealthyThresholdCount>`+
-			`<Matcher><HttpCode>200</HttpCode></Matcher>`+
+			`<HealthCheckTimeoutSeconds>%s</HealthCheckTimeoutSeconds>`+
+			`<HealthyThresholdCount>%s</HealthyThresholdCount>`+
+			`<UnhealthyThresholdCount>%s</UnhealthyThresholdCount>`+
+			`<Matcher><HttpCode>%s</HttpCode></Matcher>`+
 			`%s`+
 			`<ProtocolVersion>HTTP1</ProtocolVersion>`+
 			`</member>`,
 		xmlEsc(tg.arn), xmlEsc(tg.name),
 		xmlEsc(tg.protocol), xmlEsc(tg.port), xmlEsc(tg.vpcID), xmlEsc(tg.targetType),
-		xmlEsc(hcProtocol), lbList,
+		xmlEsc(hc.Enabled), xmlEsc(hc.IntervalSeconds), xmlEsc(hc.Path), xmlEsc(hc.Port),
+		xmlEsc(hcProtocol), xmlEsc(hc.TimeoutSeconds),
+		xmlEsc(hc.HealthyThreshold), xmlEsc(hc.UnhealthyThreshold), xmlEsc(hc.Matcher),
+		lbList,
 	)
 }
 

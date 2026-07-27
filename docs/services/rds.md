@@ -14,9 +14,9 @@ Detection: form-encoded body, `Version=2014-10-31`.
 | `ModifyDBClusterParameterGroup` | Accepted, no-op |
 | `CreateDBParameterGroup` / `DescribeDBParameterGroups` / `DeleteDBParameterGroup` | Accepted verbatim; `DescribeDBParameters` returns empty list |
 | `ModifyDBParameterGroup` | Accepted, no-op |
-| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId`; honors `DBSubnetGroupName`; round-trips `EngineMode` (defaults to `provisioned`) |
+| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId`; honors `DBSubnetGroupName`; round-trips `EngineMode` (defaults to `provisioned`), `DBClusterParameterGroup`, and `ServerlessV2ScalingConfiguration` |
 | `DescribeGlobalClusters` | Returns an empty list — Nimbus models no global clusters, but the provider reads membership for any `provisioned` cluster |
-| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint and subnet group from parent cluster; assigns an immutable `DbiResourceId`; standalone instances echo `EngineVersion`, `MasterUsername`, `DBName`, `AllocatedStorage` |
+| `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint and subnet group from parent cluster; assigns an immutable `DbiResourceId`; standalone instances echo `EngineVersion`, `MasterUsername`, `DBName`, `AllocatedStorage`; `AutoMinorVersionUpgrade` round-trips, defaulting to `true` |
 | `CreateDBProxy` / `DescribeDBProxies` / `ModifyDBProxy` / `DeleteDBProxy` | Status always `available`; endpoint resolves to the Postgres sidecar; creates a `default` target group — see [RDS Proxy](#rds-proxy) |
 | `DescribeDBProxyTargetGroups` / `ModifyDBProxyTargetGroup` | Pool settings stored and echoed; only the fields sent are changed |
 | `RegisterDBProxyTargets` / `DescribeDBProxyTargets` / `DeregisterDBProxyTargets` | Registers existing clusters and instances; re-registering replaces rather than duplicates |

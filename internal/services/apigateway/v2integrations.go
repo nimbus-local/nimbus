@@ -20,6 +20,9 @@ func (s *Service) createIntegration(w http.ResponseWriter, r *http.Request, apiI
 		apiError(w, http.StatusBadRequest, "BadRequestException", "integrationType is required")
 		return
 	}
+	if req.ConnectionType == "" {
+		req.ConnectionType = "INTERNET" // the AWS default
+	}
 	integ, ok := s.v2.createIntegration(apiID, &req)
 	if !ok {
 		notFound(w, apiID, "Api")
@@ -63,6 +66,9 @@ func (s *Service) updateIntegration(w http.ResponseWriter, r *http.Request, apiI
 	var req V2Integration
 	if err := jsonDecode(r, &req); err == nil {
 		s.v2.mu.Lock()
+		if req.ConnectionType != "" {
+			integ.ConnectionType = req.ConnectionType
+		}
 		if req.IntegrationType != "" {
 			integ.IntegrationType = req.IntegrationType
 		}

@@ -33,8 +33,11 @@ type V2Route struct {
 }
 
 type V2Integration struct {
-	IntegrationId        string `json:"integrationId"`
-	IntegrationType      string `json:"integrationType"` // AWS_PROXY, HTTP_PROXY
+	IntegrationId   string `json:"integrationId"`
+	IntegrationType string `json:"integrationType"` // AWS_PROXY, HTTP_PROXY
+	// ConnectionType is INTERNET or VPC_LINK. AWS defaults it to INTERNET and the
+	// Terraform provider reads it back, so it has to be reported.
+	ConnectionType       string `json:"connectionType"`
 	IntegrationUri       string `json:"integrationUri,omitempty"`
 	IntegrationMethod    string `json:"integrationMethod,omitempty"`
 	PayloadFormatVersion string `json:"payloadFormatVersion,omitempty"` // "1.0" or "2.0"

@@ -813,3 +813,128 @@ func TestDescribeTargetGroups_LoadBalancerArns(t *testing.T) {
 	}
 	assertLBArns(tgDefault, "")
 }
+
+// --- Health check settings ---
+
+// Health-check settings used to be hard-coded in the response, so any non-default
+// check the caller configured drifted on every Terraform plan.
+func TestCreateTargetGroup_HealthCheckRoundTrips(t *testing.T) {
+	s := newSvc()
+	w := elbReq(t, s, "CreateTargetGroup", map[string]string{
+		"Name":                       "tg",
+		"Protocol":                   "HTTP",
+		"Port":                       "80",
+		"HealthCheckPath":            "/health",
+		"HealthyThresholdCount":      "2",
+		"UnhealthyThresholdCount":    "4",
+		"HealthCheckIntervalSeconds": "10",
+		"HealthCheckTimeoutSeconds":  "3",
+		"Matcher.HttpCode":           "200-299",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, want := range []string{
+		"<HealthCheckPath>/health</HealthCheckPath>",
+		"<HealthyThresholdCount>2</HealthyThresholdCount>",
+		"<UnhealthyThresholdCount>4</UnhealthyThresholdCount>",
+		"<HealthCheckIntervalSeconds>10</HealthCheckIntervalSeconds>",
+		"<HealthCheckTimeoutSeconds>3</HealthCheckTimeoutSeconds>",
+		"<HttpCode>200-299</HttpCode>",
+	} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("create response missing %q:\n%s", want, w.Body.String())
+		}
+	}
+
+	// DescribeTargetGroups is what the provider reads on every plan.
+	w = elbReq(t, s, "DescribeTargetGroups", map[string]string{"Names.member.1": "tg"})
+	if !strings.Contains(w.Body.String(), "<HealthCheckPath>/health</HealthCheckPath>") {
+		t.Errorf("describe lost the health check path:\n%s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "<HealthyThresholdCount>2</HealthyThresholdCount>") {
+		t.Errorf("describe lost the healthy threshold:\n%s", w.Body.String())
+	}
+}
+
+// Unset settings still report the AWS defaults.
+func TestCreateTargetGroup_HealthCheckDefaults(t *testing.T) {
+	s := newSvc()
+	w := elbReq(t, s, "CreateTargetGroup", map[string]string{
+		"Name": "tg", "Protocol": "HTTP", "Port": "80",
+	})
+	for _, want := range []string{
+		"<HealthCheckEnabled>true</HealthCheckEnabled>",
+		"<HealthCheckPath>/</HealthCheckPath>",
+		"<HealthCheckIntervalSeconds>30</HealthCheckIntervalSeconds>",
+		"<HealthyThresholdCount>5</HealthyThresholdCount>",
+		"<UnhealthyThresholdCount>2</UnhealthyThresholdCount>",
+		"<HttpCode>200</HttpCode>",
+	} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("missing default %q:\n%s", want, w.Body.String())
+		}
+	}
+}
+
+// --- Listener rule conditions ---
+
+// The provider reads condition { path_pattern { values } } from the typed
+// PathPatternConfig block, not from the flat Values list, so a rule whose
+// response carried only Values read back with an empty path_pattern and drifted.
+func TestCreateRule_ReportsTypedConditionConfig(t *testing.T) {
+	s := newSvc()
+	lbARN := createLB(t, s, "lb")
+	tgw := elbReq(t, s, "CreateTargetGroup", map[string]string{
+		"Name": "tg", "Protocol": "HTTP", "Port": "80",
+	})
+	tgARN := between(tgw.Body.String(), "<TargetGroupArn>", "</TargetGroupArn>")
+	lw := elbReq(t, s, "CreateListener", map[string]string{
+		"LoadBalancerArn":                        lbARN,
+		"Protocol":                               "HTTP",
+		"Port":                                   "80",
+		"DefaultActions.member.1.Type":           "forward",
+		"DefaultActions.member.1.TargetGroupArn": tgARN,
+	})
+	listenerARN := between(lw.Body.String(), "<ListenerArn>", "</ListenerArn>")
+
+	w := elbReq(t, s, "CreateRule", map[string]string{
+		"ListenerArn":               listenerARN,
+		"Priority":                  "10",
+		"Conditions.member.1.Field": "path-pattern",
+		"Conditions.member.1.PathPatternConfig.Values.member.1": "/api/*",
+		"Actions.member.1.Type":                                 "forward",
+		"Actions.member.1.TargetGroupArn":                       tgARN,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<PathPatternConfig><Values><member>/api/*</member></Values></PathPatternConfig>") {
+		t.Errorf("rule response missing the typed PathPatternConfig block:\n%s", body)
+	}
+	// The flat list stays for older clients.
+	if !strings.Contains(body, "<Field>path-pattern</Field><Values><member>/api/*</member></Values>") {
+		t.Errorf("rule response should keep the flat Values list:\n%s", body)
+	}
+
+	// DescribeRules is the provider's read path.
+	w = elbReq(t, s, "DescribeRules", map[string]string{"ListenerArn": listenerARN})
+	if !strings.Contains(w.Body.String(), "<PathPatternConfig>") {
+		t.Errorf("describe-rules missing the typed config:\n%s", w.Body.String())
+	}
+}
+
+// between returns the text between two markers, or "" when absent.
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	rest := s[i+len(start):]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
+}

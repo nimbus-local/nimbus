@@ -10,7 +10,7 @@ Lambda event source mappings (ESMs) targeting Kinesis streams are automatically 
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateStream` | `ShardCount` configures the number of shards |
+| `CreateStream` | `ShardCount` configures the number of shards; create-time `Tags` are stored |
 | `DeleteStream` | Removes stream and all records immediately |
 | `ListStreams` | Returns all stream names |
 | `DescribeStream` | Full stream description including shard list |

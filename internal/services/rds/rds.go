@@ -64,6 +64,9 @@ type dbCluster struct {
 	engine        string
 	engineVersion string
 	engineMode    string // provisioned | serverless; ForceNew for the TF provider
+	paramGroup    string // DBClusterParameterGroupName
+	minCapacity   string // ServerlessV2ScalingConfiguration, as sent
+	maxCapacity   string
 	dbName        string
 	masterUser    string
 	endpoint      string
@@ -87,12 +90,15 @@ type dbInstance struct {
 	class         string
 	masterUser    string
 	dbName        string
-	storageGB     string // AllocatedStorage, empty for cluster members
-	endpoint      string
-	port          int
-	status        string
-	subnetGroup   string // DBSubnetGroupName, inherited from the cluster for members
-	createdAt     time.Time
+	// autoMinorVersionUpgrade defaults to true in AWS and in the provider, so an
+	// unreported value reads as false and drifts on every plan.
+	autoMinorVersionUpgrade bool
+	storageGB               string // AllocatedStorage, empty for cluster members
+	endpoint                string
+	port                    int
+	status                  string
+	subnetGroup             string // DBSubnetGroupName, inherited from the cluster for members
+	createdAt               time.Time
 
 	perfInsights          bool
 	perfInsightsKMS       string
@@ -643,6 +649,9 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 		engine:        engine,
 		engineVersion: engineVersion,
 		engineMode:    engineMode,
+		paramGroup:    r.FormValue("DBClusterParameterGroupName"),
+		minCapacity:   r.FormValue("ServerlessV2ScalingConfiguration.MinCapacity"),
+		maxCapacity:   r.FormValue("ServerlessV2ScalingConfiguration.MaxCapacity"),
 		dbName:        dbName,
 		masterUser:    masterUser,
 		endpoint:      s.postgresHost,
@@ -751,7 +760,7 @@ func (s *Service) clusterXML(c *dbCluster) string {
         <DbClusterResourceId>%s</DbClusterResourceId>
         <Engine>%s</Engine>
         <EngineVersion>%s</EngineVersion>
-        <EngineMode>%s</EngineMode>
+        <EngineMode>%s</EngineMode>%s%s
         <DatabaseName>%s</DatabaseName>
         <MasterUsername>%s</MasterUsername>
         <Status>%s</Status>
@@ -767,11 +776,44 @@ func (s *Service) clusterXML(c *dbCluster) string {
           <AvailabilityZone>%s</AvailabilityZone>
         </AvailabilityZones>`,
 		c.arn, c.identifier, c.resourceID, c.engine, c.engineVersion, c.engineMode,
+		clusterParamGroupRef(c.paramGroup), serverlessScalingXML(c.minCapacity, c.maxCapacity),
 		c.dbName, c.masterUser,
 		c.status, c.endpoint, c.endpoint, c.port,
 		c.createdAt.Format(time.RFC3339),
 		performanceInsightsXML(c.perfInsights, c.perfInsightsKMS, c.perfInsightsRetention),
 		s.region+"a")
+}
+
+// clusterParamGroupRef reports the cluster's parameter group. Omitted when the
+// cluster was created without one, matching AWS.
+func clusterParamGroupRef(name string) string {
+	if name == "" {
+		return ""
+	}
+	return fmt.Sprintf(`
+        <DBClusterParameterGroup>%s</DBClusterParameterGroup>`, name)
+}
+
+// serverlessScalingXML echoes an Aurora Serverless v2 scaling block. Values are
+// passed through as sent so the capacities read back exactly, decimals included.
+func serverlessScalingXML(minCapacity, maxCapacity string) string {
+	if minCapacity == "" && maxCapacity == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`
+        <ServerlessV2ScalingConfiguration>`)
+	if minCapacity != "" {
+		fmt.Fprintf(&b, `
+          <MinCapacity>%s</MinCapacity>`, minCapacity)
+	}
+	if maxCapacity != "" {
+		fmt.Fprintf(&b, `
+          <MaxCapacity>%s</MaxCapacity>`, maxCapacity)
+	}
+	b.WriteString(`
+        </ServerlessV2ScalingConfiguration>`)
+	return b.String()
 }
 
 func (s *Service) clusterARN(id string) string {
@@ -827,6 +869,8 @@ func (s *Service) createDBInstance(w http.ResponseWriter, r *http.Request) {
 		status:        "available",
 		subnetGroup:   subnetGroup,
 		createdAt:     time.Now().UTC(),
+		// Absent means the AWS default, which is true — not false.
+		autoMinorVersionUpgrade: r.FormValue("AutoMinorVersionUpgrade") != "false",
 	}
 	applyPerformanceInsights(r, &inst.perfInsights, &inst.perfInsightsKMS, &inst.perfInsightsRetention)
 
@@ -937,6 +981,8 @@ func (s *Service) instanceXML(inst *dbInstance) string {
 		fmt.Fprintf(&opt, `
         <AllocatedStorage>%s</AllocatedStorage>`, inst.storageGB)
 	}
+	fmt.Fprintf(&opt, `
+        <AutoMinorVersionUpgrade>%t</AutoMinorVersionUpgrade>`, inst.autoMinorVersionUpgrade)
 	// Unlike DBCluster, DBInstance nests the full subnet group structure —
 	// that's where the provider reads db_subnet_group_name from.
 	if sg := s.subnetGroups[inst.subnetGroup]; sg != nil {
