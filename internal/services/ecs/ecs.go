@@ -95,17 +95,21 @@ type ecsTask struct {
 }
 
 type ecsService struct {
-	name          string
-	arn           string
-	clusterArn    string
-	taskDefArn    string
-	desiredCount  int
-	runningCount  int
-	pendingCount  int
-	launchType    string
-	status        string
-	loadBalancers []loadBalancer
-	createdAt     time.Time
+	name         string
+	arn          string
+	clusterArn   string
+	taskDefArn   string
+	desiredCount int
+	runningCount int
+	pendingCount int
+	launchType   string
+	// schedulingStrategy is REPLICA or DAEMON. Nimbus schedules the same way for
+	// both, but the value is ForceNew for the Terraform provider, so it has to
+	// read back — see serviceMeta.
+	schedulingStrategy string
+	status             string
+	loadBalancers      []loadBalancer
+	createdAt          time.Time
 }
 
 // loadBalancer is one entry of a service's loadBalancers block. Nimbus does not
@@ -693,12 +697,13 @@ func (s *Service) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Cluster        string         `json:"cluster"`
-		ServiceName    string         `json:"serviceName"`
-		TaskDefinition string         `json:"taskDefinition"`
-		DesiredCount   int            `json:"desiredCount"`
-		LaunchType     string         `json:"launchType"`
-		LoadBalancers  []loadBalancer `json:"loadBalancers"`
+		Cluster            string         `json:"cluster"`
+		ServiceName        string         `json:"serviceName"`
+		TaskDefinition     string         `json:"taskDefinition"`
+		DesiredCount       int            `json:"desiredCount"`
+		LaunchType         string         `json:"launchType"`
+		SchedulingStrategy string         `json:"schedulingStrategy"`
+		LoadBalancers      []loadBalancer `json:"loadBalancers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ServiceName == "" {
 		jsonError(w, http.StatusBadRequest, "InvalidParameterException", "serviceName is required")
@@ -709,6 +714,9 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LaunchType == "" {
 		req.LaunchType = "FARGATE"
+	}
+	if req.SchedulingStrategy == "" {
+		req.SchedulingStrategy = "REPLICA" // the AWS default, and the provider's
 	}
 
 	s.mu.Lock()
@@ -731,17 +739,18 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := &ecsService{
-		name:          req.ServiceName,
-		arn:           s.serviceARN(c.name, req.ServiceName),
-		clusterArn:    c.arn,
-		taskDefArn:    td.arn,
-		desiredCount:  req.DesiredCount,
-		runningCount:  0, // updated by reconciler (Docker) or createTaskRecord (simulation)
-		pendingCount:  0,
-		launchType:    req.LaunchType,
-		status:        "ACTIVE",
-		loadBalancers: req.LoadBalancers,
-		createdAt:     time.Now().UTC(),
+		name:               req.ServiceName,
+		arn:                s.serviceARN(c.name, req.ServiceName),
+		clusterArn:         c.arn,
+		taskDefArn:         td.arn,
+		desiredCount:       req.DesiredCount,
+		runningCount:       0, // updated by reconciler (Docker) or createTaskRecord (simulation)
+		pendingCount:       0,
+		launchType:         req.LaunchType,
+		schedulingStrategy: req.SchedulingStrategy,
+		status:             "ACTIVE",
+		loadBalancers:      req.LoadBalancers,
+		createdAt:          time.Now().UTC(),
 	}
 	s.services[svc.arn] = svc
 	c.activeServicesCount++
@@ -1175,20 +1184,28 @@ func serviceMeta(svc *ecsService) map[string]interface{} {
 	if lbs == nil {
 		lbs = []loadBalancer{}
 	}
+	// schedulingStrategy must be reported: it is ForceNew for the Terraform
+	// provider, so omitting it makes every re-apply plan a service replacement.
+	// Services created before it was modelled read back as REPLICA, the default.
+	strategy := svc.schedulingStrategy
+	if strategy == "" {
+		strategy = "REPLICA"
+	}
 	return map[string]interface{}{
-		"serviceArn":     svc.arn,
-		"serviceName":    svc.name,
-		"clusterArn":     svc.clusterArn,
-		"taskDefinition": svc.taskDefArn,
-		"desiredCount":   svc.desiredCount,
-		"runningCount":   svc.runningCount,
-		"pendingCount":   svc.pendingCount,
-		"launchType":     svc.launchType,
-		"status":         svc.status,
-		"loadBalancers":  lbs,
-		"createdAt":      float64(svc.createdAt.Unix()),
-		"deployments":    []interface{}{},
-		"events":         []interface{}{},
+		"serviceArn":         svc.arn,
+		"serviceName":        svc.name,
+		"clusterArn":         svc.clusterArn,
+		"taskDefinition":     svc.taskDefArn,
+		"desiredCount":       svc.desiredCount,
+		"runningCount":       svc.runningCount,
+		"pendingCount":       svc.pendingCount,
+		"launchType":         svc.launchType,
+		"schedulingStrategy": strategy,
+		"status":             svc.status,
+		"loadBalancers":      lbs,
+		"createdAt":          float64(svc.createdAt.Unix()),
+		"deployments":        []interface{}{},
+		"events":             []interface{}{},
 	}
 }
 

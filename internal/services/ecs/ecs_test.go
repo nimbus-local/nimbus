@@ -780,3 +780,89 @@ func contains(s, substr string) bool {
 			return false
 		}())
 }
+
+// --- Scheduling strategy ---
+
+// schedulingStrategy is ForceNew for the Terraform provider: omitting it from
+// DescribeServices made every re-apply plan a service replacement.
+func TestCreateServiceDefaultsSchedulingStrategy(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "web"})
+	res := do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+	})
+	s := res["service"].(map[string]interface{})
+	if s["schedulingStrategy"] != "REPLICA" {
+		t.Errorf("expected REPLICA by default, got %v", s["schedulingStrategy"])
+	}
+}
+
+func TestCreateServiceRoundTripsSchedulingStrategy(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "agent"})
+	res := do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":        "agent-service",
+		"taskDefinition":     "agent",
+		"desiredCount":       1,
+		"schedulingStrategy": "DAEMON",
+	})
+	s := res["service"].(map[string]interface{})
+	if s["schedulingStrategy"] != "DAEMON" {
+		t.Errorf("expected DAEMON to round-trip, got %v", s["schedulingStrategy"])
+	}
+}
+
+// DescribeServices is what the provider reads on every plan.
+func TestDescribeServicesReportsSchedulingStrategy(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "agent"})
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":        "agent-service",
+		"taskDefinition":     "agent",
+		"desiredCount":       1,
+		"schedulingStrategy": "DAEMON",
+	})
+	res := do(t, svc, "DescribeServices", map[string]interface{}{
+		"cluster":  "default",
+		"services": []string{"agent-service"},
+	})
+	services := res["services"].([]interface{})
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	if got := services[0].(map[string]interface{})["schedulingStrategy"]; got != "DAEMON" {
+		t.Errorf("DescribeServices reported %v, want DAEMON", got)
+	}
+}
+
+// An update must not disturb it — the provider modifies a service in place and
+// then re-reads it, and a changed strategy would force a replacement.
+func TestUpdateServicePreservesSchedulingStrategy(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "agent"})
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":        "agent-service",
+		"taskDefinition":     "agent",
+		"desiredCount":       1,
+		"schedulingStrategy": "DAEMON",
+	})
+	res := do(t, svc, "UpdateService", map[string]interface{}{
+		"service":      "agent-service",
+		"desiredCount": 3,
+	})
+	s := res["service"].(map[string]interface{})
+	if s["schedulingStrategy"] != "DAEMON" {
+		t.Errorf("UpdateService dropped schedulingStrategy: %v", s["schedulingStrategy"])
+	}
+}
+
+// A service record predating the field still reads back as REPLICA rather than
+// as an empty string, which the provider would treat as drift.
+func TestServiceMetaDefaultsEmptySchedulingStrategy(t *testing.T) {
+	meta := serviceMeta(&ecsService{name: "legacy", status: "ACTIVE"})
+	if meta["schedulingStrategy"] != "REPLICA" {
+		t.Errorf("expected REPLICA for an unset strategy, got %v", meta["schedulingStrategy"])
+	}
+}

@@ -586,6 +586,12 @@ try_match "describe-services reports load balancer" "targetgroup/$PREFIX" \
   $CLI ecs describe-services --cluster "$PREFIX" --services "$PREFIX" \
     --query 'services[0].loadBalancers[0].targetGroupArn' --output text
 
+# schedulingStrategy is ForceNew for the provider: if DescribeServices omits it,
+# every re-apply plans a service replacement.
+try_match "describe-services reports schedulingStrategy" "^REPLICA$" \
+  $CLI ecs describe-services --cluster "$PREFIX" --services "$PREFIX" \
+    --query 'services[0].schedulingStrategy' --output text
+
 ECS_TG_ARN=$($CLI elbv2 describe-target-groups --names "$PREFIX" \
   --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
 if [ -n "${ECS_TG_ARN:-}" ] && [ "$ECS_TG_ARN" != "None" ]; then

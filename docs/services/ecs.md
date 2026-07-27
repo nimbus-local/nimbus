@@ -39,11 +39,23 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s; `loadBalancers` are validated (see below) and stored |
+| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s; `loadBalancers` are validated (see below) and stored; `schedulingStrategy` defaults to `REPLICA` and round-trips |
 | UpdateService | Updates `desiredCount`, `taskDefinition` and/or `loadBalancers`; load balancers are validated against the task definition set by the same call |
 | DeleteService | Removes service; `desiredCount` and `runningCount` set to 0 |
 | DescribeServices | Filterable by cluster; accepts name or ARN; reports `loadBalancers` (empty list when none) |
 | ListServices | Returns all service ARNs for the given cluster |
+
+## Scheduling strategy
+
+`DescribeServices` reports `schedulingStrategy`, defaulting to `REPLICA` when the create
+request omitted it. Nimbus schedules `REPLICA` and `DAEMON` services identically — it
+places tasks the same way for both — but the value is ForceNew for the Terraform
+provider, so leaving it out of the response made every `terraform apply` plan a
+**service replacement**:
+
+```
++ scheduling_strategy = "REPLICA" # forces replacement
+```
 
 ## Load balancer validation
 
