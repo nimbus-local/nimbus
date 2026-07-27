@@ -194,8 +194,13 @@ func (s *Service) listMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	// A DimensionFilter must name a dimension; one without a Name constrains
+	// nothing, so it is dropped rather than matched against the empty name.
 	dimFilter := make(map[string]string)
 	for _, d := range req.Dimensions {
+		if d.Name == "" {
+			continue
+		}
 		dimFilter[d.Name] = d.Value
 	}
 
@@ -217,7 +222,7 @@ func (s *Service) listMetrics(w http.ResponseWriter, r *http.Request) {
 			if req.MetricName != "" && series.metricName != req.MetricName {
 				continue
 			}
-			if !matchDims(series.dimensions, dimFilter) {
+			if !matchDimFilters(series.dimensions, dimFilter) {
 				continue
 			}
 			var dims []map[string]string
@@ -711,6 +716,28 @@ func matchDims(target, filter map[string]string) bool {
 	return true
 }
 
+// matchDimFilters applies ListMetrics DimensionFilter semantics, which differ
+// from the exact matching above: a filter naming a dimension with no value
+// matches every metric that *carries* a dimension of that name, whatever its
+// value, and one naming both matches only that exact pair. Filters are ANDed.
+//
+// matchDims cannot express the name-only case. A missing map key and an empty
+// value both read as "", so it treats a name-only filter as "this dimension
+// equals the empty string" — which selects exactly the metrics lacking the
+// dimension, the inverse of what the caller asked for.
+func matchDimFilters(target, filters map[string]string) bool {
+	for name, value := range filters {
+		have, ok := target[name]
+		if !ok {
+			return false
+		}
+		if value != "" && have != value {
+			return false
+		}
+	}
+	return true
+}
+
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 type bucket struct {
@@ -924,7 +951,7 @@ func (s *Service) cborListMetrics(w http.ResponseWriter, params map[string]inter
 			if mn != "" && series.metricName != mn {
 				continue
 			}
-			if !matchDims(series.dimensions, dimFilter) {
+			if !matchDimFilters(series.dimensions, dimFilter) {
 				continue
 			}
 			var dims []interface{}

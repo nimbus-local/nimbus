@@ -3,9 +3,11 @@ package cloudwatchmetrics
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -708,5 +710,230 @@ func TestCBOR_PutGetMetricData_TimestampRoundTrip(t *testing.T) {
 	}
 	if v, _ := vals[0].(float64); v != 180 {
 		t.Errorf("Value = %v, want 180", vals[0])
+	}
+}
+
+// --- ListMetrics dimension filters ---
+
+// seedDimensionedMetrics publishes the shape argus discovers Service Connect
+// edges from: one RequestCount series carrying TargetDiscoveryName and one
+// without it, plus an unrelated metric.
+func seedDimensionedMetrics(t *testing.T, s *Service) {
+	t.Helper()
+	jsonReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "AWS/ECS",
+		"MetricData": []map[string]interface{}{{
+			"MetricName": "RequestCount",
+			"Dimensions": []map[string]string{
+				{"Name": "ClusterName", "Value": "demo-cluster"},
+				{"Name": "ServiceName", "Value": "web-svc"},
+				{"Name": "TargetDiscoveryName", "Value": "api"},
+			},
+			"Value": 120.0,
+		}},
+	})
+	jsonReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "AWS/ECS",
+		"MetricData": []map[string]interface{}{{
+			"MetricName": "RequestCount",
+			"Dimensions": []map[string]string{
+				{"Name": "ClusterName", "Value": "demo-cluster"},
+				{"Name": "ServiceName", "Value": "web-svc"},
+			},
+			"Value": 55.0,
+		}},
+	})
+	jsonReq(t, s, "PutMetricData", map[string]interface{}{
+		"Namespace": "AWS/ECS",
+		"MetricData": []map[string]interface{}{{
+			"MetricName": "CpuUtilized",
+			"Dimensions": []map[string]string{
+				{"Name": "TargetDiscoveryName", "Value": "api"},
+			},
+			"Value": 3.0,
+		}},
+	})
+}
+
+// listMetricNames returns the (MetricName, dimension-count) pairs a ListMetrics
+// response contains, so a test can assert on which series matched.
+func listedSeries(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	var resp struct {
+		Metrics []struct {
+			Namespace  string              `json:"Namespace"`
+			MetricName string              `json:"MetricName"`
+			Dimensions []map[string]string `json:"Dimensions"`
+		} `json:"Metrics"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var out []string
+	for _, m := range resp.Metrics {
+		dims := map[string]string{}
+		for _, d := range m.Dimensions {
+			dims[d["Name"]] = d["Value"]
+		}
+		out = append(out, fmt.Sprintf("%s/%s TargetDiscoveryName=%q",
+			m.Namespace, m.MetricName, dims["TargetDiscoveryName"]))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// A DimensionFilter with only a Name matches every metric carrying a dimension
+// of that name, whatever its value. This is the argus Phase 4 discovery query.
+func TestListMetrics_DimensionFilterNameOnly(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"MetricName": "RequestCount",
+		"Dimensions": []map[string]string{{"Name": "TargetDiscoveryName"}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	got := listedSeries(t, w)
+	want := []string{`AWS/ECS/RequestCount TargetDiscoveryName="api"`}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("name-only filter: got %v, want %v", got, want)
+	}
+}
+
+// The bug this replaces: a name-only filter was read as "this dimension equals
+// the empty string", which selected the metrics *lacking* the dimension.
+func TestListMetrics_DimensionFilterNameOnlyIsNotInverted(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"MetricName": "RequestCount",
+		"Dimensions": []map[string]string{{"Name": "TargetDiscoveryName"}},
+	})
+	for _, got := range listedSeries(t, w) {
+		if strings.Contains(got, `TargetDiscoveryName=""`) {
+			t.Errorf("series without the dimension matched a name-only filter: %s", got)
+		}
+	}
+}
+
+func TestListMetrics_DimensionFilterNameAndValue(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"MetricName": "RequestCount",
+		"Dimensions": []map[string]string{{"Name": "TargetDiscoveryName", "Value": "api"}},
+	})
+	if got := listedSeries(t, w); len(got) != 1 {
+		t.Errorf("exact-pair filter: got %v, want 1 series", got)
+	}
+
+	w = jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"MetricName": "RequestCount",
+		"Dimensions": []map[string]string{{"Name": "TargetDiscoveryName", "Value": "nope"}},
+	})
+	if got := listedSeries(t, w); len(got) != 0 {
+		t.Errorf("filter on an unpublished value should match nothing, got %v", got)
+	}
+}
+
+// Multiple filters are ANDed: a metric must satisfy every one.
+func TestListMetrics_DimensionFiltersAreANDed(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace": "AWS/ECS",
+		"Dimensions": []map[string]string{
+			{"Name": "ServiceName", "Value": "web-svc"},
+			{"Name": "TargetDiscoveryName"},
+		},
+	})
+	// Only the RequestCount series has both; CpuUtilized carries
+	// TargetDiscoveryName but no ServiceName.
+	got := listedSeries(t, w)
+	if len(got) != 1 || !strings.Contains(got[0], "RequestCount") {
+		t.Errorf("ANDed filters: got %v, want just the RequestCount series", got)
+	}
+}
+
+// A filter naming a dimension no metric has must match nothing — not everything.
+func TestListMetrics_DimensionFilterUnknownName(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"Dimensions": []map[string]string{{"Name": "NoSuchDimension"}},
+	})
+	if got := listedSeries(t, w); len(got) != 0 {
+		t.Errorf("expected no matches for an unknown dimension name, got %v", got)
+	}
+}
+
+// Dimension filters must not narrow a request that has none.
+func TestListMetrics_NoDimensionFilterReturnsAll(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := jsonReq(t, s, "ListMetrics", map[string]interface{}{"Namespace": "AWS/ECS"})
+	if got := listedSeries(t, w); len(got) != 3 {
+		t.Errorf("expected all 3 seeded series, got %v", got)
+	}
+}
+
+// The Terraform provider reaches CloudWatch over smithy-rpc-v2-cbor, which
+// parses filters through a separate path — it must agree with the JSON one.
+func TestCBOR_ListMetrics_DimensionFilterNameOnly(t *testing.T) {
+	s := newSvc()
+	seedDimensionedMetrics(t, s)
+
+	w := cborReq(t, s, "ListMetrics", map[string]interface{}{
+		"Namespace":  "AWS/ECS",
+		"MetricName": "RequestCount",
+		"Dimensions": []interface{}{
+			map[string]interface{}{"Name": "TargetDiscoveryName"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	metrics, _ := decodeCBOR(t, w)["Metrics"].([]interface{})
+	if len(metrics) != 1 {
+		t.Fatalf("name-only CBOR filter: expected 1 series, got %d", len(metrics))
+	}
+	dims, _ := metrics[0].(map[string]interface{})["Dimensions"].([]interface{})
+	found := false
+	for _, d := range dims {
+		if dm, ok := d.(map[string]interface{}); ok && dm["Name"] == "TargetDiscoveryName" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("matched series does not carry the filtered dimension")
+	}
+}
+
+// matchDims keeps its exact-match semantics: GetMetricStatistics and the alarm
+// lookups identify one series and must not adopt DimensionFilter behaviour.
+func TestMatchDimsKeepsExactSemantics(t *testing.T) {
+	target := map[string]string{"ClusterName": "demo", "ServiceName": "web"}
+	if !matchDims(target, map[string]string{"ClusterName": "demo"}) {
+		t.Error("matchDims should match a subset with equal values")
+	}
+	if matchDims(target, map[string]string{"ClusterName": "other"}) {
+		t.Error("matchDims should reject a differing value")
+	}
+	// Still the old behaviour here, and deliberately so: an empty value means
+	// "absent" to the exact matcher.
+	if matchDims(target, map[string]string{"Missing": ""}) != true {
+		t.Error("matchDims treats an empty filter value as absent")
 	}
 }

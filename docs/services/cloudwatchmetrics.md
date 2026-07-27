@@ -11,7 +11,7 @@ Timestamp shapes on the CBOR path are CBOR **tag 1** epoch seconds in both direc
 | Operation | Notes |
 |-----------|-------|
 | `PutMetricData` | Accepts any namespace, metric name, dimensions, and value; stores in-memory |
-| `ListMetrics` | Filters by namespace, metric name, and/or dimensions |
+| `ListMetrics` | Filters by namespace, metric name, and/or dimensions — see [Dimension filters](#dimension-filters) |
 | `GetMetricStatistics` | Sum, Average, Minimum, Maximum, SampleCount per period bucket |
 | `GetMetricData` | Multi-metric query with `MetricStat` queries |
 | `PutMetricAlarm` | Stores alarm definition; state always `OK` |
@@ -21,6 +21,37 @@ Timestamp shapes on the CBOR path are CBOR **tag 1** epoch seconds in both direc
 | `SetAlarmState` | Accepted and ignored (state stays `OK`) |
 | `EnableAlarmActions` / `DisableAlarmActions` | Accepted and ignored |
 | `ListTagsForResource` / `TagResource` / `UntagResource` | Tag support for alarms |
+
+## Dimension filters
+
+`ListMetrics` takes `DimensionFilter` entries, whose matching rules differ from the
+`Dimension` lists the other operations take:
+
+| Filter | Matches |
+|--------|---------|
+| `Name` only | Every metric that **carries** a dimension of that name, whatever its value |
+| `Name` + `Value` | Only metrics carrying that exact pair |
+| Several filters | ANDed — a metric must satisfy all of them |
+
+A name-only filter is how you discover which series carry a dimension at all:
+
+```bash
+# Every RequestCount series that has a TargetDiscoveryName dimension
+nimbuslocal cloudwatch list-metrics \
+  --namespace AWS/ECS --metric-name RequestCount \
+  --dimensions Name=TargetDiscoveryName
+
+# Narrow to one service's edges — filters are ANDed
+nimbuslocal cloudwatch list-metrics \
+  --namespace AWS/ECS \
+  --dimensions Name=ServiceName,Value=web-svc Name=TargetDiscoveryName
+```
+
+A filter naming a dimension no metric carries matches nothing.
+
+`GetMetricStatistics`, `GetMetricData`, and `DescribeAlarmsForMetric` do **not** use
+these rules: there a dimension list identifies a series, so every entry must match by
+value.
 
 ## Example
 
