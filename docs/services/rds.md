@@ -14,7 +14,8 @@ Detection: form-encoded body, `Version=2014-10-31`.
 | `ModifyDBClusterParameterGroup` | Accepted, no-op |
 | `CreateDBParameterGroup` / `DescribeDBParameterGroups` / `DeleteDBParameterGroup` | Accepted verbatim; `DescribeDBParameters` returns empty list |
 | `ModifyDBParameterGroup` | Accepted, no-op |
-| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId`; honors `DBSubnetGroupName` |
+| `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId`; honors `DBSubnetGroupName`; round-trips `EngineMode` (defaults to `provisioned`) |
+| `DescribeGlobalClusters` | Returns an empty list — Nimbus models no global clusters, but the provider reads membership for any `provisioned` cluster |
 | `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint and subnet group from parent cluster; assigns an immutable `DbiResourceId`; standalone instances echo `EngineVersion`, `MasterUsername`, `DBName`, `AllocatedStorage` |
 | `CreateDBProxy` / `DescribeDBProxies` / `ModifyDBProxy` / `DeleteDBProxy` | Status always `available`; endpoint resolves to the Postgres sidecar; creates a `default` target group — see [RDS Proxy](#rds-proxy) |
 | `DescribeDBProxyTargetGroups` / `ModifyDBProxyTargetGroup` | Pool settings stored and echoed; only the fields sent are changed |
@@ -65,6 +66,18 @@ nimbuslocal rds describe-db-instances \
 Clusters and instances accept `EnablePerformanceInsights`, `PerformanceInsightsKMSKeyId`, and `PerformanceInsightsRetentionPeriod` on create and modify, and round-trip them through the Describe responses (`PerformanceInsightsEnabled` etc.). Retention defaults to `7` when PI is enabled without an explicit value. Modify calls that don't include PI fields leave the stored values untouched, so `performance_insights_enabled = true` in Terraform applies and re-applies cleanly.
 
 The `DbiResourceId` returned by `DescribeDBInstances` (and `DbClusterResourceId` on clusters) is the identifier the [Performance Insights API](pi.md) keys off.
+
+## EngineMode and re-apply stability
+
+`DescribeDBClusters` reports `EngineMode`, defaulting to `provisioned` when the create
+request omitted it. The attribute is ForceNew for the Terraform provider, so leaving it
+out of the response made every `terraform apply` plan a **cluster replacement** —
+taking the cluster's instances and any DB proxy target down with it.
+
+Reporting it has a follow-on: the provider reads a cluster's global-cluster membership
+whenever `EngineMode` is `provisioned` or `global`. `DescribeGlobalClusters` therefore
+has to answer, and returns an empty list — the response that means "not a member".
+Without it the whole `aws_rds_cluster` read fails with `InvalidAction`.
 
 ## RDS Proxy
 

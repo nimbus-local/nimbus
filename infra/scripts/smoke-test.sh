@@ -1029,6 +1029,16 @@ if [ -n "${DB_CLUSTER:-}" ] && [ "$DB_CLUSTER" != "None" ]; then
   try_match "cluster endpoint set" "localhost\|postgres\|127" \
     $CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
       --query "DBClusters[0].Endpoint" --output text
+  # EngineMode is ForceNew for the provider: if Describe omits it, every
+  # re-apply plans a cluster replacement and takes the cluster's instances and
+  # any DB proxy target with it.
+  try_match "cluster reports EngineMode" "^provisioned$" \
+    $CLI rds describe-db-clusters --db-cluster-identifier "$PREFIX" \
+      --query "DBClusters[0].EngineMode" --output text
+  # Reporting EngineMode makes the provider read the cluster's global-cluster
+  # membership, so that call has to answer rather than fault.
+  try_match "describe-global-clusters returns an empty list" "^0$" \
+    $CLI rds describe-global-clusters --query "length(GlobalClusters)" --output text
 else
   fail "describe-db-clusters (cluster not found — run 'make apply' first)"
 fi

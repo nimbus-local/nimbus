@@ -63,6 +63,7 @@ type dbCluster struct {
 	resourceID    string // DbClusterResourceId, e.g. cluster-ABC...
 	engine        string
 	engineVersion string
+	engineMode    string // provisioned | serverless; ForceNew for the TF provider
 	dbName        string
 	masterUser    string
 	endpoint      string
@@ -215,6 +216,13 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "DescribeDBClusterSnapshots":
 		writeXML(w, http.StatusOK, wrap("DescribeDBClusterSnapshots", `
     <DescribeDBClusterSnapshotsResult><DBClusterSnapshots/></DescribeDBClusterSnapshotsResult>`))
+	// The provider reads a cluster's global-cluster membership whenever the
+	// cluster reports EngineMode "provisioned" or "global". Nimbus models no
+	// global clusters, and an empty list is the answer that means "not a member" —
+	// returning InvalidAction here fails the whole aws_rds_cluster read.
+	case "DescribeGlobalClusters":
+		writeXML(w, http.StatusOK, wrap("DescribeGlobalClusters", `
+    <DescribeGlobalClustersResult><GlobalClusters/></DescribeGlobalClustersResult>`))
 	// Proxies — see proxy.go
 	case "CreateDBProxy":
 		s.createDBProxy(w, r)
@@ -620,12 +628,21 @@ func (s *Service) createDBCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// EngineMode is ForceNew for the Terraform provider, so omitting it from
+	// DescribeDBClusters makes every re-apply plan a cluster replacement. AWS
+	// defaults it to provisioned, and so does the provider.
+	engineMode := r.FormValue("EngineMode")
+	if engineMode == "" {
+		engineMode = "provisioned"
+	}
+
 	c := &dbCluster{
 		identifier:    id,
 		arn:           arn,
 		resourceID:    newResourceID("cluster"),
 		engine:        engine,
 		engineVersion: engineVersion,
+		engineMode:    engineMode,
 		dbName:        dbName,
 		masterUser:    masterUser,
 		endpoint:      s.postgresHost,
@@ -734,6 +751,7 @@ func (s *Service) clusterXML(c *dbCluster) string {
         <DbClusterResourceId>%s</DbClusterResourceId>
         <Engine>%s</Engine>
         <EngineVersion>%s</EngineVersion>
+        <EngineMode>%s</EngineMode>
         <DatabaseName>%s</DatabaseName>
         <MasterUsername>%s</MasterUsername>
         <Status>%s</Status>
@@ -748,7 +766,8 @@ func (s *Service) clusterXML(c *dbCluster) string {
         <AvailabilityZones>
           <AvailabilityZone>%s</AvailabilityZone>
         </AvailabilityZones>`,
-		c.arn, c.identifier, c.resourceID, c.engine, c.engineVersion, c.dbName, c.masterUser,
+		c.arn, c.identifier, c.resourceID, c.engine, c.engineVersion, c.engineMode,
+		c.dbName, c.masterUser,
 		c.status, c.endpoint, c.endpoint, c.port,
 		c.createdAt.Format(time.RFC3339),
 		performanceInsightsXML(c.perfInsights, c.perfInsightsKMS, c.perfInsightsRetention),

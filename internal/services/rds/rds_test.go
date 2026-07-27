@@ -409,3 +409,80 @@ func TestCreateDBInstance_StandaloneFields(t *testing.T) {
 		}
 	}
 }
+
+// --- EngineMode ---
+
+// EngineMode is ForceNew for the Terraform provider: omitting it from
+// DescribeDBClusters makes every re-apply plan a cluster replacement, which
+// cascades into the cluster's instances and any DB proxy target that references
+// it. AWS defaults it to provisioned when the request leaves it out.
+func TestCreateDBCluster_EngineModeDefaultsToProvisioned(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+
+	body := post(t, s, url.Values{
+		"Action":              {"CreateDBCluster"},
+		"DBClusterIdentifier": {"em-default"},
+		"Engine":              {"aurora-postgresql"},
+	})
+	if !strings.Contains(body, "<EngineMode>provisioned</EngineMode>") {
+		t.Fatalf("create response should default EngineMode to provisioned:\n%s", body)
+	}
+
+	body = post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"em-default"},
+	})
+	if !strings.Contains(body, "<EngineMode>provisioned</EngineMode>") {
+		t.Errorf("describe must report EngineMode:\n%s", body)
+	}
+}
+
+func TestCreateDBCluster_EngineModeRoundTrips(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+
+	post(t, s, url.Values{
+		"Action":              {"CreateDBCluster"},
+		"DBClusterIdentifier": {"em-serverless"},
+		"Engine":              {"aurora-postgresql"},
+		"EngineMode":          {"serverless"},
+	})
+	body := post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"em-serverless"},
+	})
+	if !strings.Contains(body, "<EngineMode>serverless</EngineMode>") {
+		t.Errorf("describe should echo the requested EngineMode:\n%s", body)
+	}
+	if strings.Contains(body, "<EngineMode>provisioned</EngineMode>") {
+		t.Errorf("the default must not override an explicit EngineMode:\n%s", body)
+	}
+}
+
+// A modify that touches other attributes must leave EngineMode alone — the
+// provider modifies a cluster in place and then re-reads it.
+func TestModifyDBCluster_PreservesEngineMode(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+
+	post(t, s, url.Values{
+		"Action":              {"CreateDBCluster"},
+		"DBClusterIdentifier": {"em-modify"},
+		"Engine":              {"aurora-postgresql"},
+		"EngineMode":          {"serverless"},
+	})
+	body := post(t, s, url.Values{
+		"Action":                    {"ModifyDBCluster"},
+		"DBClusterIdentifier":       {"em-modify"},
+		"EnablePerformanceInsights": {"true"},
+	})
+	if !strings.Contains(body, "<EngineMode>serverless</EngineMode>") {
+		t.Errorf("ModifyDBCluster dropped EngineMode:\n%s", body)
+	}
+
+	body = post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"em-modify"},
+	})
+	if !strings.Contains(body, "<EngineMode>serverless</EngineMode>") {
+		t.Errorf("EngineMode did not survive a modify:\n%s", body)
+	}
+}
