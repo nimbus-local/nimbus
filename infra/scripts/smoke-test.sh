@@ -1143,6 +1143,108 @@ else
   fail "ec2 create-subnet (subnet dependency probe could not be set up)"
 fi
 
+# ── RDS Proxy ────────────────────────────────────────────────────────────────
+
+# The Terraform fixture creates a proxy over the Aurora cluster, its default
+# target group, and a cluster target.
+section "RDS Proxy"
+try_match "describe-db-proxies finds the TF-provisioned proxy" "$PREFIX" \
+  $CLI rds describe-db-proxies --query 'DBProxies[].DBProxyName' --output text
+try_match "proxy ARN is keyed on a generated prx- id" "db-proxy:prx-" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].DBProxyArn' --output text
+try_match "proxy status is available" "^available$" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].Status' --output text
+try_match "proxy reports its engine family" "POSTGRESQL" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].EngineFamily' --output text
+# The endpoint must resolve to the Postgres sidecar, as a cluster endpoint does.
+try_match "proxy endpoint resolves to a host, not a placeholder" "." \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].Endpoint' --output text
+# Auth and RoleArn are accepted without cross-service validation but must round-trip.
+try_match "proxy round-trips its secret ARN" "secret" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].Auth[0].SecretArn' --output text
+try_match "proxy round-trips its IAM role" "${PREFIX}-db-proxy" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].RoleArn' --output text
+try_match "proxy round-trips its subnets" "subnet-" \
+  $CLI rds describe-db-proxies --db-proxy-name "$PREFIX" \
+    --query 'DBProxies[0].VpcSubnetIds' --output text
+try_fail_match "describe-db-proxies rejects an unknown proxy" "DBProxyNotFound" \
+  $CLI rds describe-db-proxies --db-proxy-name "${PREFIX}-nope"
+
+# The default target group exists because CreateDBProxy makes one, and carries
+# the pool config aws_db_proxy_default_target_group applied.
+try_match "default target group exists" "^default$" \
+  $CLI rds describe-db-proxy-target-groups --db-proxy-name "$PREFIX" \
+    --query 'TargetGroups[0].TargetGroupName' --output text
+try_match "default target group is flagged default" "True" \
+  $CLI rds describe-db-proxy-target-groups --db-proxy-name "$PREFIX" \
+    --query 'TargetGroups[0].IsDefault' --output text
+try_match "target group kept the Terraform pool config" "^75$" \
+  $CLI rds describe-db-proxy-target-groups --db-proxy-name "$PREFIX" \
+    --query 'TargetGroups[0].ConnectionPoolConfig.MaxConnectionsPercent' --output text
+try_match "target group kept the borrow timeout" "^30$" \
+  $CLI rds describe-db-proxy-target-groups --db-proxy-name "$PREFIX" \
+    --query 'TargetGroups[0].ConnectionPoolConfig.ConnectionBorrowTimeout' --output text
+
+# The cluster target Terraform registered.
+try_match "describe-db-proxy-targets reports the cluster target" "TRACKED_CLUSTER" \
+  $CLI rds describe-db-proxy-targets --db-proxy-name "$PREFIX" \
+    --query 'Targets[0].Type' --output text
+try_match "cluster target identifies the cluster" "^${PREFIX}$" \
+  $CLI rds describe-db-proxy-targets --db-proxy-name "$PREFIX" \
+    --query 'Targets[0].RdsResourceId' --output text
+try_match "cluster target reports health" "AVAILABLE" \
+  $CLI rds describe-db-proxy-targets --db-proxy-name "$PREFIX" \
+    --query 'Targets[0].TargetHealth.State' --output text
+
+# Full lifecycle on a throwaway proxy, including the register/deregister and
+# delete paths Terraform uses on destroy.
+if $CLI rds create-db-proxy --db-proxy-name "${PREFIX}-tmp" --engine-family POSTGRESQL \
+  --role-arn "arn:aws:iam::000000000000:role/${PREFIX}-db-proxy" \
+  --vpc-subnet-ids subnet-00000000000000001 \
+  --auth '[{"AuthScheme":"SECRETS","SecretArn":"arn:aws:secretsmanager:us-east-1:000000000000:secret:tmp"}]' \
+  >/dev/null 2>&1; then
+  ok "create-db-proxy"
+  try_fail_match "create-db-proxy rejects a duplicate name" "DBProxyAlreadyExists" \
+    $CLI rds create-db-proxy --db-proxy-name "${PREFIX}-tmp" --engine-family POSTGRESQL \
+      --role-arn "arn:aws:iam::000000000000:role/${PREFIX}-db-proxy" \
+      --vpc-subnet-ids subnet-00000000000000001
+  try_match "modify-db-proxy applies idle_client_timeout" "^120$" \
+    $CLI rds modify-db-proxy --db-proxy-name "${PREFIX}-tmp" --idle-client-timeout 120 \
+      --query 'DBProxy.IdleClientTimeout' --output text
+  try "register-db-proxy-targets accepts the cluster" \
+    $CLI rds register-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+      --db-cluster-identifiers "$PREFIX"
+  # Re-registering must replace rather than duplicate.
+  $CLI rds register-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+    --db-cluster-identifiers "$PREFIX" >/dev/null 2>&1
+  try_match "re-registering the same target does not duplicate it" "^1$" \
+    $CLI rds describe-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+      --query 'length(Targets)' --output text
+  try_fail_match "register-db-proxy-targets rejects an unknown cluster" "DBClusterNotFound" \
+    $CLI rds register-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+      --db-cluster-identifiers "${PREFIX}-no-such-cluster"
+  # deregister declares an empty result wrapper the SDK still requires.
+  try "deregister-db-proxy-targets" \
+    $CLI rds deregister-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+      --db-cluster-identifiers "$PREFIX"
+  try_match "target is gone after deregister" "^0$" \
+    $CLI rds describe-db-proxy-targets --db-proxy-name "${PREFIX}-tmp" \
+      --query 'length(Targets)' --output text
+  try_match "delete-db-proxy reports deleting" "deleting" \
+    $CLI rds delete-db-proxy --db-proxy-name "${PREFIX}-tmp" \
+      --query 'DBProxy.Status' --output text
+  try_fail_match "deleted proxy is gone" "DBProxyNotFound" \
+    $CLI rds describe-db-proxies --db-proxy-name "${PREFIX}-tmp"
+else
+  fail "create-db-proxy"
+fi
+
 # ── Performance Insights ─────────────────────────────────────────────────────
 
 section "Performance Insights"

@@ -35,6 +35,7 @@ type Service struct {
 	paramGrps        map[string]*dbParamGroup
 	clusters         map[string]*dbCluster
 	instances        map[string]*dbInstance
+	proxies          map[string]*dbProxy          // DBProxyName -> proxy; see proxy.go
 	tags             map[string]map[string]string // arn -> tags
 	region           string
 	postgresHost     string
@@ -118,6 +119,7 @@ func New(region, postgresHost string, postgresPort int) *Service {
 		paramGrps:        map[string]*dbParamGroup{},
 		clusters:         map[string]*dbCluster{},
 		instances:        map[string]*dbInstance{},
+		proxies:          map[string]*dbProxy{},
 		tags:             map[string]map[string]string{},
 	}
 }
@@ -138,6 +140,7 @@ func (s *Service) Reset() {
 	s.paramGrps = map[string]*dbParamGroup{}
 	s.clusters = map[string]*dbCluster{}
 	s.instances = map[string]*dbInstance{}
+	s.proxies = map[string]*dbProxy{}
 	s.tags = map[string]map[string]string{}
 }
 
@@ -212,6 +215,25 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "DescribeDBClusterSnapshots":
 		writeXML(w, http.StatusOK, wrap("DescribeDBClusterSnapshots", `
     <DescribeDBClusterSnapshotsResult><DBClusterSnapshots/></DescribeDBClusterSnapshotsResult>`))
+	// Proxies — see proxy.go
+	case "CreateDBProxy":
+		s.createDBProxy(w, r)
+	case "DescribeDBProxies":
+		s.describeDBProxies(w, r)
+	case "ModifyDBProxy":
+		s.modifyDBProxy(w, r)
+	case "DeleteDBProxy":
+		s.deleteDBProxy(w, r)
+	case "DescribeDBProxyTargetGroups":
+		s.describeDBProxyTargetGroups(w, r)
+	case "ModifyDBProxyTargetGroup":
+		s.modifyDBProxyTargetGroup(w, r)
+	case "RegisterDBProxyTargets":
+		s.registerDBProxyTargets(w, r)
+	case "DeregisterDBProxyTargets":
+		s.deregisterDBProxyTargets(w, r)
+	case "DescribeDBProxyTargets":
+		s.describeDBProxyTargets(w, r)
 	case "DescribeOptionGroups":
 		writeXML(w, http.StatusOK, wrap("DescribeOptionGroups", `
     <DescribeOptionGroupsResult><OptionGroupsList/></DescribeOptionGroupsResult>`))

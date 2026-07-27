@@ -16,6 +16,9 @@ Detection: form-encoded body, `Version=2014-10-31`.
 | `ModifyDBParameterGroup` | Accepted, no-op |
 | `CreateDBCluster` / `DescribeDBClusters` / `ModifyDBCluster` / `DeleteDBCluster` | Status always `available`; endpoint resolves to Postgres sidecar; assigns an immutable `DbClusterResourceId`; honors `DBSubnetGroupName` |
 | `CreateDBInstance` / `DescribeDBInstances` / `ModifyDBInstance` / `DeleteDBInstance` | Status always `available`; inherits endpoint and subnet group from parent cluster; assigns an immutable `DbiResourceId`; standalone instances echo `EngineVersion`, `MasterUsername`, `DBName`, `AllocatedStorage` |
+| `CreateDBProxy` / `DescribeDBProxies` / `ModifyDBProxy` / `DeleteDBProxy` | Status always `available`; endpoint resolves to the Postgres sidecar; creates a `default` target group — see [RDS Proxy](#rds-proxy) |
+| `DescribeDBProxyTargetGroups` / `ModifyDBProxyTargetGroup` | Pool settings stored and echoed; only the fields sent are changed |
+| `RegisterDBProxyTargets` / `DescribeDBProxyTargets` / `DeregisterDBProxyTargets` | Registers existing clusters and instances; re-registering replaces rather than duplicates |
 | `AddTagsToResource` / `ListTagsForResource` / `RemoveTagsFromResource` | Per-ARN tag store |
 | `DescribeDBEngineVersions` | Returns a single matching version entry |
 | `DescribeOrderableDBInstanceOptions` | Returns a minimal valid response |
@@ -62,6 +65,37 @@ nimbuslocal rds describe-db-instances \
 Clusters and instances accept `EnablePerformanceInsights`, `PerformanceInsightsKMSKeyId`, and `PerformanceInsightsRetentionPeriod` on create and modify, and round-trip them through the Describe responses (`PerformanceInsightsEnabled` etc.). Retention defaults to `7` when PI is enabled without an explicit value. Modify calls that don't include PI fields leave the stored values untouched, so `performance_insights_enabled = true` in Terraform applies and re-applies cleanly.
 
 The `DbiResourceId` returned by `DescribeDBInstances` (and `DbClusterResourceId` on clusters) is the identifier the [Performance Insights API](pi.md) keys off.
+
+## RDS Proxy
+
+A proxy's endpoint resolves to the same Postgres sidecar a cluster endpoint does, so
+application code pointed at the proxy reaches a real database. Nimbus does **no
+connection pooling of its own** — the pool settings are stored so they read back
+without Terraform drift, and nothing multiplexes or pins sessions.
+
+`CreateDBProxy` creates a `default` target group alongside the proxy, matching real
+RDS. Terraform's `aws_db_proxy_default_target_group` modifies that group rather than
+creating one, so it must exist the moment the proxy does.
+
+| Behaviour | Detail |
+|-----------|--------|
+| `Status` | Always `available`; `DeleteDBProxy` returns the proxy as `deleting` |
+| `DBProxyArn` | Keyed on a generated `prx-` identifier, as in real RDS — not on the proxy name |
+| `Endpoint` | The Postgres sidecar host |
+| `Auth` / `RoleArn` | Accepted without cross-service validation; the secret is never read and the role never assumed, but both round-trip through `DescribeDBProxies` |
+| Default pool config | `MaxConnectionsPercent` 100, `MaxIdleConnectionsPercent` 50, `ConnectionBorrowTimeout` 120 |
+| Targets | Registering a cluster yields one `TRACKED_CLUSTER` target, an instance one `RDS_INSTANCE`; registering an unknown identifier is rejected with `DBClusterNotFoundFault` / `DBInstanceNotFoundFault` |
+| `TargetHealth` | Always `AVAILABLE` |
+
+Real RDS additionally lists a registered cluster's member instances as extra
+`RDS_INSTANCE` targets. Nimbus does not synthesize those — nothing reading a local
+proxy needs the expansion, and inventing entries would confuse Terraform's read-back
+of `aws_db_proxy_target`.
+
+Proxy metrics (`ClientConnections`, `DatabaseConnections`,
+`DatabaseConnectionsBorrowLatency`, pinning counts) are not synthesized either; seed
+them through [CloudWatch](cloudwatchmetrics.md) `PutMetricData` with a `ProxyName`
+dimension, as with any other metric.
 
 ## Example
 
