@@ -47,11 +47,14 @@ type userPool struct {
 	lastModifiedDate time.Time
 	tags             map[string]string
 	// schema / policies stored as raw JSON for pass-through
-	schema                   json.RawMessage
-	policies                 json.RawMessage
-	autoVerifiedAttributes   []string
-	usernameAttributes       []string
-	mfaConfiguration         string
+	schema                 json.RawMessage
+	policies               json.RawMessage
+	autoVerifiedAttributes []string
+	usernameAttributes     []string
+	mfaConfiguration       string
+	// deletionProtection is ACTIVE or INACTIVE. AWS defaults it to INACTIVE and
+	// the Terraform provider reads it back, so it has to be reported.
+	deletionProtection       string
 	emailVerificationMessage string
 	emailVerificationSubject string
 }
@@ -217,6 +220,7 @@ func (s *Service) createUserPool(w http.ResponseWriter, r *http.Request) {
 		AutoVerifiedAttributes   []string          `json:"AutoVerifiedAttributes"`
 		UsernameAttributes       []string          `json:"UsernameAttributes"`
 		MfaConfiguration         string            `json:"MfaConfiguration"`
+		DeletionProtection       string            `json:"DeletionProtection"`
 		Schema                   json.RawMessage   `json:"Schema"`
 		Policies                 json.RawMessage   `json:"Policies"`
 		UserPoolTags             map[string]string `json:"UserPoolTags"`
@@ -251,6 +255,7 @@ func (s *Service) createUserPool(w http.ResponseWriter, r *http.Request) {
 		autoVerifiedAttributes:   req.AutoVerifiedAttributes,
 		usernameAttributes:       req.UsernameAttributes,
 		mfaConfiguration:         req.MfaConfiguration,
+		deletionProtection:       req.DeletionProtection,
 		emailVerificationMessage: req.EmailVerificationMessage,
 		emailVerificationSubject: req.EmailVerificationSubject,
 	}
@@ -291,6 +296,7 @@ func (s *Service) updateUserPool(w http.ResponseWriter, r *http.Request) {
 		UserPoolID               string            `json:"UserPoolId"`
 		UserPoolTags             map[string]string `json:"UserPoolTags"`
 		MfaConfiguration         string            `json:"MfaConfiguration"`
+		DeletionProtection       string            `json:"DeletionProtection"`
 		AutoVerifiedAttributes   []string          `json:"AutoVerifiedAttributes"`
 		EmailVerificationMessage string            `json:"EmailVerificationMessage"`
 		EmailVerificationSubject string            `json:"EmailVerificationSubject"`
@@ -307,6 +313,9 @@ func (s *Service) updateUserPool(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.UserPoolTags != nil {
 		pool.tags = req.UserPoolTags
+	}
+	if req.DeletionProtection != "" {
+		pool.deletionProtection = req.DeletionProtection
 	}
 	if req.MfaConfiguration != "" {
 		pool.mfaConfiguration = req.MfaConfiguration
@@ -888,6 +897,14 @@ func (s *Service) poolARN(id string) string {
 	return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", s.region, accountID, id)
 }
 
+// deletionProtectionOr defaults an unset value to the AWS default.
+func deletionProtectionOr(v string) string {
+	if v == "" {
+		return "INACTIVE"
+	}
+	return v
+}
+
 func (s *Service) poolDetail(p *userPool) map[string]interface{} {
 	out := map[string]interface{}{
 		"Id":               p.id,
@@ -898,6 +915,9 @@ func (s *Service) poolDetail(p *userPool) map[string]interface{} {
 		"LastModifiedDate": float64(p.lastModifiedDate.Unix()),
 		"MfaConfiguration": p.mfaConfiguration,
 		"UserPoolTags":     p.tags,
+		// Pools created before this was modelled read back as INACTIVE, the AWS
+		// default, rather than as an empty string the provider treats as drift.
+		"DeletionProtection": deletionProtectionOr(p.deletionProtection),
 	}
 	if len(p.autoVerifiedAttributes) > 0 {
 		out["AutoVerifiedAttributes"] = p.autoVerifiedAttributes

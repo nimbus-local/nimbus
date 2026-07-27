@@ -486,3 +486,86 @@ func TestModifyDBCluster_PreservesEngineMode(t *testing.T) {
 		t.Errorf("EngineMode did not survive a modify:\n%s", body)
 	}
 }
+
+// --- Attributes the provider re-applies when they are not echoed ---
+
+func TestCreateDBCluster_EchoesParameterGroupAndServerlessScaling(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+
+	post(t, s, url.Values{
+		"Action":                      {"CreateDBCluster"},
+		"DBClusterIdentifier":         {"scaled"},
+		"Engine":                      {"aurora-postgresql"},
+		"DBClusterParameterGroupName": {"my-pg"},
+		"ServerlessV2ScalingConfiguration.MinCapacity": {"0.5"},
+		"ServerlessV2ScalingConfiguration.MaxCapacity": {"1"},
+	})
+	body := post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"scaled"},
+	})
+	for _, want := range []string{
+		"<DBClusterParameterGroup>my-pg</DBClusterParameterGroup>",
+		"<MinCapacity>0.5</MinCapacity>", // decimals must survive verbatim
+		"<MaxCapacity>1</MaxCapacity>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("describe missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// A cluster created without either is reported without the elements, as in AWS.
+func TestCreateDBCluster_OmitsUnsetParameterGroupAndScaling(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+	post(t, s, url.Values{
+		"Action":              {"CreateDBCluster"},
+		"DBClusterIdentifier": {"plain"},
+		"Engine":              {"aurora-postgresql"},
+	})
+	body := post(t, s, url.Values{
+		"Action":              {"DescribeDBClusters"},
+		"DBClusterIdentifier": {"plain"},
+	})
+	if strings.Contains(body, "<DBClusterParameterGroup>") {
+		t.Errorf("unset parameter group should be omitted:\n%s", body)
+	}
+	if strings.Contains(body, "<ServerlessV2ScalingConfiguration>") {
+		t.Errorf("unset scaling config should be omitted:\n%s", body)
+	}
+}
+
+// AutoMinorVersionUpgrade defaults to true in AWS; an unreported value reads as
+// false and drifts on every plan.
+func TestCreateDBInstance_AutoMinorVersionUpgrade(t *testing.T) {
+	s := New("us-east-1", "localhost", 5432)
+
+	post(t, s, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"DBInstanceIdentifier": {"amvu-default"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+	})
+	body := post(t, s, url.Values{
+		"Action":               {"DescribeDBInstances"},
+		"DBInstanceIdentifier": {"amvu-default"},
+	})
+	if !strings.Contains(body, "<AutoMinorVersionUpgrade>true</AutoMinorVersionUpgrade>") {
+		t.Errorf("expected the AWS default of true:\n%s", body)
+	}
+
+	post(t, s, url.Values{
+		"Action":                  {"CreateDBInstance"},
+		"DBInstanceIdentifier":    {"amvu-off"},
+		"Engine":                  {"postgres"},
+		"DBInstanceClass":         {"db.t3.micro"},
+		"AutoMinorVersionUpgrade": {"false"},
+	})
+	body = post(t, s, url.Values{
+		"Action":               {"DescribeDBInstances"},
+		"DBInstanceIdentifier": {"amvu-off"},
+	})
+	if !strings.Contains(body, "<AutoMinorVersionUpgrade>false</AutoMinorVersionUpgrade>") {
+		t.Errorf("an explicit false must round-trip:\n%s", body)
+	}
+}

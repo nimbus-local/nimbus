@@ -14,7 +14,7 @@ Timestamp shapes on the CBOR path are CBOR **tag 1** epoch seconds in both direc
 | `ListMetrics` | Filters by namespace, metric name, and/or dimensions — see [Dimension filters](#dimension-filters) |
 | `GetMetricStatistics` | Sum, Average, Minimum, Maximum, SampleCount per period bucket |
 | `GetMetricData` | Multi-metric query with `MetricStat` queries |
-| `PutMetricAlarm` | Stores alarm definition; state always `OK` |
+| `PutMetricAlarm` | Stores alarm definition; state always `OK`; `DatapointsToAlarm` is reported only when the request set one |
 | `DescribeAlarms` | Returns stored alarms filtered by name or state |
 | `DescribeAlarmsForMetric` | Returns alarms matching namespace + metric + dimensions |
 | `DeleteAlarms` | Removes stored alarms |

@@ -139,7 +139,7 @@ Route keys use the format `{METHOD} {path}` (e.g. `GET /users/{userId}`) or `$de
 
 | Method | Path | Operation |
 |--------|------|-----------|
-| POST | `/apis/{id}/integrations` | CreateIntegration |
+| POST | `/apis/{id}/integrations` | CreateIntegration — `connectionType` round-trips, defaulting to `INTERNET` |
 | GET | `/apis/{id}/integrations` | GetIntegrations |
 | GET | `/apis/{id}/integrations/{integrationId}` | GetIntegration |
 | DELETE | `/apis/{id}/integrations/{integrationId}` | DeleteIntegration |

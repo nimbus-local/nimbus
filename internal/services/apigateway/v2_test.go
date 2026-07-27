@@ -716,3 +716,48 @@ func TestV2AndV1Coexist(t *testing.T) {
 		t.Fatalf("want 1 HTTP API, got %d", len(httpAPIs["items"].([]any)))
 	}
 }
+
+// connectionType is accepted by CreateIntegration and has to read back, or the
+// Terraform provider re-applies it on every plan.
+func TestV2IntegrationConnectionType(t *testing.T) {
+	svc, _ := newTestService()
+	w := do(svc, http.MethodPost, "/apis", map[string]string{"name": "x"})
+	var api HTTPApi
+	json.NewDecoder(w.Body).Decode(&api)
+
+	w2 := do(svc, http.MethodPost, fmt.Sprintf("/apis/%s/integrations", api.ApiId),
+		map[string]string{"integrationType": "AWS_PROXY", "integrationUri": "arn:aws:lambda:::function:f"})
+	var integ V2Integration
+	json.NewDecoder(w2.Body).Decode(&integ)
+	if integ.ConnectionType != "INTERNET" {
+		t.Errorf("connectionType = %q, want the AWS default INTERNET", integ.ConnectionType)
+	}
+
+	// The provider re-reads through GetIntegration.
+	w3 := do(svc, http.MethodGet,
+		fmt.Sprintf("/apis/%s/integrations/%s", api.ApiId, integ.IntegrationId), nil)
+	var fetched V2Integration
+	json.NewDecoder(w3.Body).Decode(&fetched)
+	if fetched.ConnectionType != "INTERNET" {
+		t.Errorf("get: connectionType = %q, want INTERNET", fetched.ConnectionType)
+	}
+}
+
+func TestV2IntegrationConnectionTypeRoundTrips(t *testing.T) {
+	svc, _ := newTestService()
+	w := do(svc, http.MethodPost, "/apis", map[string]string{"name": "x"})
+	var api HTTPApi
+	json.NewDecoder(w.Body).Decode(&api)
+
+	w2 := do(svc, http.MethodPost, fmt.Sprintf("/apis/%s/integrations", api.ApiId),
+		map[string]string{
+			"integrationType": "HTTP_PROXY",
+			"integrationUri":  "http://example.internal",
+			"connectionType":  "VPC_LINK",
+		})
+	var integ V2Integration
+	json.NewDecoder(w2.Body).Decode(&integ)
+	if integ.ConnectionType != "VPC_LINK" {
+		t.Errorf("connectionType = %q, want VPC_LINK", integ.ConnectionType)
+	}
+}

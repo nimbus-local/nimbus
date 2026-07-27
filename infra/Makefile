@@ -8,7 +8,7 @@ export AWS_SECRET_ACCESS_KEY ?= test
 export AWS_DEFAULT_REGION    ?= us-east-1
 export AWS_ENDPOINT_URL      ?= http://localhost:4566
 
-.PHONY: start stop init plan apply destroy test smoke-test nuke reset
+.PHONY: start stop init plan apply destroy test smoke-test check-drift nuke reset
 
 # ── Docker ──────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,30 @@ destroy: init
 
 smoke-test:
 	./scripts/smoke-test.sh
+
+# check-drift — fails when a freshly applied environment would still change on a
+# re-apply. Guards a whole class of emulation bug: an attribute Nimbus accepts on
+# create but never echoes on read shows up as perpetual Terraform drift, and when
+# the attribute is ForceNew it silently recreates the resource on every apply.
+#
+# Must run before smoke-test, which deletes some Terraform-managed resources
+# (the Kinesis stream, the CloudWatch alarm) and would make a plan dirty for
+# reasons that are not drift.
+check-drift: init
+	@echo "── Checking the applied environment is idempotent..."
+	@cd $(TF_DIR) && $(TERRAFORM) plan -detailed-exitcode -input=false >/dev/null 2>&1; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		echo "✓ no drift — terraform plan is clean"; \
+	elif [ $$status -eq 2 ]; then \
+		echo "✗ drift: terraform wants changes right after a fresh apply:"; \
+		$(TERRAFORM) plan -input=false -no-color | grep -E '^  # ' || true; \
+		exit 1; \
+	else \
+		echo "✗ terraform plan failed"; \
+		$(TERRAFORM) plan -input=false -no-color | tail -20; \
+		exit 1; \
+	fi
 
 # Full clean + provision + smoke tests. Always starts from a clean slate.
 test: nuke smoke-test

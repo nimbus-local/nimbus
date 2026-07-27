@@ -1321,3 +1321,35 @@ func TestUnknownAction(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+// DeletionProtection defaults to INACTIVE in AWS and the Terraform provider reads
+// it back, so an unreported value drifted on every plan.
+func TestCreateUserPoolDeletionProtection(t *testing.T) {
+	s := newSvc()
+	poolID := createPool(t, s, "pool")
+
+	w := cognitoReq(t, s, "DescribeUserPool", map[string]interface{}{"UserPoolId": poolID})
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if got := resp["UserPool"]["DeletionProtection"]; got != "INACTIVE" {
+		t.Errorf("DeletionProtection = %v, want INACTIVE", got)
+	}
+}
+
+func TestCreateUserPoolDeletionProtectionRoundTrips(t *testing.T) {
+	s := newSvc()
+	w := cognitoReq(t, s, "CreateUserPool", map[string]interface{}{
+		"PoolName":           "protected",
+		"DeletionProtection": "ACTIVE",
+	})
+	var created map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&created)
+	poolID := created["UserPool"]["Id"].(string)
+
+	w = cognitoReq(t, s, "DescribeUserPool", map[string]interface{}{"UserPoolId": poolID})
+	var resp map[string]map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if got := resp["UserPool"]["DeletionProtection"]; got != "ACTIVE" {
+		t.Errorf("DeletionProtection = %v, want ACTIVE", got)
+	}
+}

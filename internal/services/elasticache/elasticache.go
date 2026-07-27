@@ -7,6 +7,7 @@ package elasticache
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ type cacheSubnetGroup struct {
 	name        string
 	description string
 	arn         string
+	subnetIDs   []string
 }
 
 type cacheParamGroup struct {
@@ -69,7 +71,11 @@ type replicationGroup struct {
 	endpoint    string
 	port        int
 	status      string
-	createdAt   time.Time
+	// memberClusters are the cache clusters that make up the group. Terraform
+	// derives num_cache_clusters from this list, so an empty one reads as zero
+	// nodes and drifts on every plan.
+	memberClusters []string
+	createdAt      time.Time
 }
 
 // New creates an ElastiCache service. valkeyHost:valkeyPort point at the Valkey
@@ -217,14 +223,15 @@ func (s *Service) createCacheSubnetGroup(w http.ResponseWriter, r *http.Request)
 	arn := s.subnetGroupARN(name)
 
 	s.mu.Lock()
-	s.subnetGroups[name] = &cacheSubnetGroup{name: name, description: desc, arn: arn}
+	sg := &cacheSubnetGroup{name: name, description: desc, arn: arn, subnetIDs: parseSubnetIDs(r)}
+	s.subnetGroups[name] = sg
 	s.storeTags(r, arn)
 	s.mu.Unlock()
 
 	writeXML(w, http.StatusOK, wrap("CreateCacheSubnetGroup", fmt.Sprintf(`
     <CreateCacheSubnetGroupResult>
       <CacheSubnetGroup>%s</CacheSubnetGroup>
-    </CreateCacheSubnetGroupResult>`, subnetGroupXML(name, desc, arn))))
+    </CreateCacheSubnetGroupResult>`, subnetGroupXML(sg))))
 }
 
 func (s *Service) describeCacheSubnetGroups(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +244,7 @@ func (s *Service) describeCacheSubnetGroups(w http.ResponseWriter, r *http.Reque
 		if filter != "" && sg.name != filter {
 			continue
 		}
-		items = append(items, "<CacheSubnetGroup>"+subnetGroupXML(sg.name, sg.description, sg.arn)+"</CacheSubnetGroup>")
+		items = append(items, "<CacheSubnetGroup>"+subnetGroupXML(sg)+"</CacheSubnetGroup>")
 	}
 	if filter != "" && len(items) == 0 {
 		ecError(w, http.StatusNotFound, "CacheSubnetGroupNotFoundFault",
@@ -268,19 +275,52 @@ func (s *Service) modifyCacheSubnetGroup(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("CacheSubnetGroup '%s' not found.", name))
 		return
 	}
+	if ids := parseSubnetIDs(r); len(ids) > 0 {
+		s.mu.Lock()
+		sg.subnetIDs = ids
+		s.mu.Unlock()
+	}
 	writeXML(w, http.StatusOK, wrap("ModifyCacheSubnetGroup", fmt.Sprintf(`
     <ModifyCacheSubnetGroupResult>
       <CacheSubnetGroup>%s</CacheSubnetGroup>
-    </ModifyCacheSubnetGroupResult>`, subnetGroupXML(sg.name, sg.description, sg.arn))))
+    </ModifyCacheSubnetGroupResult>`, subnetGroupXML(sg))))
 }
 
-func subnetGroupXML(name, desc, arn string) string {
+// subnetGroupXML reports a cache subnet group, including the subnets it was
+// created with — an empty <Subnets/> left the Terraform provider re-applying the
+// subnet list on every plan.
+func subnetGroupXML(sg *cacheSubnetGroup) string {
+	var subnets strings.Builder
+	for _, id := range sg.subnetIDs {
+		fmt.Fprintf(&subnets, `
+          <Subnet><SubnetIdentifier>%s</SubnetIdentifier></Subnet>`, id)
+	}
 	return fmt.Sprintf(`
         <ARN>%s</ARN>
         <CacheSubnetGroupDescription>%s</CacheSubnetGroupDescription>
         <CacheSubnetGroupName>%s</CacheSubnetGroupName>
         <VpcId>vpc-00000000000000001</VpcId>
-        <Subnets/>`, arn, desc, name)
+        <Subnets>%s</Subnets>`, sg.arn, sg.description, sg.name, subnets.String())
+}
+
+// parseSubnetIDs reads the SubnetIds list from a Create/ModifyCacheSubnetGroup
+// form. The query protocol names the member `SubnetIdentifier`; `member` is
+// accepted too since some SDK versions emit it.
+func parseSubnetIDs(r *http.Request) []string {
+	var ids []string
+	for _, member := range []string{"SubnetIdentifier", "member"} {
+		for i := 1; ; i++ {
+			id := r.FormValue(fmt.Sprintf("SubnetIds.%s.%d", member, i))
+			if id == "" {
+				break
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) > 0 {
+			break
+		}
+	}
+	return ids
 }
 
 func (s *Service) subnetGroupARN(name string) string {
@@ -510,17 +550,33 @@ func (s *Service) createReplicationGroup(w http.ResponseWriter, r *http.Request)
 	nodeType := r.FormValue("CacheNodeType")
 	arn := s.replGroupARN(id)
 
+	// One member per requested node, named the way real ElastiCache names them
+	// (<group>-001). NumCacheClusters and NumNodeGroups/ReplicasPerNodeGroup are
+	// alternative spellings of the same request; default to a single node.
+	count := formInt(r, "NumCacheClusters")
+	if count == 0 {
+		count = formInt(r, "NumNodeGroups") + formInt(r, "ReplicasPerNodeGroup")
+	}
+	if count == 0 {
+		count = 1
+	}
+	members := make([]string, 0, count)
+	for i := 1; i <= count; i++ {
+		members = append(members, fmt.Sprintf("%s-%03d", id, i))
+	}
+
 	rg := &replicationGroup{
-		id:          id,
-		arn:         arn,
-		description: desc,
-		engine:      engine,
-		engineVer:   engineVer,
-		nodeType:    nodeType,
-		endpoint:    s.valkeyHost,
-		port:        s.valkeyPort,
-		status:      "available",
-		createdAt:   time.Now().UTC(),
+		id:             id,
+		arn:            arn,
+		description:    desc,
+		engine:         engine,
+		engineVer:      engineVer,
+		nodeType:       nodeType,
+		endpoint:       s.valkeyHost,
+		port:           s.valkeyPort,
+		status:         "available",
+		memberClusters: members,
+		createdAt:      time.Now().UTC(),
 	}
 
 	s.mu.Lock()
@@ -648,12 +704,32 @@ func (s *Service) replGroupXML(rg *replicationGroup) string {
             <NodeGroupMembers/>
           </NodeGroup>
         </NodeGroups>
-        <MemberClusters/>
+        <MemberClusters>%s</MemberClusters>
         <SnapshottingClusterId/>`,
 		rg.arn, rg.id, rg.description, rg.status,
 		rg.endpoint, rg.port,
 		rg.endpoint, rg.port,
-		rg.endpoint, rg.port)
+		rg.endpoint, rg.port,
+		memberClustersXML(rg.memberClusters))
+}
+
+// memberClustersXML renders a replication group's member cluster IDs.
+func memberClustersXML(members []string) string {
+	var b strings.Builder
+	for _, m := range members {
+		fmt.Fprintf(&b, `
+          <ClusterId>%s</ClusterId>`, m)
+	}
+	return b.String()
+}
+
+// formInt reads an integer form field, returning 0 when absent or unparsable.
+func formInt(r *http.Request, key string) int {
+	n, err := strconv.Atoi(r.FormValue(key))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func (s *Service) replGroupARN(id string) string {

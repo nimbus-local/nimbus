@@ -31,6 +31,8 @@ pr: _branch-check _fmt-check _build _vet
 	$(INFRA) start
 	@echo "── Provisioning resources..."
 	$(INFRA) apply
+	@echo "── Checking Terraform idempotency..."
+	$(INFRA) check-drift
 	@echo "── Running smoke tests..."
 	$(INFRA) smoke-test
 	@echo "── All checks passed. Pushing branch..."

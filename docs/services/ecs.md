@@ -39,7 +39,7 @@ Detection: `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*`
 
 | Operation | Notable behaviour |
 |-----------|-------------------|
-| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s; `loadBalancers` are validated (see below) and stored; `schedulingStrategy` defaults to `REPLICA` and round-trips |
+| CreateService | Creates service and starts `desiredCount` real Docker containers; reconciliation loop restarts exited containers every 10 s; `loadBalancers` are validated (see below) and stored; `schedulingStrategy` defaults to `REPLICA` and round-trips; `networkConfiguration` is stored and echoed |
 | UpdateService | Updates `desiredCount`, `taskDefinition` and/or `loadBalancers`; load balancers are validated against the task definition set by the same call |
 | DeleteService | Removes service; `desiredCount` and `runningCount` set to 0 |
 | DescribeServices | Filterable by cluster; accepts name or ARN; reports `loadBalancers` (empty list when none) |

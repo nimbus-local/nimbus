@@ -866,3 +866,60 @@ func TestServiceMetaDefaultsEmptySchedulingStrategy(t *testing.T) {
 		t.Errorf("expected REPLICA for an unset strategy, got %v", meta["schedulingStrategy"])
 	}
 }
+
+// --- Network configuration ---
+
+// networkConfiguration is accepted by CreateService and has to read back, or the
+// provider re-applies the block on every plan.
+func TestCreateServiceRoundTripsNetworkConfiguration(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "web"})
+	do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "web-service",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+		"networkConfiguration": map[string]interface{}{
+			"awsvpcConfiguration": map[string]interface{}{
+				"subnets":        []string{"subnet-1", "subnet-2"},
+				"securityGroups": []string{"sg-1"},
+				"assignPublicIp": "DISABLED",
+			},
+		},
+	})
+
+	res := do(t, svc, "DescribeServices", map[string]interface{}{
+		"cluster":  "default",
+		"services": []string{"web-service"},
+	})
+	s := res["services"].([]interface{})[0].(map[string]interface{})
+	nc, ok := s["networkConfiguration"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("networkConfiguration missing from DescribeServices: %v", s)
+	}
+	awsvpc := nc["awsvpcConfiguration"].(map[string]interface{})
+	subnets := awsvpc["subnets"].([]interface{})
+	if len(subnets) != 2 || subnets[0] != "subnet-1" {
+		t.Errorf("subnets = %v, want [subnet-1 subnet-2]", subnets)
+	}
+	if sgs := awsvpc["securityGroups"].([]interface{}); len(sgs) != 1 || sgs[0] != "sg-1" {
+		t.Errorf("securityGroups = %v, want [sg-1]", sgs)
+	}
+	if awsvpc["assignPublicIp"] != "DISABLED" {
+		t.Errorf("assignPublicIp = %v, want DISABLED", awsvpc["assignPublicIp"])
+	}
+}
+
+// A service created without one must not grow an empty block.
+func TestCreateServiceOmitsAbsentNetworkConfiguration(t *testing.T) {
+	svc := newSvc()
+	do(t, svc, "RegisterTaskDefinition", map[string]interface{}{"family": "web"})
+	res := do(t, svc, "CreateService", map[string]interface{}{
+		"serviceName":    "plain",
+		"taskDefinition": "web",
+		"desiredCount":   1,
+	})
+	s := res["service"].(map[string]interface{})
+	if _, ok := s["networkConfiguration"]; ok {
+		t.Errorf("expected no networkConfiguration, got %v", s["networkConfiguration"])
+	}
+}

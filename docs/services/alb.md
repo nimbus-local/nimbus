@@ -19,7 +19,7 @@ registered target. Registered targets are immediately `healthy`.
 | `DescribeLoadBalancerAttributes` | Returns sensible defaults (deletion protection off, idle timeout 60 s, etc.) |
 | `ModifyLoadBalancerAttributes` | Accepted and ignored |
 | `DescribeCapacityReservation` | Returns stub empty reservation state |
-| `CreateTargetGroup` | Stores name, protocol, port, VPC, target type |
+| `CreateTargetGroup` | Stores name, protocol, port, VPC, target type, and the health-check settings; unset health-check fields report the AWS defaults |
 | `DescribeTargetGroups` | Filter by `TargetGroupArns` or `Names`; `LoadBalancerArns` lists every LB attached via a listener default action or rule |
 | `DeleteTargetGroup` | Removes from in-memory store |
 | `ModifyTargetGroup` | Returns existing target group unchanged; required by TF provider v6 re-apply |

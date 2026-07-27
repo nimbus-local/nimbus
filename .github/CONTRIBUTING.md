@@ -56,6 +56,37 @@ Link the service name to its doc file. Match the status badge used by comparable
 - **No auth enforcement.** Accept any credentials. This is a local dev tool.
 - **MIT contributions only.** All code must be compatible with the MIT license.
 - **AWS parity over convenience.** If real AWS returns a specific XML error shape, we should too.
+- **Echo back everything you accept.** See below — this is the most common emulation bug.
+
+## Echo back everything you accept
+
+If a Create call accepts an attribute, the matching Describe/Get **must** report it,
+including a default when the caller omitted one. Silently dropping an attribute is the
+most common bug in this codebase, and it has two flavours:
+
+- **Perpetual drift.** Terraform reads the attribute back as absent and plans to set it
+  again on every `apply`, forever.
+- **Silent recreation.** When the attribute is ForceNew for the provider, Terraform
+  destroys and recreates the resource on *every* apply. This is easy to miss: the apply
+  succeeds, so nothing looks wrong until you notice a database or a GraphQL API being
+  rebuilt each run.
+
+Two rules follow:
+
+1. Store what the create request sent, and report it from every read path.
+2. Default an unset value to the **AWS** default rather than to Go's zero value. A
+   missing `AutoMinorVersionUpgrade` is `true`, not `false`; a missing
+   `schedulingStrategy` is `REPLICA`, not `""`. Records created before a field was
+   modelled must read back as the default too.
+
+Do not invent values the caller never supplied, either — that is the same bug in
+reverse. Nimbus once echoed `EvaluationPeriods` as `DatapointsToAlarm`, which put a
+number in Terraform state that no configuration had asked for.
+
+`make -C infra check-drift` catches all of this: it fails when `terraform plan` wants
+changes against a freshly applied environment. It runs as part of `make pr`, after
+`apply` and before `smoke-test` (the smoke test deletes some Terraform-managed
+resources, which would make a later plan dirty for reasons that are not drift).
 
 ## Running locally
 

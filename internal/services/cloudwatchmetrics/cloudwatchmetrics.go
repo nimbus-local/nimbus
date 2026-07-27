@@ -56,12 +56,16 @@ type alarm struct {
 	comparisonOperator string
 	threshold          float64
 	evaluationPeriods  int
-	period             int
-	statistic          string
-	unit               string
-	description        string
-	createdAt          time.Time
-	dimensions         map[string]string
+	// datapointsToAlarm is optional in AWS and absent unless the caller set it.
+	// Reporting a value the request never supplied is drift: Terraform reads it
+	// back, finds it in state, and plans to remove it on the next apply.
+	datapointsToAlarm int
+	period            int
+	statistic         string
+	unit              string
+	description       string
+	createdAt         time.Time
+	dimensions        map[string]string
 }
 
 func New(region string) *Service {
@@ -410,6 +414,7 @@ func (s *Service) putMetricAlarm(w http.ResponseWriter, r *http.Request) {
 		ComparisonOperator string  `json:"ComparisonOperator"`
 		Threshold          float64 `json:"Threshold"`
 		EvaluationPeriods  int     `json:"EvaluationPeriods"`
+		DatapointsToAlarm  int     `json:"DatapointsToAlarm"`
 		Period             int     `json:"Period"`
 		Statistic          string  `json:"Statistic"`
 		Unit               string  `json:"Unit"`
@@ -437,6 +442,7 @@ func (s *Service) putMetricAlarm(w http.ResponseWriter, r *http.Request) {
 		comparisonOperator: req.ComparisonOperator,
 		threshold:          req.Threshold,
 		evaluationPeriods:  req.EvaluationPeriods,
+		datapointsToAlarm:  req.DatapointsToAlarm,
 		period:             req.Period,
 		statistic:          req.Statistic,
 		unit:               req.Unit,
@@ -539,7 +545,7 @@ func (s *Service) alarmMap(a *alarm) map[string]interface{} {
 		dims = []map[string]string{}
 	}
 	ts := a.createdAt.UTC().Format(time.RFC3339)
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"AlarmName":                          a.name,
 		"AlarmArn":                           a.arn,
 		"AlarmDescription":                   a.description,
@@ -558,11 +564,17 @@ func (s *Service) alarmMap(a *alarm) map[string]interface{} {
 		"Dimensions":                         dims,
 		"Period":                             a.period,
 		"EvaluationPeriods":                  a.evaluationPeriods,
-		"DatapointsToAlarm":                  a.evaluationPeriods,
 		"Threshold":                          a.threshold,
 		"ComparisonOperator":                 a.comparisonOperator,
 		"TreatMissingData":                   "missing",
 	}
+	// Only report DatapointsToAlarm when the alarm was created with one. AWS
+	// leaves it absent otherwise, and echoing EvaluationPeriods in its place put
+	// a value in Terraform state that the configuration never asked for.
+	if a.datapointsToAlarm > 0 {
+		out["DatapointsToAlarm"] = a.datapointsToAlarm
+	}
+	return out
 }
 
 func (s *Service) alarmARN(name string) string {
@@ -1118,6 +1130,7 @@ func (s *Service) cborPutMetricAlarm(w http.ResponseWriter, params map[string]in
 		comparisonOperator: mapStr(params, "ComparisonOperator"),
 		threshold:          mapFloat(params, "Threshold"),
 		evaluationPeriods:  mapInt(params, "EvaluationPeriods"),
+		datapointsToAlarm:  mapInt(params, "DatapointsToAlarm"),
 		period:             mapInt(params, "Period"),
 		statistic:          mapStr(params, "Statistic"),
 		unit:               mapStr(params, "Unit"),
@@ -1253,7 +1266,7 @@ func (s *Service) cborAlarmMap(a *alarm) map[string]interface{} {
 		dims = []interface{}{}
 	}
 	epoch := CborEpochTime(a.createdAt.Unix())
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"AlarmName":                          a.name,
 		"AlarmArn":                           a.arn,
 		"AlarmDescription":                   a.description,
@@ -1271,11 +1284,17 @@ func (s *Service) cborAlarmMap(a *alarm) map[string]interface{} {
 		"Dimensions":                         dims,
 		"Period":                             a.period,
 		"EvaluationPeriods":                  a.evaluationPeriods,
-		"DatapointsToAlarm":                  a.evaluationPeriods,
 		"Threshold":                          a.threshold,
 		"ComparisonOperator":                 a.comparisonOperator,
 		"TreatMissingData":                   "missing",
 	}
+	// Only report DatapointsToAlarm when the alarm was created with one. AWS
+	// leaves it absent otherwise, and echoing EvaluationPeriods in its place put
+	// a value in Terraform state that the configuration never asked for.
+	if a.datapointsToAlarm > 0 {
+		out["DatapointsToAlarm"] = a.datapointsToAlarm
+	}
+	return out
 }
 
 func (s *Service) writeCBOR(w http.ResponseWriter, status int, v map[string]interface{}) {
